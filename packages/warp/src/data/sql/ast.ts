@@ -22,12 +22,17 @@ export type Insert = { t: 'insert'; into: string; cols: string[]; values: Expr[]
 export type Update = { t: 'update'; table: string; set: [string, Expr][]; where?: Expr }
 export type Delete = { t: 'delete'; from: string; where?: Expr }
 // DDL: column fragments come from Field.columnDDL (identifiers quoted, defaults as checked literals).
-export type CreateTable = { t: 'createTable'; name: string; columns: string[] }
-export type AlterTable = { t: 'alterTable'; name: string; addColumn?: string; dropColumn?: string; renameTo?: string }
+export type CreateTable = { t: 'createTable'; name: string; columns: string[]; ifNotExists?: boolean }
+export type AlterTable = {
+  t: 'alterTable'; name: string; addColumn?: string; dropColumn?: string; renameTo?: string; renameColumn?: { from: string; to: string }
+}
 export type DropTable = { t: 'dropTable'; name: string }
 export type CreateIndex = { t: 'createIndex'; name: string; table: string; cols: string[]; unique?: boolean }
+export type DropIndex = { t: 'dropIndex'; name: string }
+// INSERT INTO into (cols) SELECT cols FROM from — the copy step of a table rebuild
+export type CopyRows = { t: 'copyRows'; from: string; into: string; cols: string[] }
 
-export type SqlNode = Expr | Select | Insert | Update | Delete | CreateTable | AlterTable | DropTable | CreateIndex
+export type SqlNode = Expr | Select | Insert | Update | Delete | CreateTable | AlterTable | DropTable | CreateIndex | DropIndex | CopyRows
 
 // ---- builders --------------------------------------------------------------------------------
 export const col = (name: string): Expr => ({ t: 'col', name })

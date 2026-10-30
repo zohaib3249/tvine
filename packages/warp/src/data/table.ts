@@ -71,8 +71,8 @@ export class Table {
     return d.render({ t: 'delete', from: this.name, where: whereOf(this, ws, d) })
   }
 
-  // CREATE TABLE + one CREATE INDEX per `index: true` field. (Migrations still go through
-  // migrate.ts until 6e; this is the collected DDL the new operations will reuse.)
+  // CREATE TABLE + one CREATE INDEX per `index: true` field (tests / ad-hoc tables; migrations
+  // render the same field DDL through schema/operations.ts).
   createSQL(d: Dialect): Statement[] {
     pkField(this)
     const out = [d.render({ t: 'createTable', name: this.name, columns: this.entries.flatMap(([n, f]) => f.columnDDL(n, d)) })]

@@ -1,6 +1,8 @@
 // A dialect is thin: quoting, param style, transaction semantics, AST → SQL text.
 // Per-DB column types and value conversions live on each Field (data/fields/*).
 import { RAW, type SqlNode } from './ast.js'
+import type { Operation } from '../schema/operations.js'
+import type { ProjectState } from '../schema/state.js'
 
 export type Statement = { sql: string; params: unknown[] }   // the ONLY shape that reaches a driver
 
@@ -11,7 +13,9 @@ export interface Dialect {
   render(node: SqlNode): Statement
   lowerFn: string                              // Unicode-aware lower(): 'tv_lower' | 'lower'
   transactionalDDL: boolean
-  // TODO(6e): renderOperation(op, state) arrives with schema/operations.
+  // A migration operation as this database runs it (from = state before the op, to = after).
+  // sqlite rebuilds tables for what it cannot ALTER; others use the shared defaultRender.
+  renderOperation(op: Operation, from: ProjectState, to: ProjectState): Statement[]
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -53,14 +57,20 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       }
       case 'update': return `UPDATE ${q(x.table)} SET ${x.set.map(([c, v]) => `${q(c)} = ${e(v)}`).join(', ')}${x.where ? ` WHERE ${e(x.where)}` : ''}`
       case 'delete': return `DELETE FROM ${q(x.from)}${x.where ? ` WHERE ${e(x.where)}` : ''}`
-      case 'createTable': return `CREATE TABLE ${q(x.name)} (${x.columns.join(', ')})`
+      case 'createTable': return `CREATE TABLE ${x.ifNotExists ? 'IF NOT EXISTS ' : ''}${q(x.name)} (${x.columns.join(', ')})`
       case 'alterTable':
         if (x.addColumn) return `ALTER TABLE ${q(x.name)} ADD COLUMN ${x.addColumn}`
         if (x.dropColumn) return `ALTER TABLE ${q(x.name)} DROP COLUMN ${q(x.dropColumn)}`
         if (x.renameTo) return `ALTER TABLE ${q(x.name)} RENAME TO ${q(x.renameTo)}`
+        if (x.renameColumn) return `ALTER TABLE ${q(x.name)} RENAME COLUMN ${q(x.renameColumn.from)} TO ${q(x.renameColumn.to)}`
         throw new Error('alterTable needs an action')
       case 'dropTable': return `DROP TABLE ${q(x.name)}`
       case 'createIndex': return `CREATE ${x.unique ? 'UNIQUE ' : ''}INDEX ${q(x.name)} ON ${q(x.table)} (${x.cols.map(q).join(', ')})`
+      case 'dropIndex': return `DROP INDEX ${q(x.name)}`
+      case 'copyRows': {
+        const cs = x.cols.map(q).join(', ')
+        return `INSERT INTO ${q(x.into)} (${cs}) SELECT ${cs} FROM ${q(x.from)}`
+      }
     }
   }
   return { sql: e(node), params }
