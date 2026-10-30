@@ -18,6 +18,22 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",
       "default": "./dist/server.js"
+    },
+    "./api": {
+      "react-server": {
+        "types": "./dist/api/server.d.ts",
+        "default": "./dist/api/server.js"
+      },
+      "types": "./dist/api/client.d.ts",
+      "default": "./dist/api/client.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx/jsx-runtime.d.ts",
+      "default": "./dist/jsx/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx/jsx-dev-runtime.d.ts",
+      "default": "./dist/jsx/jsx-dev-runtime.js"
     }
   },
   "scripts": {
@@ -25,7 +41,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "@tvine/warp": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19",
