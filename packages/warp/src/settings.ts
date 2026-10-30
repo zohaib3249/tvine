@@ -44,6 +44,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
   logging: 'json',
   agent: { shape: 'v2', budget: 1500, rowsL1: 10 },
+  frontend: { boundary: 'error' },
   audit: false,
 }
 
@@ -76,6 +77,7 @@ const schema: z.ZodType<Settings> = z.object({
   }),
   logging: z.enum(['json', 'pretty', 'none']),
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt }),
+  frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({ user: fn<(req: Request) => Promise<TvineUser | null>>().optional() }).optional(),
