@@ -1,3 +1,4 @@
+import { isIPv6 } from 'node:net'
 import type { ActionRules, Sid } from '../core/types.js'
 
 // security/ratelimit: token buckets, lazy refill on check (no timers).
@@ -22,7 +23,7 @@ export class RateLimiter {
     | { ok: false; retryAfterMs: number } {
     const now = Date.now()
     const picks: [Map<string, Bucket>, string, Rate][] = keys.ip === undefined ? [] : [[
-      this.ips, keys.ip,
+      this.ips, ipKey(keys.ip),
       { limit: this.defaults.limit, windowMs: this.defaults.windowMs * IP_WINDOW_MULT },
     ]]
     if (keys.sid) {
@@ -51,6 +52,16 @@ export class RateLimiter {
     if (map.size > CAP) map.delete(map.keys().next().value!)
     return b
   }
+}
+
+// #20: one IPv6 client usually owns a whole /64, so per-address buckets would let it rotate freely;
+// IPv6 is keyed by its /64 prefix (any spelling), IPv4 per address.
+export function ipKey(ip: string): string {
+  if (!isIPv6(ip)) return ip
+  const [head, tail = ''] = ip.toLowerCase().split('::')
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : []
+  const full = ip.includes('::') ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h
+  return `${full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`
 }
 
 // Boot-time validation (manifest rules and settings defaults): a 0 limit or window would deny forever / divide by 0.

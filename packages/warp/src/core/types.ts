@@ -159,7 +159,7 @@ export interface Settings {
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust
-  session: { ttlMs: number; cookieName: string }
+  session: { ttlMs: number; cookieName: string; max: number }   // max: live sessions kept; past it the least recently used is evicted
   limits: {
     bodyBytes: number
     handlerMs: number

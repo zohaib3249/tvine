@@ -22,9 +22,11 @@ export class SessionStore {
     this.onEvict = opts.onEvict
   }
 
+  // byId's insertion order is recency (resolve re-inserts), so the first key is the least recently used
   create(): Session {
     const now = Date.now()
     const s: Session = { sid: nanoid(), rev: 0, data: new Map(), createdAt: now, lastSeen: now }
+    while (this.byId.size >= this.settings.max) this.evict(this.byId.keys().next().value as Sid)   // #20: flood cap
     this.byId.set(s.sid, s)
     for (const w of this.watchers) w(s.sid, 'created')
     return s
@@ -40,6 +42,7 @@ export class SessionStore {
       return undefined
     }
     s.lastSeen = Date.now()
+    this.byId.delete(sid); this.byId.set(sid, s)   // most recently used last
     return s
   }
 

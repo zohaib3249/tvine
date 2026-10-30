@@ -26,7 +26,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   header: 'x-tvine',
   formats: { default: 'json', notationPath: true },
   trustProxy: 0,
-  session: { ttlMs: 86_400_000, cookieName: 'tvine_s' },
+  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000 },
   limits: {
     bodyBytes: 65_536,
     handlerMs: 10_000,
@@ -54,7 +54,7 @@ const schema: z.ZodType<Settings> = z.object({
   header: z.string(),
   formats: z.object({ default: z.enum(['json', 'notation']), notationPath: z.boolean() }),
   trustProxy: posInt,
-  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string() }),
+  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive() }),
   limits: z.object({
     bodyBytes: posInt,
     handlerMs: z.number().positive(),
