@@ -4,7 +4,7 @@
 //                                          tables for what it cannot ALTER; see dialects/sqlite.ts)
 // Column DDL always comes from the Field (columnDDL / dbType): fields own it, ops only collect.
 import type { DbName, Field, Kind } from '../fields/index.js'
-import type { SqlNode } from '../sql/ast.js'
+import { isNull, param, type SqlNode } from '../sql/ast.js'
 import { checkIdent, type Dialect, type Statement } from '../sql/dialect.js'
 import { fieldOf, findModel, modelDef, modelIn, specOf, type FieldSpec, type ModelState, type ProjectState } from './state.js'
 
@@ -158,14 +158,46 @@ export function indexDiff(d: Dialect, from: ProjectState, fromModel: string, to:
   const a = indexesOf(from, fromModel), b = indexesOf(to, toModel)
   const ak = new Set(a.map(key)), bk = new Set(b.map(key))
   return {
-    drop: a.filter(i => !bk.has(key(i))).map(i => d.render({ t: 'dropIndex', name: i.name })),
+    drop: a.filter(i => !bk.has(key(i))).map(i => d.render({ t: 'dropIndex', name: i.name, table: toModel })),   // dropped after a renameModel
     create: b.filter(i => !ak.has(key(i))).map(i => d.render({ t: 'createIndex', ...i })),
   }
 }
 
 export function createTable(d: Dialect, state: ProjectState, model: string, as = model): Statement {
   const def = modelDef(state, model)
-  return d.render({ t: 'createTable', name: as, columns: Object.entries(def.fields).flatMap(([n, f]) => f.columnDDL(n, d)) })
+  const fields = Object.entries(def.fields)
+  return d.render({ t: 'createTable', name: as, columns: [...fields.flatMap(([n, f]) => f.columnDDL(n, d)), ...fields.flatMap(([n, f]) => f.tableConstraints(as, n, d))] })
+}
+
+// alterField guards for dialects that ALTER in place (postgres, mysql): the column set and the fk
+// target must stay, and a cast that would silently change stored values (1.5 → 2) is refused
+export function alterGuard(op: Extract<OpData, { kind: 'alterField' }>, d: Dialect, from: ProjectState, to: ProjectState) {
+  const spec = findModel(from, op.model)!.model.fields[op.name]
+  const was = fieldOf(spec, from), now = fieldOf(op.field, to)
+  const a = was.columns(op.name), b = now.columns(op.name)
+  const lost = a.filter(c => !b.includes(c))
+  if (lost.length || a.length !== b.length) {
+    throw new Error(`alterField ${op.model}.${op.name} would drop column(s) ${lost.join(', ')}: write removeField + addField or a runSQL data migration`)
+  }
+  if (spec.to !== op.field.to) {
+    throw new Error(`alterField ${op.model}.${op.name} changes its foreign key target; write removeField + addField or a runSQL migration`)
+  }
+  if (spec.kind === 'float' && ['int', 'fk', 'id'].includes(op.field.kind)) {
+    throw new Error(`alterField ${op.model}.${op.name} changes ${was.dbType(d)[0]} → ${now.dbType(d)[0]}, which would round stored values: write a runSQL data migration`)
+  }
+  return { was, now }
+}
+
+// a required auto datetime on a table that may hold rows: add nullable, backfill the migration time,
+// then `notNull` (the dialect's own SET NOT NULL)
+export function addAutoDatetime(op: Extract<OpData, { kind: 'addField' }>, d: Dialect, from: ProjectState, to: ProjectState, notNull: Statement): Statement[] {
+  const f = fieldOf({ ...op.field, opts: { ...op.field.opts, optional: true } }, to)
+  return [
+    ...f.columnDDL(op.name, d).map(c => d.render({ t: 'alterTable', name: op.model, addColumn: c })),
+    d.render({ t: 'update', table: op.model, set: [[op.name, param(f.toDb(new Date(), d)[0])]], where: isNull({ t: 'col', name: op.name }) }),
+    notNull,
+    ...indexDiff(d, from, op.model, to, op.model).create,
+  ]
 }
 
 export const columnsOf = (state: ProjectState, model: string) =>
@@ -198,8 +230,8 @@ export function defaultRender(o: OpData, d: Dialect, from: ProjectState, to: Pro
       return [...indexDiff(d, from, o.model, to, o.model).drop, ...cols.map(c => r({ t: 'alterTable', name: o.model, dropColumn: c }))]
     }
     case 'alterField': {
-      // sqlite rebuilds, postgres renders native ALTER COLUMN (dialects/*); mysql lands in Task 20b
-      if (columnsChanged(o, d, from, to)) throw new Error(`alterField ${o.model}.${o.name} is not supported on ${d.name} yet`)
+      // sqlite rebuilds, postgres / mysql render native ALTERs (dialects/*)
+      if (columnsChanged(o, d, from, to)) throw new Error(`alterField ${o.model}.${o.name} is not supported on ${d.name}`)
       const ix = indexDiff(d, from, o.model, to, o.model)
       return [...ix.drop, ...ix.create]
     }

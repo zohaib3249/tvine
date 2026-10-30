@@ -31,7 +31,7 @@ export type AlterTable = {
 }
 export type DropTable = { t: 'dropTable'; name: string }
 export type CreateIndex = { t: 'createIndex'; name: string; table: string; cols: string[]; unique?: boolean }
-export type DropIndex = { t: 'dropIndex'; name: string }
+export type DropIndex = { t: 'dropIndex'; name: string; table?: string }   // table: mysql's DROP INDEX … ON
 // INSERT INTO into (cols, fill cols) SELECT cols, fill values FROM from — the copy step of a table
 // rebuild; `fill` backfills new columns (e.g. auto datetime = migration time) as params
 export type CopyRows = { t: 'copyRows'; from: string; into: string; cols: string[]; fill?: [string, Expr][] }

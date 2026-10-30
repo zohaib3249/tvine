@@ -75,7 +75,8 @@ export class Table {
   // render the same field DDL through schema/operations.ts).
   createSQL(d: Dialect): Statement[] {
     pkField(this)
-    const out = [d.render({ t: 'createTable', name: this.name, columns: this.entries.flatMap(([n, f]) => f.columnDDL(n, d)) })]
+    const columns = [...this.entries.flatMap(([n, f]) => f.columnDDL(n, d)), ...this.entries.flatMap(([n, f]) => f.tableConstraints(this.name, n, d))]
+    const out = [d.render({ t: 'createTable', name: this.name, columns })]
     for (const [n, f] of this.entries) {
       if (f.opts.index) out.push(d.render({ t: 'createIndex', name: `${this.name}_${n}_idx`, table: this.name, cols: [f.columns(n)[0]] }))
     }

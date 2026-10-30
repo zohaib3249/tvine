@@ -3,6 +3,7 @@
 // COLUMN refuses) rebuild the table; the runner runs that with foreign keys off + foreign_key_check.
 import { bin, col, param, type SqlNode } from '../ast.js'
 import { checkIdent, renderNode, type Dialect, type Statement } from '../dialect.js'
+import { ddlLiteral } from '../../fields/base.js'
 import { columnsChanged, columnsOf, createTable, defaultRender, indexesOf, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, modelDef, type FieldSpec, type ProjectState } from '../../schema/state.js'
 
@@ -52,6 +53,8 @@ export const sqlite: Dialect = {
   likeEscape: "'\\'",
   bool: ['0', '1'],
   nullsSmallest: true,
+  insertReturning: true,
+  literal: v => ddlLiteral(v),
   renderOperation(op, from, to) {
     switch (op.kind) {
       case 'removeField': return rebuild(op, from, to)

@@ -18,7 +18,7 @@ export const bare = (s: string) => (s === '' || /[\s"\\]|[^\x21-\x7e]/.test(s) ?
 
 const isMoney = (v: object): v is { value: number; currency: string } => {
   const o = v as { value?: unknown; currency?: unknown }
-  return Object.keys(v).length === 2 && typeof o.value === 'number' && /^-?\d+(\.\d+)?$/.test(String(o.value)) &&
+  return Object.keys(v).length === 2 && typeof o.value === 'number' && /^-?\d+(\.\d{1,2})?$/.test(String(o.value)) &&
     typeof o.currency === 'string' && /^[A-Z]{3}$/.test(o.currency)
 }
 

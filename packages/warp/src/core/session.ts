@@ -15,6 +15,7 @@ export class SessionStore {
   private cookiesBySid = new Map<Sid, Set<string>>()
   private channels: ChannelLayer
   private onEvict?: (sid: Sid) => void
+  private watchers: ((sid: Sid, kind: 'created' | 'expired') => void)[] = []
 
   constructor(private settings: Settings['session'], opts: SessionStoreOptions = {}) {
     this.channels = opts.channels ?? new MemoryChannelLayer()
@@ -25,6 +26,7 @@ export class SessionStore {
     const now = Date.now()
     const s: Session = { sid: nanoid(), rev: 0, data: new Map(), createdAt: now, lastSeen: now }
     this.byId.set(s.sid, s)
+    for (const w of this.watchers) w(s.sid, 'created')
     return s
   }
 
@@ -102,5 +104,12 @@ export class SessionStore {
     this.cookiesBySid.delete(sid)
     this.channels.drop(`sid:${sid}`)
     this.onEvict?.(sid)
+    for (const w of this.watchers) w(sid, 'expired')
+  }
+
+  // Lifecycle observer (the `session` hook). The watcher must not throw (Hooks.emit isolates).
+  watch(fn: (sid: Sid, kind: 'created' | 'expired') => void): () => void {
+    this.watchers.push(fn)
+    return () => { this.watchers = this.watchers.filter((w) => w !== fn) }
   }
 }
