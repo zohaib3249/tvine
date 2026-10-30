@@ -15,6 +15,7 @@ export interface Opts {
   unique?: boolean
   searchable?: boolean
   index?: boolean
+  hidden?: boolean                      // left out of generic views' default serializer output
   auto?: boolean                        // datetime only: default now
 }
 

@@ -16,7 +16,7 @@ type AnyField = Field<any, boolean, Kind, boolean>
 export const emptyState = (): ProjectState => ({ apps: {} })
 
 // boolean flags that mean nothing when false; `default: false` is a real value and stays
-const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto'])
+const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto', 'hidden'])
 
 // Field → spec (Django's deconstruct). Opts sorted so specs and generated code are deterministic.
 export function specOf(f: AnyField): FieldSpec {
