@@ -15,6 +15,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "nanoid": "^5",
     "zod": "^3.25.76"
   }
 }
