@@ -105,7 +105,7 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
       done.push({ i, target: s.target, ok: true })   // content is already in the snapshot: expand(target) shows it
     } else if (handle && typeof handle.id === 'string') {
       if (typeof h.field === 'string') return fail(i, s, 'unknown_action', `set ${h.field} in the args of the form's submit control instead`, { reason: 'in_tab_only' })
-      const r = await act(server, env, page, { action: handle.id, params: s.args, bind: typeof handle.bind === 'string' ? handle.bind : undefined }, sid, cmd.cmdId, i)
+      const r = await act(server, env, page, { action: handle.id, params: s.args, bind: typeof handle.bind === 'string' && handle.bind ? handle.bind : undefined   /* '' = unbound (v1 ActionRef) */ }, sid, cmd.cmdId, i)
       if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
       if (r.goto) { if (!(await env.request(r.goto))) return { page, events: [ev.ok('ui', { steps: [...done, { i, target: s.target, ok: true }], page }), ev.goto(r.goto)] }; page = r.goto }
       done.push({ i, target: s.target, ok: true, ...(r.result !== undefined && { result: r.result }) })
