@@ -15,3 +15,4 @@ export { Accordion, type AccordionItem, type AccordionProps } from './accordion.
 export { Button, type ButtonProps } from './button.js'
 export { Link, type LinkProps } from './link.js'
 export { Pagination, type PaginationProps } from './pagination.js'
+export { Stepper, type Step, type StepperProps } from './stepper.js'
