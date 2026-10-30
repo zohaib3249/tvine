@@ -136,12 +136,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const nonce = randomBytes(16).toString('hex')
   // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
   // its fragments say: the page marks its per-render token in `touched`, the snapshotter checks it after extract.
-  const touched = new Set<string>()
+  const tokens = renderTokens()
   const renderer = (origin: string) => makeSnapshotter({
     origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName,
     asSession: (sid) => {
-      const token = randomBytes(12).toString('hex')
-      return { headers: { [AS_SESSION]: `${nonce}:${token}:${sid}` }, readSession: () => touched.delete(token) }
+      const token = tokens.start()
+      return { headers: { [AS_SESSION]: `${nonce}:${token}:${sid}` }, readSession: () => tokens.end(token) }
     },
   })
   if (!fe) snapshot = manifestSnapshot(ctx)
@@ -212,7 +212,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     cookies: opts.cookies ?? (async () => (await fromApp<{ cookies(): Promise<CookieJar> }>('next/headers')).cookies()),
   }
   const dispatcher = formDispatcher(ctx, route, src)
-  const pages = pagesFor(ctx, route, src, touched)
+  const pages = pagesFor(ctx, route, src, tokens)
   const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest(), pages: g[PAGES] }
   if (prev.dispatcher) say('WARNING: another tvine server already registered the <Form> dispatcher; this one replaces it until close()', 'warn')
   g[SIGNER] = signer
@@ -355,12 +355,24 @@ function internalOf(v: string | string[] | undefined, nonce: string | undefined)
 }
 
 // currentSession() / currentRequest() for the page Next is rendering right now.
-function pagesFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource, touched: Set<string>): PageAccess {
+// Per agent render: start() → token; read(token) when the page reads the session; end(token) → did it?
+// Only a render still awaited is marked, so a page that finishes after a timeout leaves nothing behind.
+export function renderTokens() {
+  const pending = new Set<string>(), touched = new Set<string>()
+  return {
+    start() { const t = randomBytes(12).toString('hex'); pending.add(t); return t },
+    read(t: string) { if (pending.has(t)) touched.add(t) },
+    end(t: string) { pending.delete(t); return touched.delete(t) },
+    get size() { return pending.size + touched.size },
+  }
+}
+
+function pagesFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource, tokens: ReturnType<typeof renderTokens>): PageAccess {
   const { settings, sessions } = server
   const read = async () => {
     const h: Record<string, string> = Object.fromEntries(await src.headers())
     const own = internalOf(h[AS_SESSION], src.nonce)
-    if (own) touched.add(own.token)   // this agent render depends on its session: never cache it
+    if (own) tokens.read(own.token)   // this agent render depends on its session: never cache it
     return { h, sid: own?.sid }
   }
   return {
