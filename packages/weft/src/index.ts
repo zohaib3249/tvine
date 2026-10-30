@@ -10,6 +10,7 @@ export { useWidget } from './widget/useWidget.js'
 export { defineWidget, type DefinedProps, type WidgetDef } from './widget/defineWidget.js'
 export { WidgetScope, useWidgetScope } from './widget/scope.js'
 export { WeftRoot } from './runtime/WeftRoot.js'
+export { AgentSuspense } from './runtime/nav.js'
 export { WeftError } from './widget/hooks.js'
 export { ACTION_KINDS, signature } from './widget/vocabulary.js'
 export type {

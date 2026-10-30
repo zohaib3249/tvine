@@ -7,5 +7,6 @@ export { setDispatcher, type Dispatcher, type FormResult } from './runtime/dispa
 export type { ActionDef, ActionRef, AgentSpec, Command, Link as LinkSpec, Node, Paginated } from './types.js'
 // v2: client components a server component renders directly ('use client' boundaries).
 export { WeftRoot } from './runtime/WeftRoot.js'
+export { AgentSuspense } from './runtime/nav.js'
 export { WidgetScope } from './widget/scope.js'
 export type { ActionHandle, HeadlessMap, Json, WidgetHooks, WidgetSpec } from './widget/types.js'

@@ -6,6 +6,7 @@ import { autoExcluded } from '../jsx/AutoEl.js'
 import { describeWidget } from './fragment.js'
 import { getRegistry, type RegistryNode } from './registry.client.js'
 import { isStopped, runUi, setStopped, type UiCommand } from './exec.js'
+import { currentPage, markSeen, navNotice, pendingRegions, settle } from './nav.js'
 
 // WebMCP adapter (transports.md §WebMCP): read_page, expand, ui, do for an in-browser agent in the
 // user's own tab. read_page/expand/ui run locally on the registry; do POSTs. Registered by <WeftRoot>
@@ -139,7 +140,19 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
   const guard = <A,>(fn: (a: A) => Promise<Text>) => async (a: A): Promise<Text> => {
     if (isStopped()) { blocked(); return errOut('domain', 'the human pressed Stop; agent control is blocked in this tab', { reason: 'stopped' }) }
     connected()
-    return fn(a ?? ({} as A))
+    // navigation-spa.md: tell the agent when the page moved under it (human click, back/forward), let
+    // a client transition settle before reading, and say `pending` while streamed regions are open.
+    const notice = navNotice()
+    await settle()
+    const out = await fn(a ?? ({} as A))
+    const pending = pendingRegions()
+    markSeen()
+    if (!notice && !pending) return out
+    try {
+      const j = JSON.parse(out.content[0]!.text)
+      if (j && typeof j === 'object' && !Array.isArray(j)) return reply({ ...j, ...(notice && { notice }), ...(pending && { pending }) })
+    } catch { /* plain-text reply (do): leave as is */ }
+    return out
   }
 
   const off = provideTools([
@@ -172,10 +185,12 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
       execute: guard(async (cmd: UiCommand) => {
         const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
           outcome(await post({ action: h.id, params, bind: h.bind, cmdId }))
+        const from = currentPage()
         const { result, error } = await runUi(cmd, { via: 'webmcp', run })
-        // stale_rev carries a fresh L0 map so the agent can re-plan without another call.
-        const map = error?.code === 'stale_rev' ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
-        return reply(error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result })
+        // stale_rev, or a step that changed the page (navigate), carries a fresh L0 map so the agent
+        // can re-plan without another call.
+        const map = error?.code === 'stale_rev' || result.page !== from ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
+        return reply(error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result: { ...result, ...(map && { map }) } })
       }),
     },
     {
