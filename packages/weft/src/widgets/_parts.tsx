@@ -10,7 +10,9 @@ export { AutoOff } from '../jsx/AutoEl.js'
 export type SlotProps<S> = {
   className?: string | ((s: S) => string)
   style?: CSSProperties | ((s: S) => CSSProperties)
-  asChild?: boolean                                                  // merge onto the single child, keep its element
+  // Merge onto this element, keeping its type (Radix asChild; given here since built-ins own their children).
+  // Our children go inside it unless it has its own.
+  asChild?: ReactElement
   render?: (props: Record<string, unknown>, s: S) => ReactElement   // full control: spread the given props
 }
 export type Slots<K extends string, S> = Partial<Record<K, SlotProps<S>>>
@@ -29,8 +31,8 @@ export function part<S>(Tag: string, own: Record<string, any>, slot: SlotProps<S
   const style = { ...own.style, ...call(slot?.style, s) }
   const props: Record<string, any> = { ...own, className, style: Object.keys(style).length ? style : undefined }
   if (slot?.render) return slot.render({ ...props, children }, s)
-  if (slot?.asChild && isValidElement<Record<string, any>>(children)) {
-    const cp = children.props
+  if (slot?.asChild && isValidElement<Record<string, any>>(slot.asChild)) {
+    const child = slot.asChild, cp = child.props
     const merged: Record<string, any> = { ...props, ...cp, className: join(className, cp.className), style: { ...props.style, ...cp.style } }
     for (const k of Object.keys(props)) {
       if (/^on[A-Z]/.test(k) && typeof cp[k] === 'function' && typeof props[k] === 'function') {
@@ -38,7 +40,9 @@ export function part<S>(Tag: string, own: Record<string, any>, slot: SlotProps<S
       }
     }
     if (props.ref || (cp as { ref?: Ref<unknown> }).ref) merged.ref = mergeRefs(props.ref, (cp as { ref?: Ref<unknown> }).ref)
-    return cloneElement(children, merged)
+    if (cp.children === undefined && children !== undefined) merged.children = children
+    else delete merged.children
+    return cloneElement(child, merged)
   }
   return createElement(Tag, props, children)
 }
