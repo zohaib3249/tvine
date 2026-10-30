@@ -1,36 +1,9 @@
 import type { ActionRef, ErrCode, Event, Link, Node, Snapshot } from '../core/types.js'
 import { RECOVERIES } from '../core/errors.js'
 import { snapshotOf, status } from './envelope.js'
-
-const NUM = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i
-const MONEY = /^(-?\d+(\.\d+)?)([A-Z]{3})$/
-const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
-export const quote = (s: string) => ascii(JSON.stringify(s))
-
-// Quote only when the bare form would be ambiguous: space, quote, backslash, sigil, null/bool/number/money lookalike.
-const needsQuote = (s: string) =>
-  s === '' || s === '-' || s === 'true' || s === 'false' || NUM.test(s) || MONEY.test(s) || /[\s"\\#=@!>{[]|[^\x21-\x7e]/.test(s)
-const str = (s: string) => (needsQuote(s) ? quote(s) : s)
-// Looser rule for head page / bind (opaque tails): `=` and sigils are fine there.
-// Action id / param name / param type: also quote the action-line delimiters.
-const part = (s: string) => (s === '' || /[\s"\\(),:?]|[^\x21-\x7e]/.test(s) ? quote(s) : s)
-export const bare = (s: string) => (s === '' || /[\s"\\]|[^\x21-\x7e]/.test(s) ? quote(s) : s)
-
-const isMoney = (v: object): v is { value: number; currency: string } => {
-  const o = v as { value?: unknown; currency?: unknown }
-  return Object.keys(v).length === 2 && typeof o.value === 'number' && /^-?\d+(\.\d{1,2})?$/.test(String(o.value)) &&
-    typeof o.currency === 'string' && /^[A-Z]{3}$/.test(o.currency)
-}
-
-// One value → one token.
-export function cell(v: unknown): string {
-  if (v === undefined || v === null) return '-'
-  if (typeof v === 'string') return str(v)
-  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '-'
-  if (typeof v === 'boolean') return String(v)
-  if (typeof v === 'object' && !Array.isArray(v) && isMoney(v)) return `${v.value.toFixed(2)}${v.currency}`   // major units, always 2 decimals (29.90USD)
-  return ascii(JSON.stringify(v))   // JSON-cell escape hatch
-}
+import { NUM, MONEY, str, cell, quote, actionLine, notationBody } from '../shape/notation.js'
+import type { Shaped } from '../shape/disclose.js'
+export { cell, quote, bare } from '../shape/notation.js'
 
 function body(s: Snapshot): string[] {
   const out: string[] = []
@@ -47,7 +20,7 @@ function body(s: Snapshot): string[] {
       if (r % 25 === 0) out.push(hdr)   // header repeat: positional recall degrades with distance
       out.push([str(n.id), ...cols.map(c => cell(n.data[c]))].join(' '))
       for (const a of n.actions) {
-        out.push(`! ${part(a.id)}(${a.params.map(p => `${part(p.name)}${p.required ? '' : '?'}:${part(p.type)}`).join(',')}) bind=${bare(a.bind)}`)
+        out.push(actionLine(a))
       }
     })
     i = j
@@ -56,12 +29,14 @@ function body(s: Snapshot): string[] {
   return out
 }
 
-// `head` already holds line 1 (+ hint). Statuses first, then the (single) snapshot body.
-export function toNotation(events: Event[], head: string): string {
+// `head` already holds line 1 (+ hint). Statuses first, then the (single) snapshot body:
+// `v2` = the shaped snapshot (settings.agent.shape v2), else the v1 body.
+export function toNotation(events: Event[], head: string, v2?: Shaped): string {
   const lines = [head]
   for (const e of events) if (e.kind !== 'snapshot') lines.push(status(e))
   const s = events.map(snapshotOf).find(Boolean)
-  if (s) lines.push(...body(s))
+  if (v2) lines.push(...notationBody(v2))
+  else if (s) lines.push(...body(s))
   return lines.join('\n')
 }
 

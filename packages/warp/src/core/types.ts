@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import type { z } from 'zod'
+import type { WidgetFrag } from '../shape/disclose.js'
 
 export type { Paginated } from '../data/queryset.js'   // Weft consumes it from here
 
@@ -28,6 +29,8 @@ export interface Snapshot {
   page: string; title: string
   sid: Sid; rev: Rev
   nodes: Node[]; links: Link[]
+  widgets?: WidgetFrag[]            // v2 `k:"w"` fragments (snapshot-format.md); absent on v1-only pages
+  folds?: Record<string, string>    // link id → entity node it directly followed (v2 `href` folding)
 }
 
 export interface Command {
@@ -180,6 +183,8 @@ export interface Settings {
     atomicRequests: boolean         // Django ATOMIC_REQUESTS: each non-readOnly action = one transaction
   }
   logging: 'json' | 'pretty' | 'none'
+  // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
+  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
   audit: boolean                    // v1.1
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS

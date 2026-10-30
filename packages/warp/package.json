@@ -18,6 +18,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./shape": {
+      "types": "./dist/shape/index.d.ts",
+      "import": "./dist/shape/index.js"
     }
   },
   "scripts": {
