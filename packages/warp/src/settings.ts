@@ -13,7 +13,12 @@ export const DEFAULT_DB_URL = 'file:./tvine.db'
 
 // THE db url precedence, used by defineSettings and db.ts: explicit setting > DATABASE_URL > default.
 export function resolveDbUrl(explicit?: string): string {
-  return explicit ?? (process.env.DATABASE_URL?.trim() ? process.env.DATABASE_URL : DEFAULT_DB_URL)
+  if (explicit !== undefined) return explicit
+  const env = process.env.DATABASE_URL
+  if (env === undefined) return DEFAULT_DB_URL
+  // set-but-blank must never silently land on local sqlite
+  if (!env.trim()) throw new Error('DATABASE_URL is set but empty')
+  return env
 }
 
 export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
@@ -62,7 +67,7 @@ const schema: z.ZodType<Settings> = z.object({
   media: z.object({ dir: z.string(), route: z.string() }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
-    url: z.string(),
+    url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),
     pool: z.object({ max: posInt, acquireMs: posInt, idleMs: posInt }),
   }),
   logging: z.enum(['json', 'pretty', 'none']),

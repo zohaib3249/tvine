@@ -15,6 +15,7 @@ export function sqlitePath(raw: string): string {
   const url = raw.trim()
   if (!url) throw new Error('database url is empty')
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
+  const hasAuthority = /^[a-z][a-z0-9+.-]*:\/\//i.test(url)
   if (scheme === 'postgres' || scheme === 'postgresql') throw new Error('postgres support lands in Task 20; use a file: url')
   if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`${scheme} support is not available; use a file: url`)
   if (url === ':memory:' || url === 'file::memory:') return ':memory:'
@@ -22,7 +23,7 @@ export function sqlitePath(raw: string): string {
   // dev convenience: bare path (no scheme://) ending in .db/.sqlite/.sqlite3
   if (/\.(db|sqlite3?)$/i.test(url) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url
   // only the scheme is echoed, never user:pass
-  throw new Error(`unsupported database url '${scheme ?? 'no scheme'}' — use file:./name.db for sqlite`)
+  throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite`)
 }
 
 export function openConn(url: string, alias = 'default'): Connection {
