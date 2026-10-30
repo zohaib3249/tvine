@@ -7,7 +7,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { openConn, type Connection } from './db.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
@@ -16,22 +15,22 @@ import type { Dialect, Statement } from './sql/dialect.js'
 import { sqlite } from './sql/dialects/sqlite.js'
 import { diff } from './schema/autodetect.js'
 import { render } from './schema/codegen.js'
-import { MigrationGraph, type Loader, type MigrationNode } from './schema/graph.js'
+import { importLoader, MigrationGraph, type Loader, type MigrationNode } from './schema/graph.js'
 import { destroyed, type Migration, type Operation } from './schema/operations.js'
-import { emptyState, findModel, replay, stateFromModels, type ProjectState } from './schema/state.js'
+import { canon, emptyState, findModel, replay, stateFromModels, type ProjectState } from './schema/state.js'
 
 export interface LoadOpts { load?: Loader }
 const isModel = (v: any): v is Model<any, any> => !!v && typeof v === 'object' && 'fields' in v && 'objects' in v && 'name' in v
 
 // apps/*/models.(ts|js) → models per app. A model belongs to the app whose models.ts exports it.
-export async function discoverModels(appsDir: string): Promise<Record<string, Model<any, any>[]>> {
+export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Promise<Record<string, Model<any, any>[]>> {
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
   const out: Record<string, Model<any, any>[]> = {}
   const owner = new Map<string, string>()
   for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
     const file = ['models.ts', 'models.js'].map(f => join(appsDir, app, f)).find(existsSync)
     if (!file) continue                     // an app without models is fine; the empty-result check below guards the rest
-    const mod = await import(pathToFileURL(file).href)
+    const mod = await (opts.load ?? importLoader)(file)
     for (const v of new Set(Object.values(mod))) {
       if (!isModel(v)) continue
       const prev = owner.get(v.name)
@@ -44,9 +43,10 @@ export async function discoverModels(appsDir: string): Promise<Record<string, Mo
   return out
 }
 
-// canonical code of the loaded migration: edits that change it are refused once applied;
-// comments and formatting are not
-const checksum = (m: Migration) => createHash('sha256').update(render(m)).digest('hex')
+// sha256 of the migration's DATA in a versioned canonical form (key-sorted JSON; op methods drop
+// out): edits that change it are refused once applied; comments, formatting and codegen changes are not
+export const checksum = (m: Migration) =>
+  createHash('sha256').update(canon({ v: 1, dependencies: m.dependencies, operations: m.operations })).digest('hex')
 
 // one migration forwards from `state`; with a dialect, also its SQL (each op sees before/after)
 function step(n: MigrationNode, state: ProjectState, d?: Dialect): { state: ProjectState; stmts: Statement[] } {
@@ -126,7 +126,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
     return { files: [file], message: `created ${file}` }
   }
 
-  const to = stateFromModels(await discoverModels(appsDir))
+  const to = stateFromModels(await discoverModels(appsDir, opts))
   const changes = diff(replay(graph.order()), to)
   const apps = Object.keys(changes)
   if (!apps.length) return { files: [], message: 'no changes detected' }
@@ -134,6 +134,12 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   const drops = apps.flatMap(a => destroyed(changes[a]))
   if (drops.length && !opts.allowDrop) {
     throw new Error(`refusing to write a migration that drops ${drops.join(', ')} (models removed or changed?); pass allowDrop to confirm${renameHint(changes)}`)
+  }
+  // Django --noinput: existing rows would have no value (auto datetimes are backfilled at migrate time)
+  for (const o of Object.values(changes).flat()) {
+    if (o.kind === 'addField' && !o.field.opts.optional && o.field.opts.default === undefined && !o.field.opts.auto) {
+      throw new Error(`field ${o.model}.${o.name} is required and has no default: add default:, make it optional, or add it in two steps`)
+    }
   }
 
   const names = new Map(apps.map(a => [a, `${graph.nextNumber(a)}_${opts.name ?? autoName(!graph.leaf(a), changes[a])}`]))
@@ -234,7 +240,7 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Lo
 
 // true = clean. false = migrations pending / edited / conflicting, or models.ts drifted from the files.
 export async function migrateCheck(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<boolean> {
-  const models = await discoverModels(appsDir)
+  const models = await discoverModels(appsDir, opts)
   const graph = await MigrationGraph.load(appsDir, opts)
   if (Object.keys(graph.conflicts()).length) return false
   const plan = graph.order()
@@ -251,7 +257,7 @@ export async function sqlMigrate(appsDir: string, app: string, name: string, dia
   if (!target) throw new Error(hits.length ? `${app}.${name} is ambiguous: ${hits.map(n => n.name).join(', ')}` : `no migration ${app}.${name}`)
   let state = emptyState()
   for (const n of plan) {
-    if (n === target) return step(n, state, dialect).stmts.map(s => `${s.sql};`).join('\n')
+    if (n === target) return step(n, state, dialect).stmts.map(s => `${s.sql};${s.params.length ? ` -- params: ${JSON.stringify(s.params)}` : ''}`).join('\n')
     state = step(n, state).state
   }
   throw new Error('unreachable')

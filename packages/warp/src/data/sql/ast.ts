@@ -29,8 +29,9 @@ export type AlterTable = {
 export type DropTable = { t: 'dropTable'; name: string }
 export type CreateIndex = { t: 'createIndex'; name: string; table: string; cols: string[]; unique?: boolean }
 export type DropIndex = { t: 'dropIndex'; name: string }
-// INSERT INTO into (cols) SELECT cols FROM from — the copy step of a table rebuild
-export type CopyRows = { t: 'copyRows'; from: string; into: string; cols: string[] }
+// INSERT INTO into (cols, fill cols) SELECT cols, fill values FROM from — the copy step of a table
+// rebuild; `fill` backfills new columns (e.g. auto datetime = migration time) as params
+export type CopyRows = { t: 'copyRows'; from: string; into: string; cols: string[]; fill?: [string, Expr][] }
 
 export type SqlNode = Expr | Select | Insert | Update | Delete | CreateTable | AlterTable | DropTable | CreateIndex | DropIndex | CopyRows
 

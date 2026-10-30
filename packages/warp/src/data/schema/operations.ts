@@ -168,28 +168,13 @@ export function createTable(d: Dialect, state: ProjectState, model: string, as =
   return d.render({ t: 'createTable', name: as, columns: Object.entries(def.fields).flatMap(([n, f]) => f.columnDDL(n, d)) })
 }
 
-const columnsOf = (state: ProjectState, model: string) =>
+export const columnsOf = (state: ProjectState, model: string) =>
   Object.entries(modelDef(state, model).fields).flatMap(([n, f]) => f.columns(n))
 
 // did an alterField change the column(s) themselves (vs only non-DB options / the index)?
 export function columnsChanged(o: Extract<OpData, { kind: 'alterField' }>, d: Dialect, from: ProjectState, to: ProjectState): boolean {
   const ddl = (s: ProjectState) => modelDef(s, o.model).fields[o.name].columnDDL(o.name, d).join()
   return ddl(from) !== ddl(to)
-}
-
-// sqlite-style table rebuild (create new, copy shared columns, drop, rename, re-index). The
-// runner wraps it in its FK-off + foreign_key_check transaction.
-export function rebuild(d: Dialect, model: string, from: ProjectState, to: ProjectState): Statement[] {
-  const tmp = `__new_${model}`
-  const old = new Set(columnsOf(from, model))
-  const r = (n: SqlNode) => d.render(n)
-  return [
-    createTable(d, to, model, tmp),
-    r({ t: 'copyRows', from: model, into: tmp, cols: columnsOf(to, model).filter(c => old.has(c)) }),
-    r({ t: 'dropTable', name: model }),
-    r({ t: 'alterTable', name: tmp, renameTo: model }),
-    ...indexesOf(to, model).map(i => r({ t: 'createIndex', ...i })),
-  ]
 }
 
 function runSQLFor(sql: Extract<OpData, { kind: 'runSQL' }>['sql'], d: Dialect): Statement[] {

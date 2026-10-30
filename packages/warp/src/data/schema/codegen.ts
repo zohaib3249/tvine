@@ -4,6 +4,7 @@ import type { FieldSpec } from './state.js'
 import { destroyed, type Migration, type OpData } from './operations.js'
 
 const IDENT = /^[A-Za-z_$][\w$]*$/
+const key = (k: string) => (IDENT.test(k) ? k : lit(k))
 
 export function lit(v: unknown): string {
   if (v === null) return 'null'
@@ -13,7 +14,7 @@ export function lit(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(lit).join(', ')}]`
   if (v && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
     const es = Object.entries(v).filter(([, x]) => x !== undefined)
-    return es.length ? `{ ${es.map(([k, x]) => `${IDENT.test(k) ? k : lit(k)}: ${lit(x)}`).join(', ')} }` : '{}'
+    return es.length ? `{ ${es.map(([k, x]) => `${key(k)}: ${lit(x)}`).join(', ')} }` : '{}'
   }
   throw new Error(`cannot write ${String(v)} into a migration file (plain values only)`)
 }
@@ -30,7 +31,7 @@ function opCode(o: OpData): string {
   const a = (...xs: unknown[]) => xs.map(lit).join(', ')
   switch (o.kind) {
     case 'createModel':
-      return `ops.createModel(${lit(o.model)}, {\n${Object.entries(o.fields).map(([n, f]) => `      ${n}: ${fieldCode(f)},\n`).join('')}    })`
+      return `ops.createModel(${lit(o.model)}, {\n${Object.entries(o.fields).map(([n, f]) => `      ${key(n)}: ${fieldCode(f)},\n`).join('')}    })`
     case 'addField': case 'alterField': return `ops.${o.kind}(${a(o.model, o.name)}, ${fieldCode(o.field)})`
     case 'deleteModel': return `ops.deleteModel(${a(o.model)})`
     case 'removeField': return `ops.removeField(${a(o.model, o.name)})`

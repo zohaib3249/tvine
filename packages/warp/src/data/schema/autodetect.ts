@@ -2,7 +2,7 @@
 // a renamed field/model is remove + add, so the drop guard fires and the dev writes
 // ops.renameField / ops.renameModel by hand. Explicit indexes (ops.addIndex) are migration-only
 // and left alone; field-level `index: true` changes are an alterField.
-import { canon, type ModelState, type ProjectState } from './state.js'
+import { canon, fieldOf, type ModelState, type ProjectState } from './state.js'
 import { makeOp, type Operation } from './operations.js'
 
 // new models, fk targets first (cycles keep their order: sqlite checks fks on write, not create)
@@ -33,7 +33,13 @@ export function diff(from: ProjectState, to: ProjectState): Record<string, Opera
     }
     for (const m of common) {
       for (const [n, f] of Object.entries(T[m].fields)) {
-        if (n in F[m].fields && canon(f) !== canon(F[m].fields[n])) list.push(makeOp({ kind: 'alterField', model: m, name: n, field: f }))
+        if (!(n in F[m].fields) || canon(f) === canon(F[m].fields[n])) continue
+        // a different column set (int → fk, money ↔ scalar) cannot be altered in place without losing data
+        const was = fieldOf(F[m].fields[n], from).columns(n), now = fieldOf(f, to).columns(n)
+        if (was.join() !== now.join()) {
+          throw new Error(`column shape changed for ${m}.${n} (${was.join(', ')} → ${now.join(', ')}): write removeField + addField (needs --allow-drop) or a runSQL data migration`)
+        }
+        list.push(makeOp({ kind: 'alterField', model: m, name: n, field: f }))
       }
     }
     if (list.length) out[app] = list

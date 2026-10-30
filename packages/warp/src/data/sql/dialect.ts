@@ -68,8 +68,9 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       case 'createIndex': return `CREATE ${x.unique ? 'UNIQUE ' : ''}INDEX ${q(x.name)} ON ${q(x.table)} (${x.cols.map(q).join(', ')})`
       case 'dropIndex': return `DROP INDEX ${q(x.name)}`
       case 'copyRows': {
-        const cs = x.cols.map(q).join(', ')
-        return `INSERT INTO ${q(x.into)} (${cs}) SELECT ${cs} FROM ${q(x.from)}`
+        const fill = x.fill ?? []
+        const into = [...x.cols, ...fill.map(([c]) => c)].map(q).join(', ')
+        return `INSERT INTO ${q(x.into)} (${into}) SELECT ${[...x.cols.map(q), ...fill.map(([, v]) => e(v))].join(', ')} FROM ${q(x.from)}`
       }
     }
   }

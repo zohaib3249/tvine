@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Migration } from './operations.js'
 
-// Migration modules are TypeScript: the CLI runs under a TS-capable loader (tsx); tests use vitest.
-export type Loader = (path: string) => Promise<unknown>
-export const importLoader: Loader = async p => (await import(pathToFileURL(p).href)).default
+// Migration and models modules are TypeScript: the CLI runs under a TS-capable loader (tsx);
+// tests use vitest. A Loader returns the module namespace (migrations use its `default`).
+export type Loader = (path: string) => Promise<Record<string, unknown>>
+export const importLoader: Loader = p => import(pathToFileURL(p).href)
 
 export interface MigrationNode { app: string; name: string; key: string; migration: Migration }
 
@@ -32,7 +33,7 @@ export class MigrationGraph {
         if (m && (!byName.has(m[1]) || m[2] === 'ts')) byName.set(m[1], f)
       }
       for (const [name, f] of byName) {
-        const mod = await load(join(dir, f))
+        const mod = (await load(join(dir, f))).default
         if (!isMigration(mod)) throw new Error(`apps/${app}/migrations/${f} does not export default migration({ dependencies, operations })`)
         g.add(app, name, mod)
       }
