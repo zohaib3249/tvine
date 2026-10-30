@@ -13,5 +13,8 @@
   "scripts": {
     "build": "tsc -p .",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
   }
 }
