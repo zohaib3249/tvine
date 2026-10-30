@@ -162,7 +162,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       }
       request = await buildRequest({ req, route, isAgent: true }, settings)
       request.id = id
-      const sidKey = (isGet ? u.searchParams.get('sid') : null) ?? (req.headers['x-tvine-sid'] as string | undefined)
+      // header first: a ?sid= lands in logs and Referers (#14)
+      const sidKey = (req.headers['x-tvine-sid'] as string | undefined) ?? (isGet ? u.searchParams.get('sid') : null) ?? undefined
       const cookie = cookieOf(req)
       const bySid = sidKey ? sessions.peek({ sid: sidKey }) : undefined
       const known = bySid ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
