@@ -18,6 +18,7 @@ export function registerAgent(type: string, spec: AgentSpec): ReactElement {
     type,
     data: spec.data,
     personal: spec.personal,
+    live: spec.live,
     actions: spec.actions?.map((a) => ({ def: a.def, bindPayload: a.bind })),
   })
 }

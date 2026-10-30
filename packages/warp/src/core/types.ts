@@ -171,6 +171,7 @@ export interface Settings {
   middleware: Middleware[]
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string }
+  snapshotCache: { ttlMs: number }      // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
     url: string

@@ -13,7 +13,12 @@ export interface RegisteredAction {
   bindPayload?: Record<string, unknown>
 }
 
-export type RegisterInput = Omit<Node, 'actions'> & { actions?: RegisteredAction[]; personal?: boolean }
+// personal: per-session content (never shared). live: changes without a write the server sees (time,
+// another system) — never cached, but not per-session. Both mark the snapshot uncacheable.
+export interface CacheFlags { personal?: boolean; live?: boolean }
+const flags = ({ personal, live }: CacheFlags) => ({ ...(personal && { personal: true }), ...(live && { live: true }) })
+
+export type RegisterInput = Omit<Node, 'actions'> & { actions?: RegisteredAction[] } & CacheFlags
 
 // On globalThis so every copy of this module (Next builds several module graphs) sees the
 // signer set once at boot.
@@ -60,20 +65,18 @@ function fragment(body: Record<string, unknown>): ReactElement {
 }
 
 // Returns the fragment element; the caller renders it.
-export function register({ id, type, data, actions = [], personal }: RegisterInput): ReactElement {
+export function register({ id, type, data, actions = [], ...f }: RegisterInput): ReactElement {
   const node: Node = {
     id, type, data,
     actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema), bind: bindFor(pairBind(a.def.id, a.bindPayload)) })),
   }
-  return fragment({ k: 'node', node, ...(personal && { personal: true }) })
+  return fragment({ k: 'node', node, ...flags(f) })
 }
 
-// personal: per-session content (e.g. "Cart (2)") — marks the snapshot uncacheable.
-export function registerLink(link: Link, opts: { personal?: boolean } = {}): ReactElement {
-  return fragment({ k: 'link', link, ...(opts.personal && { personal: true }) })
+export function registerLink(link: Link, opts: CacheFlags = {}): ReactElement {
+  return fragment({ k: 'link', link, ...flags(opts) })
 }
 
-// For the future <Page> primitive.
-export function pageFragment({ page, title, personal }: { page: string; title: string; personal?: boolean }): ReactElement {
-  return fragment({ k: 'page', page, title, ...(personal && { personal: true }) })
+export function pageFragment({ page, title, ...f }: { page: string; title: string } & CacheFlags): ReactElement {
+  return fragment({ k: 'page', page, title, ...flags(f) })
 }

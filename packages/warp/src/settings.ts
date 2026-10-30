@@ -38,6 +38,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   middleware: [],
   guards: [],
   media: { dir: './media', route: '/media' },
+  snapshotCache: { ttlMs: 60_000 },
   data: { defaultPageSize: 25, maxPageSize: 100 },
   // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
@@ -65,6 +66,7 @@ const schema: z.ZodType<Settings> = z.object({
   middleware: z.array(fn<Middleware>()),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
   media: z.object({ dir: z.string(), route: z.string() }),
+  snapshotCache: z.object({ ttlMs: posInt }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
     url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),

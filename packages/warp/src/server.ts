@@ -15,6 +15,7 @@ import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
+import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { signBind } from './security/sign.js'
 import { defineSettings, merge, type SettingsInput } from './settings.js'
@@ -127,7 +128,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   connections.configure(settings)
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
   const ctx = serverCtx({ actions, settings, appMiddleware, snapshot: (route, sid) => snapshot(route, sid) })
-  const cache = new SnapshotCache()
+  const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
   const nonce = randomBytes(16).toString('hex')
   const renderer = (origin: string) => makeSnapshotter({ origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName, asSession: (sid) => ({ [AS_SESSION]: `${nonce}:${sid}` }) })
   if (!fe) snapshot = manifestSnapshot(ctx)

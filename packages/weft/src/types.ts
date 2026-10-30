@@ -22,6 +22,7 @@ export interface AgentSpec {
   data: Record<string, unknown>
   actions?: { def: ActionDef; bind?: Record<string, unknown> }[]
   personal?: boolean
+  live?: boolean
 }
 
 // Channel frame payload (warp serialize/json.ts, one flat object per SSE `data:`).
