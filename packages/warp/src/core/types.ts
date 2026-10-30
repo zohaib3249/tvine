@@ -1,6 +1,8 @@
 import type { IncomingMessage } from 'node:http'
 import type { z } from 'zod'
 
+export type { Paginated } from '../data/queryset.js'   // Weft consumes it from here
+
 // Canonical shared types: docs/design/00-overview.md (+ amendments).
 // Types plus one runtime constant (ANONYMOUS).
 
