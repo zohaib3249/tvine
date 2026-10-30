@@ -33,12 +33,11 @@ export class SessionStore {
     if (sid === undefined) return undefined
     const s = this.byId.get(sid)
     if (!s) return undefined
-    const now = Date.now()
-    if (now - s.lastSeen > this.settings.ttlMs) {
+    if (!this.alive(s)) {
       this.evict(sid) // lazy expiry
       return undefined
     }
-    s.lastSeen = now
+    s.lastSeen = Date.now()
     return s
   }
 
@@ -46,7 +45,11 @@ export class SessionStore {
   peek(key: { sid?: Sid; cookie?: string }): Session | undefined {
     const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
     const s = sid === undefined ? undefined : this.byId.get(sid)
-    return s && Date.now() - s.lastSeen <= this.settings.ttlMs ? s : undefined
+    return s && this.alive(s) ? s : undefined
+  }
+
+  private alive(s: Session): boolean {
+    return Date.now() - s.lastSeen <= this.settings.ttlMs
   }
 
   link(cookie: string, sid: Sid): void {

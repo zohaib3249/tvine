@@ -48,7 +48,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
 
     const inspector = url.searchParams.get('group') === 'inspector'
     // Prod: socket loopback AND no proxy header (a local reverse proxy makes every client look like 127.0.0.1).
-    const proxied = !!(hdr('x-forwarded-for') || hdr('forwarded') || hdr('x-real-ip'))
+    const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
     if (inspector && !isDev && (proxied || !LOOPBACK.has(clientIp(null, remote, 0)))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
@@ -67,7 +67,6 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     req.socket.setTimeout(0) // SSE is exempt from request timeouts
     req.socket.setKeepAlive(true, 30_000) // reap half-open sockets
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
-    res.write(': ok\n\n')
 
     let closed = false
     const frame = (e: Event, id?: number) => {
@@ -78,16 +77,18 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const safe = (fn: () => void) => { try { fn() } catch { close() } }
     let unsub = () => {}
     let timer: unknown
-    const close = () => {
+    const close = (graceful = false) => {
       if (closed) return
       closed = true
       unsub(); clock.clearInterval(timer)
       open.set(ip, (open.get(ip) ?? 1) - 1)
       if (!open.get(ip)) open.delete(ip)
-      if (!res.writableEnded) try { res.end() } catch { /* socket already gone */ }
+      // Forced close destroys the socket: end() would wait for a non-reading client to drain its buffer.
+      try { if (graceful && !res.writableEnded) res.end(); else if (!graceful) res.destroy() } catch { /* socket already gone */ }
     }
-    req.on('close', close)
-    res.on('error', close)
+    safe(() => { res.write(': ok\n\n') })
+    req.on('close', () => close())
+    res.on('error', () => close())
     open.set(ip, (open.get(ip) ?? 0) + 1) // after 'close' is wired: no leak window
 
     const last = hdr('last-event-id')
@@ -95,7 +96,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
       const missed = group.since(Number(last))
       // ponytail: a full ring after a cursor can't be told from a truncated one (no seq exposed); treat as gap.
       if (missed.length >= RING) safe(() => frame(ev.err('stale_rev', 'missed events fell out of the buffer; re-GET a snapshot'), channels.head()))
-      else safe(() => missed.forEach((e, i) => frame(e, i === missed.length - 1 ? channels.head() : undefined)))
+      else safe(() => { for (const [i, e] of missed.entries()) { if (closed) break; frame(e, i === missed.length - 1 ? channels.head() : undefined) } })
     }
 
     // send() pushes to the ring before fan-out, so head() is this event's cursor.
@@ -104,7 +105,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     timer = clock.setInterval(() => {
       if (closed) return
       // Expiry doesn't notify subscribers (core-session): poll here and end the stream.
-      if (!inspector && !lookup(sessions.peek)) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close() }
+      if (!inspector && !lookup(sessions.peek)) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close(true) }
       safe(() => { res.write(': ping\n\n'); if (res.writableLength > MAX_BUF) close() })
     }, HEARTBEAT_MS)
   }
