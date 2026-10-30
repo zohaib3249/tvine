@@ -90,7 +90,8 @@ export function Section({ name, as: As = 'section', className, children, scope }
 
 // --- Page -------------------------------------------------------------------------------
 // Detects nesting the walk can see (literal nesting). A Page in a layout plus one in the
-// page segment is separate trees and is not detected here.
+// page segment is separate trees: not detected here, but the warp extractor warns (dev) on a
+// second page fragment.
 export function Page({ name, title, personal, children, scope }: Scoped & {
   name: string; title?: string; personal?: boolean; children: Kids
 }) {
@@ -169,7 +170,8 @@ type ButtonProps = Scoped & {
 }
 
 // Default agent id: `form:<action>` (+ `:<bind values>`). Several bind-less forms for the
-// same action on one page need explicit agentIds (the extractor flags duplicate ids).
+// same action on one page need explicit agentIds; in dev the warp extractor warns when a
+// repeated id carries different content (identical repeats are harmless and stay silent).
 function formId(action: ActionDef, bind: Record<string, unknown> | undefined, agentId: string | undefined): string {
   if (agentId) return agentId
   const vals = Object.values(bind ?? {})

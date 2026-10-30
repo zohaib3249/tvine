@@ -5,6 +5,9 @@ import type { FormResult } from './dispatcher.js'
 
 export type Spec = { name: string; type: string; required: boolean; array: boolean }
 
+// display: contents → no layout shift between enabled and disabled states.
+const FIELDSET = { display: 'contents', border: 0, padding: 0, margin: 0 } as const
+
 const Ctx = createContext<{ errors?: Record<string, string>; pending: boolean }>({ pending: false })
 
 // FormData is all strings; coerce to the schema's types so the human Command equals the
@@ -50,7 +53,7 @@ export function FormClient({ action, bind, specs, disabled, id, className, child
   return (
     <form action={disabled ? undefined : run} onSubmit={onSubmit} id={id} className={className}>
       {/* Native fieldset disables every control inside, including ones in components the scope walk can't see. */}
-      <Ctx value={{ errors: state.errors, pending }}>{disabled ? <fieldset disabled>{children}</fieldset> : children}</Ctx>
+      <Ctx value={{ errors: state.errors, pending }}>{disabled ? <fieldset disabled style={FIELDSET}>{children}</fieldset> : children}</Ctx>
       {!state.ok && state.message && <p data-tvine-message="">{state.message}</p>}
     </form>
   )

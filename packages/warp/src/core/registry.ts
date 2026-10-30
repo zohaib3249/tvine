@@ -14,6 +14,7 @@ type Body = Omit<Snapshot, 'sid' | 'rev'>
 const TVINE = /(?<=^|[\s/])type\s*=\s*(["'])text\/tvine\1/i
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v: unknown): v is string => typeof v === 'string'
+const dev = () => process.env.NODE_ENV !== 'production'
 
 // Collects every real <script type="text/tvine"> fragment in document order (incl. streamed
 // Suspense chunks). Text inside other scripts (RSC payload strings) is never parsed. JSON.parse
@@ -45,10 +46,15 @@ export function extract(html: string, route = '?'): Body & { personal: boolean }
     if (f.personal !== undefined && f.personal !== false) personal = true
     if (f.k === 'page') {
       if (!isStr(f.page) || !isStr(f.title)) throw bad()
+      if (pg && dev()) console.warn(`tvine: second page fragment on ${route} ("${f.page}"); a route has exactly one <Page> — first wins`)
       pg ??= { page: f.page, title: f.title }
     } else if (f.k === 'node') {
       if (!isObj(f.node) || !isStr(f.node.id) || !isStr(f.node.type)) throw bad()
-      if (!nodes.has(f.node.id)) nodes.set(f.node.id, f.node)
+      const prev = nodes.get(f.node.id)
+      if (!prev) nodes.set(f.node.id, f.node)
+      else if (dev() && canon(prev) !== canon(f.node)) {
+        console.warn(`tvine: node id "${f.node.id}" repeated on ${route} with different content — first wins; give each an explicit id`)
+      }
     } else if (f.k === 'link') {
       if (!isObj(f.link) || !isStr(f.link.id) || !isStr(f.link.href)) throw bad()
       if (!links.has(f.link.id)) links.set(f.link.id, f.link)
