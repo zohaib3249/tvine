@@ -1,7 +1,8 @@
 node_modules
 dist
-.next
+.next/
+!packages/*/test/fixtures/**/.next/
 .superpowers/
-media/
+/media/
 *.db
 .env*
