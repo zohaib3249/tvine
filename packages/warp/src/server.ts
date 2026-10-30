@@ -139,6 +139,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const tokens = renderTokens()
   const renderer = (origin: string) => makeSnapshotter({
     origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName,
+    route: (p) => route(p),   // redirect targets must be routed pages (defined below; called per render)
     asSession: (sid) => {
       const token = tokens.start()
       return { headers: { [AS_SESSION]: `${nonce}:${token}:${sid}` }, readSession: () => tokens.end(token) }
@@ -149,6 +150,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   else snapshot = async () => { throw new Error('no frontend origin yet: call listen() or pass frontend.origin') }
   // ponytail: in dev, discovery (/tvine/manifest, llms.txt) still lists the boot-time routes; agent paths and MCP are live
   const route = fe && opts.dev ? liveRouteMatcher(fe.nextDir) : routeMatcher(routes)
+  ctx.route = route
   say('runtime ready')
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)

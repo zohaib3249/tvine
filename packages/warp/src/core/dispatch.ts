@@ -3,6 +3,7 @@
 import type { ActionManifest } from './actions.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
+import { siteRedirect } from './redirect.js'
 import { ev, isTerminal } from './events.js'
 import { compose, deepFreeze, Hooks } from './middleware.js'
 import { SessionStore } from './session.js'
@@ -28,6 +29,7 @@ export interface ServerCtx {
   log: Log
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
+  route?: (path: string) => string | undefined   // the site's route matcher (createAgentServer): redirect targets must match
   close(): void                    // stops this ctx's session watcher
 }
 
@@ -124,10 +126,13 @@ function cookieOf(r: Request, s: Settings): string | undefined {
 
 // Next's server-action check, kept for every path into dispatch: a browser Origin must match the host.
 // No Origin (curl, SDKs, MCP clients) passes. ponytail: no allowedOrigins list yet; add with settings when needed.
+// the public host of the request (X-Forwarded-Host only through trusted proxies)
+const hostOf = (r: Request, s: Settings) => ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase() || undefined
+
 export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
-  const host = ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase()
+  const host = hostOf(r, s)
   try { return new URL(origin).host !== host } catch { return true }
 }
 
@@ -348,7 +353,11 @@ async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: 
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
     try { return { result: await def.run(params, ctx) } }
-    catch (e) { const url = redirectUrl(e); if (url !== undefined) return { goto: url }; throw e }   // goto commits
+    catch (e) {
+      const url = redirectUrl(e)
+      if (url === undefined) throw e
+      return { goto: siteRedirect(url, { base: `http://${hostOf(ctx.request, server.settings) ?? 'tvine.local'}`, hosts: [hostOf(ctx.request, server.settings) ?? 'tvine.local'], route: server.route }) }   // goto commits; a refused one rolls back
+    }
   }
   // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing
   const tx = server.settings.db.atomicRequests && !def.rules?.readOnly && def.rules?.atomic !== false
