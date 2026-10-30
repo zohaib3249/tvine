@@ -20,17 +20,26 @@ export function resolve(t: TableDef, name: string): { f: F; field: string; col: 
 
 export function cond(t: TableDef, w: Where, d: Dialect): Expr {
   const { f, col: c } = resolve(t, w.field)
-  if (!w.not) return f.lookup(w.op, c, w.value, d)
-  // null-inclusive negation (orm-queryset.md): missing values match exclude() — except when the
-  // value itself is null: exclude(eq null) = IS NOT NULL, exclude(ne x) = eq x (incl. IS NULL)
-  if (w.op === 'ne') return f.lookup('eq', c, w.value, d)
-  if (w.op === 'eq' && w.value == null) return f.lookup('ne', c, null, d)
-  return or(isNull(c), not(f.lookup(w.op, c, w.value, d)))
+  try {
+    if (!w.not) return f.lookup(w.op, c, w.value, d)
+    // null-inclusive negation (orm-queryset.md): missing values match exclude() — except when the
+    // value itself is null: exclude(eq null) = IS NOT NULL, exclude(ne x) = eq x (incl. IS NULL)
+    if (w.op === 'ne') return f.lookup('eq', c, w.value, d)
+    if (w.op === 'eq' && w.value == null) return f.lookup('ne', c, null, d)
+    return or(isNull(c), not(f.lookup(w.op, c, w.value, d)))
+  } catch (e) {   // a field's own value error (money amount) names the filtered field
+    if (e instanceof DomainError && e.code === 'invalid_param' && !e.field) e.field = w.field
+    throw e
+  }
 }
 
 export function whereOf(t: TableDef, ws: Where[], d: Dialect, search?: QuerySpec['search']): Expr | undefined {
   const parts = ws.map(w => cond(t, w, d))
-  if (search?.term) parts.push(or(...search.fields.map(n => containsExpr(resolve(t, n).col, search.term))))
+  if (search?.term) parts.push(or(...search.fields.map(n => {
+    const { f, col: c } = resolve(t, n)
+    if (f.kind === 'money') throw new DomainError('invalid_param', `money field "${n}" cannot be searched`, n)
+    return containsExpr(c, search.term)
+  })))
   return parts.length ? and(...parts) : undefined
 }
 
@@ -38,7 +47,11 @@ export function whereOf(t: TableDef, ws: Where[], d: Dialect, search?: QuerySpec
 // asc goes past them, desc ends with them. Compares the field's first (sort) column.
 export function keyset(t: TableDef, order: Order[], cv: unknown[], d: Dialect): Expr {
   const cols = order.map(o => resolve(t, o.field))
-  const vals = cv.map((v, i) => cols[i].f.toDb(v, d)[0])
+  let vals: unknown[]
+  try { vals = cv.map((v, i) => cols[i].f.toDb(v, d)[0]) } catch (e) {     // tampered cursor (e.g. a bad money amount)
+    if (e instanceof DomainError) throw new DomainError('invalid_param', 'invalid cursor', 'cursor')
+    throw e
+  }
   const same = (i: number) => (vals[i] == null ? isNull(cols[i].col) : bin('=', cols[i].col, param(vals[i])))
   const beyond = (i: number): Expr => order[i].dir === 'asc'
     ? (vals[i] == null ? isNotNull(cols[i].col) : bin('>', cols[i].col, param(vals[i])))

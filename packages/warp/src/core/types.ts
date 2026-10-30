@@ -43,7 +43,9 @@ export interface Command {
 export type Event =
   | { kind: 'snapshot'; snapshot: Snapshot }
   | { kind: 'ok'; action: ActionId; result?: unknown }
-  | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot }
+  | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot
+      reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
+      retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
   | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' }   // v2 live
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
@@ -136,6 +138,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   schema: S
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
+  rawParams?: boolean               // run() validates its own params (class views); dispatch passes them unparsed
 }
 export interface ActionRules {
   anonymous?: boolean               // default true in v1
@@ -146,6 +149,7 @@ export interface ActionRules {
   readOnly?: boolean                // MCP readOnlyHint
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
+  bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).

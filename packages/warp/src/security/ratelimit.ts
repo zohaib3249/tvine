@@ -16,11 +16,12 @@ export class RateLimiter {
 
   // `action` (dispatch passes it once the action is known) gives an action-level rate its own
   // bucket per sid+action, so two actions with equal rates never share one.
-  check(keys: { sid?: Sid; ip: string; action?: string }, rules?: ActionRules['rate']):
+  // No ip = only the sid bucket (dispatch checks ip + default sid bucket first, then the action's own).
+  check(keys: { sid?: Sid; ip?: string; action?: string }, rules?: ActionRules['rate']):
     | { ok: true }
     | { ok: false; retryAfterMs: number } {
     const now = Date.now()
-    const picks: [Map<string, Bucket>, string, Rate][] = [[
+    const picks: [Map<string, Bucket>, string, Rate][] = keys.ip === undefined ? [] : [[
       this.ips, keys.ip,
       { limit: this.defaults.limit, windowMs: this.defaults.windowMs * IP_WINDOW_MULT },
     ]]

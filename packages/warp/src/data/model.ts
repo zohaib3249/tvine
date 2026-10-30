@@ -23,6 +23,7 @@ export const modelRegistry = (): Model<any, any>[] => [...registry.values()]   /
 export function defineModel<const F extends Fields>(name: string, fields: F): Model<F> {
   const def = { name, fields }
   pkField(def)
+  for (const [n, f] of Object.entries(fields)) if (f.kind === 'money' && f.opts.searchable) throw new Error(`${name}.${n}: a money field cannot be searchable`)
   const schema = rowSchema(def)
   const source = engineSource(def)
   const objects = new QuerySet<any>(source, undefined, Object.entries(fields).filter(([, f]) => f.opts.searchable).map(([n, f]) => keyOf(n, f)))

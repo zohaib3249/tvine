@@ -28,7 +28,7 @@ export function cell(v: unknown): string {
   if (typeof v === 'string') return str(v)
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '-'
   if (typeof v === 'boolean') return String(v)
-  if (typeof v === 'object' && !Array.isArray(v) && isMoney(v)) return `${v.value}${v.currency}`
+  if (typeof v === 'object' && !Array.isArray(v) && isMoney(v)) return `${v.value.toFixed(2)}${v.currency}`   // major units, always 2 decimals (29.90USD)
   return ascii(JSON.stringify(v))   // JSON-cell escape hatch
 }
 

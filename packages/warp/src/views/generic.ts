@@ -62,9 +62,12 @@ function parseLookup(l: string): { field: string; op: Op | undefined } {
 const num = z.preprocess(v => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v), z.number())
 function valueSchema(f: AnyField): z.ZodTypeAny {
   switch (f.kind) {
-    // money: the number goes to the field's own lookup()/toDb unchanged; the field owns its units
-    // (major-units switch is a follow-up task at the field level, views need no change)
-    case 'id': case 'int': case 'float': case 'money': return num
+    // money: major units ("30" = $30). A URL string must be plain decimal (no 0x1E / 1e1 / 29.999…9
+    // that Number() would round); the field's value schema then checks numbers sent as JSON.
+    // The field's lookup()/toDb converts to cents.
+    case 'money': return z.preprocess(v => (typeof v === 'string' && /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : v), z.number())
+      .refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
+    case 'id': case 'int': case 'float': return num
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
@@ -298,7 +301,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     if (!gv.model?.fields) fail('needs `model = SomeModel`')
     const model = gv.model
     const need = (what: string, f: string) => fieldNamed(model, f) ?? fail(`${what} "${f}": no field "${f}" on model ${model.name}`)
-    for (const f of effectiveSearch(gv)) need('searchFields', f)
+    for (const f of effectiveSearch(gv)) if (need('searchFields', f).kind === 'money') fail(`searchFields "${f}": a money field cannot be searched`)
     for (const f of gv.ordering) need('ordering', f)
     const lookupF = need('lookupField', gv.lookupField)
     const lookups: z.ZodRawShape = {}
@@ -376,7 +379,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     // permissions run first (DRF initial()), before params are validated or anything is read
     for (const a of actions) {
       const def: ActionDef = {
-        id: a, schema: schemas[a](), rules: withPerms(rulesFor[a]),
+        id: a, schema: schemas[a](), rules: withPerms(rulesFor[a]), rawParams: true,
         run: async (raw, ctx) => {
           const self = Object.create(gv) as Self
           const vctx: ViewCtx = { ...ctx, action: a, actionId: def.id, params: {} }
@@ -399,7 +402,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const meta = typeof fn === 'function' ? decorated.get(fn) : undefined
       if (!meta) continue
       const def: ActionDef = {
-        id: key, schema: meta.schema, rules: withPerms(meta.opts.rules, meta.opts.permissions),
+        id: key, schema: meta.schema, rules: withPerms(meta.opts.rules, meta.opts.permissions), rawParams: true,
         run: async (raw, ctx) => {
           const self = Object.create(view) as View
           const vctx: ViewCtx = { ...ctx, action: key, actionId: def.id, params: {} }
