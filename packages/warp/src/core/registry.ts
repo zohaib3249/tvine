@@ -117,7 +117,8 @@ export function makeSnapshotter(opts: {
   fetch?: typeof globalThis.fetch
   cookieName?: string
   timeoutMs?: number
-  asSession?: (sid: Sid) => Record<string, string>   // extra headers naming the agent's session to the page (server.ts)
+  // headers naming the agent's session to the page (server.ts); readSession() after the render: did the page read it?
+  asSession?: (sid: Sid) => { headers: Record<string, string>; readSession(): boolean }
 }): (route: string, sid: Sid) => Promise<Snapshot> {
   const { origin, sessions, cache, cookieName = 'tvine_s', timeoutMs = 10_000 } = opts
   const doFetch = opts.fetch ?? globalThis.fetch
@@ -136,19 +137,23 @@ export function makeSnapshotter(opts: {
     const rev = revOf(sid) // before the await: old content must not get a newer rev
     const ver = cache.version()
     let res: Response
+    const as = opts.asSession?.(sid)
     try {
       res = await doFetch(url.href, {
-        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${sessions.cookieFor(sid)}`, ...opts.asSession?.(sid) },
+        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${sessions.cookieFor(sid)}`, ...as?.headers },
         redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (e: any) {
+      as?.readSession()   // consumed on every path, so a failed render leaves no token behind
       const why = e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'timeout' : 'network'
       throw new RegistryError('internal', `render failed (${why}) for ${route}`)
     }
+    let html: string, readSession: boolean
+    try { html = await res.text() } finally { readSession = as?.readSession() ?? false }
     if (res.status !== 200) throw new RegistryError('internal', `render failed (${res.status}) for ${route}`)
-    const { personal, live, ...body } = extract(await res.text(), route)
-    if (!personal && !live) cache.set(route, body, ver)
+    const { personal, live, ...body } = extract(html, route)
+    if (!personal && !live && !readSession) cache.set(route, body, ver)
     return stamp(body, sid, rev)
   }
 }

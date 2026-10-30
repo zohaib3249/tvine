@@ -66,14 +66,14 @@ const API_ROUTES: RouteInfo[] = [{ path: '/' }]
 const pathOf = (req: IncomingMessage) => (req.url ?? '/').split('?')[0]!
 const STAMP = 'x-tvine-ip'   // `<boot nonce>:<https 0|1>:<socket ip per trustProxy>`, set by our handler only
 const URL_STAMP = 'x-tvine-url'   // the request url, set by our handler only (trusted with a valid STAMP)
-const AS_SESSION = 'x-tvine-session'   // `<boot nonce>:<sid>`: an agent's snapshot render runs as that agent's session
+const AS_SESSION = 'x-tvine-session'   // `<boot nonce>:<render token>:<sid>`: an agent's snapshot render runs as that agent's session
 
 // Server components: the session / request of the page being rendered (the cookie via next/headers, or
 // the agent's session during its snapshot render). On globalThis: pages run in Next's bundled copy of warp.
 export interface PageAccess { session(): Promise<Session | undefined>; request(): Promise<Request> }
 function pageAccess(): PageAccess {
   const a = g[PAGES] as PageAccess | undefined
-  if (!a) throw new Error('currentSession()/currentRequest(): no tvine server in this process (run the app with tvine start or tvine dev)')
+  if (!a) throw new Error('currentSession()/currentRequest(): no tvine server in this process (run the app with tvine start or tvine dev), or this page is being prerendered at build: make it dynamic (await connection())')
   return a
 }
 // The request's Session, or undefined when it has none (a page view never creates one: pages cannot set cookies).
@@ -134,7 +134,16 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
   const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
   const nonce = randomBytes(16).toString('hex')
-  const renderer = (origin: string) => makeSnapshotter({ origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName, asSession: (sid) => ({ [AS_SESSION]: `${nonce}:${sid}` }) })
+  // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
+  // its fragments say: the page marks its per-render token in `touched`, the snapshotter checks it after extract.
+  const touched = new Set<string>()
+  const renderer = (origin: string) => makeSnapshotter({
+    origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName,
+    asSession: (sid) => {
+      const token = randomBytes(12).toString('hex')
+      return { headers: { [AS_SESSION]: `${nonce}:${token}:${sid}` }, readSession: () => touched.delete(token) }
+    },
+  })
   if (!fe) snapshot = manifestSnapshot(ctx)
   else if (fe.origin) snapshot = renderer(fe.origin)
   else snapshot = async () => { throw new Error('no frontend origin yet: call listen() or pass frontend.origin') }
@@ -177,11 +186,6 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     : (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found') }
 
   const handler: AgentServer['handler'] = (req, res, done) => {
-    // for the human Form path: only OUR stamp is trusted (a client-sent one is replaced)
-    const xff = (req.headers['x-forwarded-for'] as string | undefined) ?? null
-    req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
-    req.headers[URL_STAMP] = req.url ?? '/'
-    if (sidFrom(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
     let i = 0
     const step = () => {
       const h = chain[i++]
@@ -189,7 +193,15 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       else if (done) done()
       else frontend(req, res)
     }
-    try { step() } catch (e) { fail(res)(e) }
+    // nothing a client sends may throw out of here (a throw in a 'request' listener kills the process)
+    try {
+      // for the human Form path: only OUR stamp is trusted (a client-sent one is replaced)
+      const xff = (req.headers['x-forwarded-for'] as string | undefined) ?? null
+      req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
+      req.headers[URL_STAMP] = req.url ?? '/'
+      if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      step()
+    } catch (e) { fail(res)(e) }
   }
 
   // human <Form> path + bind signer, for weft's server-side primitives; the previous ones come back on close
@@ -200,7 +212,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     cookies: opts.cookies ?? (async () => (await fromApp<{ cookies(): Promise<CookieJar> }>('next/headers')).cookies()),
   }
   const dispatcher = formDispatcher(ctx, route, src)
-  const pages = pagesFor(ctx, route, src)
+  const pages = pagesFor(ctx, route, src, touched)
   const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest(), pages: g[PAGES] }
   if (prev.dispatcher) say('WARNING: another tvine server already registered the <Form> dispatcher; this one replaces it until close()', 'warn')
   g[SIGNER] = signer
@@ -331,18 +343,25 @@ function stampOf(h: Record<string, string>, settings: Settings, nonce: string | 
   if (own) return { ip: stamp[3]!, secure: stamp[2] === '1', own }
   return { ip: settings.trustProxy > 0 ? clientIp(h['x-forwarded-for'] ?? null, '', settings.trustProxy) : '', secure: xfpHttps(h['x-forwarded-proto'], settings.trustProxy), own }
 }
-const sameNonce = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
-function sidFrom(v: string | string[] | undefined, nonce: string | undefined): string | undefined {
-  const i = typeof v === 'string' ? v.indexOf(':') : -1
-  return nonce !== undefined && i > 0 && sameNonce((v as string).slice(0, i), nonce) ? (v as string).slice(i + 1) || undefined : undefined
+// Byte lengths, not string lengths: a latin1 header char is 2 utf8 bytes and timingSafeEqual throws on a mismatch.
+const sameNonce = (a: string, b: string) => {
+  const x = Buffer.from(a), y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+// `<nonce>:<token>:<sid>` from our snapshotter, else undefined
+function internalOf(v: string | string[] | undefined, nonce: string | undefined): { token: string; sid: string } | undefined {
+  const m = typeof v === 'string' ? /^([^:]+):([^:]+):(.+)$/.exec(v) : null
+  return m && nonce !== undefined && sameNonce(m[1]!, nonce) ? { token: m[2]!, sid: m[3]! } : undefined
 }
 
 // currentSession() / currentRequest() for the page Next is rendering right now.
-function pagesFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource): PageAccess {
+function pagesFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource, touched: Set<string>): PageAccess {
   const { settings, sessions } = server
   const read = async () => {
     const h: Record<string, string> = Object.fromEntries(await src.headers())
-    return { h, sid: sidFrom(h[AS_SESSION], src.nonce) }
+    const own = internalOf(h[AS_SESSION], src.nonce)
+    if (own) touched.add(own.token)   // this agent render depends on its session: never cache it
+    return { h, sid: own?.sid }
   }
   return {
     async session() {
@@ -356,7 +375,8 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       const st = stampOf(h, settings, src.nonce)
       const url = st.own ? h[URL_STAMP] ?? '/' : '/'
       const path = new URL(url, 'http://tvine.local').pathname
-      const request = await buildRequest({ url, route: route(path) ?? path, headers: h, ip: st.ip || 'unknown', via: 'human' }, settings)
+      const shown = Object.fromEntries(Object.entries(h).filter(([k]) => !k.toLowerCase().startsWith('x-tvine-')))   // no stamps / nonce material
+      const request = await buildRequest({ url, route: route(path) ?? path, headers: shown, ip: st.ip || 'unknown', via: 'human' }, settings)
       // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
       return request
