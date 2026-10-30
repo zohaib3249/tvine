@@ -16,3 +16,12 @@ export type {
   ReadonlyHeaders, TvineUser, UploadedFile, Request, Session, ActionCtx, PermissionCtx, Permission,
   Middleware, ActionDef, ActionRules, Settings, Paginated,
 } from './core/types.js'
+export { defineSettings, type SettingsInput } from './settings.js'
+export { allowAny, denyAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
+export { createAgentServer, formDispatcher, loadSettings, type AgentServer, type AgentServerOptions, type HeadersLike } from './server.js'
+export { dispatch, collect, serverCtx, formResult, renderCtx, type ServerCtx, type FormResult, type Log } from './core/dispatch.js'
+export { httpTransport, isAgent, type HttpOptions } from './transport/http.js'
+export { mcpHandler, mcpServer, mcpTools, type McpOptions } from './transport/mcp.js'
+export { discoveryTransport, buildSiteManifest, loadNextRoutes, type RouteInfo, type SiteManifest } from './transport/discovery.js'
+export { channelTransport, type ChannelDeps } from './transport/channel.js'
+export { routeMatcher } from './transport/routes.js'

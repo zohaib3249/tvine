@@ -81,6 +81,8 @@ export class SessionStore {
     return this.channels.group(`sid:${sid}`).add(fn)
   }
 
+  get size(): number { return this.byId.size }
+
   // ponytail: full scan per call; caller runs it on an interval of ttl/4. Cap+cursor if sessions get numerous.
   sweep(): number {
     const now = Date.now()

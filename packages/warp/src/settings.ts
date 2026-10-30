@@ -81,7 +81,7 @@ const isPlain = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
 // Deep-merge plain objects; arrays, functions and scalars from `over` replace.
-function merge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+export function merge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base }
   for (const [k, v] of Object.entries(over)) {
     if (v === undefined) continue
