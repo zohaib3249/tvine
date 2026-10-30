@@ -52,16 +52,18 @@ export interface CallOptions {
 
 const NO_PRESENCE: Presence = { point: async () => {}, type: async () => {}, say: () => {} }
 
-// Target first, then each registered ancestor, then <WeftRoot hooks>.
+// Target first, then each registered ancestor (through RSC containers), then <WeftRoot hooks>.
 function chain(reg: Registry, e: Entry): WidgetHooks[] {
   const out: WidgetHooks[] = []
-  for (let cur: Entry | undefined = e, n = 0; cur && n < 256; cur = reg.get(cur.parent), n++) if (cur.spec.hooks) out.push(cur.spec.hooks)
+  if (e.spec.hooks) out.push(e.spec.hooks)
+  // Through RSC containers too (Registry.up): they have no hooks, the client widget around them may.
+  for (let p = e.parent, n = 0; p && n < 256; p = reg.up(p), n++) { const h = reg.get(p)?.spec.hooks; if (h) out.push(h) }
   for (const r of reg.roots) if (r.hooks) out.push(r.hooks)
   return out
 }
 
 function isUnder(reg: Registry, e: Entry, ancestor: string): boolean {
-  for (let p = e.parent, n = 0; p && n < 256; p = reg.get(p)?.parent ?? '', n++) if (p === ancestor) return true
+  for (let p = e.parent, n = 0; p && n < 256; p = reg.up(p), n++) if (p === ancestor) return true
   return false
 }
 

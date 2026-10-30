@@ -27,6 +27,7 @@ export class Registry {
   readonly roots = new Set<{ hooks?: WidgetHooks }>()   // mounted <WeftRoot>s, innermost first (mount order)
   private live = new Map<string, Entry>()
   private dups = new Map<string, Entry[]>()   // same id mounted later: not addressable until the winner leaves
+  private scopes = new Map<string, string>()  // unregistered RSC container scope → its outer scope
   private subs = new Set<() => void>()
   private warned = new Set<string>()
   private seq = 0
@@ -57,6 +58,17 @@ export class Registry {
     this.roots.add(root)
     return () => { this.roots.delete(root) }
   }
+
+  // ponytail: one outer per scope id (last mount wins); the same entity under two different client
+  // parents bubbles through the later one. Track a list per id if that matters.
+  addScope(id: string, outer: string): () => void {
+    if (id === outer) return () => {}
+    this.scopes.set(id, outer)
+    return () => { if (this.scopes.get(id) === outer) this.scopes.delete(id) }
+  }
+
+  // Next hop up the control tree: a registered widget's parent, else an RSC container's outer scope.
+  up(id: string): string { return this.live.get(id)?.parent ?? this.scopes.get(id) ?? '' }
 
   private unregister(id: string, token: symbol): void {
     if (this.live.get(id)?.token === token) {
