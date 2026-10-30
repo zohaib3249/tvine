@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
+import { DomainError, Goto } from './errors.js'
+import { siteRedirect } from './redirect.js'
 import { entityType, type WidgetFrag } from '../shape/disclose.js'
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
@@ -148,6 +150,7 @@ export function makeSnapshotter(opts: {
   timeoutMs?: number
   // headers naming the agent's session to the page (server.ts); readSession() after the render: did the page read it?
   asSession?: (sid: Sid) => { headers: Record<string, string>; readSession(): boolean }
+  route?: (path: string) => string | undefined   // redirect targets must be routed pages (core/redirect.ts)
 }): (route: string, sid: Sid) => Promise<Snapshot> {
   const { origin, sessions, cache, cookieName = 'tvine_s', timeoutMs = 10_000 } = opts
   const doFetch = opts.fetch ?? globalThis.fetch
@@ -180,6 +183,9 @@ export function makeSnapshotter(opts: {
     }
     let html: string, readSession: boolean
     try { html = await res.text() } finally { readSession = as?.readSession() ?? false }
+    if (res.status >= 300 && res.status < 400) throw new Goto(siteRedirect(res.headers?.get('location') ?? '/', { base: origin0, hosts: [url.host], route: opts.route }))   // redirect()
+    if (res.status === 404 || res.status === 410) throw new DomainError('not_found', `not found: ${route}`)        // notFound()
+    if (res.status === 401 || res.status === 403) throw new DomainError('forbidden', `forbidden: ${route}`)
     if (res.status !== 200) throw new RegistryError('internal', `render failed (${res.status}) for ${route}`)
     const { personal, live, ...body } = extract(html, route)
     if (!personal && !live && !readSession) cache.set(route, body, ver)

@@ -34,6 +34,14 @@ function toParams(fd: FormData, specs: Spec[]): Record<string, unknown> {
   return out
 }
 
+// A goto is followed only to this origin over http(s): never off-site, never javascript:/data:.
+export function sameSiteGoto(target: string, here: string): string | undefined {
+  try {
+    const u = new URL(target, here)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === new URL(here).origin ? u.href : undefined
+  } catch { return undefined }
+}
+
 export function FormClient({ action, bind, specs, disabled, id, className, children }: {
   action: string; bind: string; specs: Spec[]; disabled?: boolean; id?: string; className?: string; children: ReactNode
 }) {
@@ -44,7 +52,11 @@ export function FormClient({ action, bind, specs, disabled, id, className, child
     (_: FormResult, fd: FormData) => submitForm({ action, bind: bind || undefined, params: toParams(fd, specs), cmdId: (cmdId.current ||= newId()) }),
     { ok: true },
   )
-  useEffect(() => { cmdId.current = ''; if (state.goto) window.location.assign(state.goto) }, [state])
+  useEffect(() => {
+    cmdId.current = ''
+    const to = state.goto ? sameSiteGoto(state.goto, window.location.href) : undefined
+    if (to) window.location.assign(to)
+  }, [state])
   // onSubmit + preventDefault: React skips its auto form-reset, so typed values survive an
   // error re-render. `action={run}` lets Next serialize the server action for pre-hydration
   // submits; plain react-dom SSR (no Next) renders a `javascript:throw` placeholder instead.

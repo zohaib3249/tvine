@@ -26,6 +26,14 @@
       },
       "types": "./dist/api/client.d.ts",
       "default": "./dist/api/client.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx/jsx-runtime.d.ts",
+      "default": "./dist/jsx/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx/jsx-dev-runtime.d.ts",
+      "default": "./dist/jsx/jsx-dev-runtime.js"
     }
   },
   "scripts": {

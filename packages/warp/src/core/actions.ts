@@ -134,6 +134,7 @@ export class ActionManifest {
     const mine = def.rules ?? {}
     const rules: ActionRules = {
       ...(this.defaults.rate && { rate: this.defaults.rate }),
+      ...def.defaultRules,
       ...pick(appRules),
       ...mine,
     }

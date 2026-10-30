@@ -139,6 +139,7 @@ export type Middleware = (cmd: Command, ctx: ActionCtx,
 export interface ActionDef<S extends z.ZodType = z.ZodType> {
   id: ActionId
   name?: string                     // defineAction's name, before discovery qualifies the id
+  defaultRules?: Pick<ActionRules, 'rate'>   // the def's own defaults: above settings, BELOW apps/<app>/rules.ts (e.g. uploads 5/min)
   schema: S
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
@@ -162,7 +163,7 @@ export interface Settings {
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust
-  session: { ttlMs: number; cookieName: string }
+  session: { ttlMs: number; cookieName: string; max: number }   // max: live sessions kept; past it the least recently used is evicted
   limits: {
     bodyBytes: number
     handlerMs: number

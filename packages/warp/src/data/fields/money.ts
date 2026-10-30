@@ -19,8 +19,9 @@ const toCents = (v: unknown): number => {
 }
 
 // Two columns: integer cents `<name>` + `<name>Currency`. The API speaks major units
-// ({value: 29.99, currency}); the field converts at toDb/fromDb. Filters and ordering use the
-// amount; eq/ne with a {value, currency} object compare both.
+// ({value: 29.99, currency}); the field converts at toDb/fromDb. A filter value {value, currency}
+// compares amount AND currency for eq / ne / each `in` element (#17); a bare number is an amount in any
+// currency; ordering and gt/lt use the amount.
 export class MoneyField extends Field<Money, boolean, 'money', boolean> {
   readonly kind = 'money' as const
   columns(name: string) { return [name, `${name}Currency`] }
@@ -39,10 +40,16 @@ export class MoneyField extends Field<Money, boolean, 'money', boolean> {
     const both = value != null && typeof value === 'object' && !Array.isArray(value)
     if ((op === 'eq' || op === 'ne') && both) {
       const [cents, cur] = this.toDb(value)
+      if (typeof cur !== 'string') throw new DomainError('invalid_param', 'a money filter object needs a currency (or pass a bare amount)')
       const eq = and(bin('=', col, param(cents)), bin('=', colNode(`${(col as { name: string }).name}Currency`), param(cur)))
       return op === 'eq' ? eq : or(isNull(col), not(eq))
     }
-    if (op === 'in') return Array.isArray(value) && value.length ? inList(col, value.map(v => param(this.toDb(v)[0]))) : FALSE
+    if (op === 'in') {
+      if (!Array.isArray(value) || !value.length) return FALSE
+      const isObj = (v: unknown) => v != null && typeof v === 'object'
+      const bare = value.filter(v => !isObj(v))
+      return or(...(bare.length ? [inList(col, bare.map(v => param(this.toDb(v)[0])))] : []), ...value.filter(isObj).map(v => this.lookup('eq', col, v, d)))
+    }
     return super.lookup(op, col, both ? (value as Money).value : value, d)   // base lookup calls toDb → cents
   }
 }

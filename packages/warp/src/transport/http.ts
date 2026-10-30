@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
+import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
@@ -39,7 +40,7 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
   constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
-  get reason() { return this.status === 403 ? 'forbidden' : undefined }
+  get reason() { return this.status === 403 ? 'forbidden' : this.status === 413 ? 'too_large' : undefined }
 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
@@ -162,7 +163,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       }
       request = await buildRequest({ req, route, isAgent: true }, settings)
       request.id = id
-      const sidKey = (isGet ? u.searchParams.get('sid') : null) ?? (req.headers['x-tvine-sid'] as string | undefined)
+      // header first: a ?sid= lands in logs and Referers (#14)
+      const sidKey = (req.headers['x-tvine-sid'] as string | undefined) ?? (isGet ? u.searchParams.get('sid') : null) ?? undefined
       const cookie = cookieOf(req)
       const bySid = sidKey ? sessions.peek({ sid: sidKey }) : undefined
       const known = bySid ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
@@ -191,6 +193,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
         const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
         status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
+      } else if (e instanceof DomainError) {   // e.g. not_found: the page Next rendered called notFound()
+        status = reply(DOMAIN_STATUS[e.code] ?? 400, [ev.err('domain', e.message, { reason: e.code })])
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
         status = reply(500, [ev.err('internal', 'internal error')])
@@ -204,12 +208,18 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
     setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
     const t0 = performance.now()
-    const session = (ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined) ?? sessions.create()
+    const known = ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined
+    const session = known ?? sessions.create()
     const q = new URLSearchParams(u.searchParams)
     q.delete('sid'); q.delete('format')
     const page = request.path + (q.size ? `?${q}` : '')
     setCtx({ sid: session.sid, rev: session.rev, page })
-    const snap = await server.snapshot(page, session.sid)
+    let snap
+    try { snap = await server.snapshot(page, session.sid) } catch (e) {
+      if (!known) { sessions.delete(session.sid); setCtx({ sid: '', rev: 0, page }) }   // a refused render or a redirect leaves no session and no cookie
+      if (e instanceof Goto) return reply(200, [ev.goto(e.url)])
+      throw e
+    }
     const etag = `"${createHash('sha1').update(format).update(JSON.stringify(snap)).digest('base64url')}"`
     // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
     const ms = Math.round(performance.now() - t0)
@@ -273,17 +283,20 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const delim = Buffer.from(`\r\n--${boundary}`)
     const CRLF2 = Buffer.from('\r\n\r\n')
     const textCap = settings.limits.bodyBytes
-    let buf = Buffer.from('\r\n'), total = 0, cap = textCap
+    // The text cap counts bytes the text parts CONSUMED (a read chunk may already hold file bytes); the
+    // file is capped by receiveUpload's maxBytes alone, so an oversized file always gets its own 413.
+    let buf = Buffer.from('\r\n'), total = 0, cap = textCap, taken = 0
     const more = async () => {
       const r = await it.next()
       if (r.done) throw new Refuse(400, 'invalid_param', 'multipart body is truncated')
       total += r.value.length
-      if (bodyCap(total, cap).ok === false) throw new Refuse(413, 'invalid_param', 'request body too large')
       buf = Buffer.concat([buf, r.value])
     }
+    const textTooBig = (n: number) => { if (bodyCap(n, textCap).ok === false) throw new Refuse(413, 'invalid_param', 'request body too large') }
     const until = async (sep: Buffer) => {
       let i: number
-      while ((i = buf.indexOf(sep)) < 0) await more()
+      while ((i = buf.indexOf(sep)) < 0) { textTooBig(taken + buf.length); await more() }
+      textTooBig((taken += i + sep.length))
       const out = buf.subarray(0, i)
       buf = buf.subarray(i + sep.length)
       return out
@@ -320,7 +333,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!d || !('upload' in d)) throw new Refuse(400, 'invalid_param', 'the action field must come before the file and name an upload action', 'action')
       def = d as UploadDef
       cap = textCap + def.upload.maxBytes
-      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file', media: settings.media }); upload.def = def }
+      try { file = upload.file = await receiveUpload(Readable.from(body(), { highWaterMark: 1 }), def, { field: 'file', media: settings.media }); upload.def = def }
       catch (e) {
         const c = (e as { code?: unknown }).code
         if (c === 'too_large') throw new Refuse(413, 'invalid_param', (e as Error).message, 'file')

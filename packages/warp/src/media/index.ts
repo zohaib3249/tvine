@@ -74,11 +74,12 @@ export const storageOf = (def: UploadDef, media: Media = { dir: './media', route
 // receiveUpload(stream, def, {field, media}) directly for multipart.
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
   const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage }
-  const rules: UploadRules = { rate: opts.rate ?? { limit: 5, windowMs: 60_000 }, ...(opts.permissions && { permissions: opts.permissions }) }
+  // the 5/min default yields to apps/<app>/rules.ts (defaultRules); an explicit opts.rate beats both
+  const rules: UploadRules = { ...(opts.rate && { rate: opts.rate }), ...(opts.permissions && { permissions: opts.permissions }) }
   const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
     // multipart: transport-http already streamed the file into storage (request.files is transport-only)
     ctx.request.files.find((f) => f.field === 'file') ?? receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file', media: ctx.settings.media }), rules)
-  return Object.assign(def, { upload }) as UploadDef
+  return Object.assign(def, { upload, defaultRules: { rate: { limit: 5, windowMs: 60_000 } } }) as UploadDef
 }
 
 async function* guarded(head: Buffer[], rest: AsyncIterator<Buffer>, max: number, source: Readable): AsyncGenerator<Buffer> {

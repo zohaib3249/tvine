@@ -186,7 +186,9 @@ async function readJournal({ driver, dialect: d }: Connection, create: boolean):
         `PRIMARY KEY (${d.quoteIdent('app')}, ${d.quoteIdent('name')})`,
       ],
     })
-    await driver.exec(t.sql, t.params)
+    // postgres: two concurrent CREATE TABLE IF NOT EXISTS can still collide (pg_type); serialize them
+    if (d.name === 'postgres') await driver.transaction(async tx => { await tx.query(PG_LOCK, []); await tx.exec(t.sql, t.params) })
+    else await driver.exec(t.sql, t.params)
   }
   const s = d.render({ t: 'select', from: JOURNAL, cols: ['app', 'name', 'checksum'].map(col) })
   try {
@@ -250,18 +252,28 @@ async function applyStepwise({ driver, dialect: d }: Connection, n: MigrationNod
   })
 }
 
-async function apply({ driver, dialect: d }: Connection, n: MigrationNode, stmts: Statement[], sum: string): Promise<void> {
+// #16: concurrent `migrate` runs on postgres queue on this transaction-scoped lock, then re-check the journal
+const PG_LOCK = "SELECT pg_advisory_xact_lock(hashtext('tvine_migrate'))"
+
+// false = another migrate run applied it meanwhile (postgres)
+async function apply({ driver, dialect: d }: Connection, n: MigrationNode, stmts: Statement[], sum: string): Promise<boolean> {
   // The whole migration (+ its journal row) is ONE transaction: sqlite and postgres have
   // transactional DDL. The FK-off wrapper is sqlite's (rebuilds need it; the pragma is a no-op
   // inside a transaction); postgres ALTERs in place, so its fks stay on. mysql: applyStepwise.
   const lite = d.name === 'sqlite'
   if (lite) await driver.exec('PRAGMA foreign_keys = OFF', [])
   try {
-    await driver.transaction(async tx => {
+    return await driver.transaction(async tx => {
+      if (d.name === 'postgres') {
+        await tx.query(PG_LOCK, [])
+        const seen = d.render({ t: 'select', from: JOURNAL, cols: [col('app')], where: and(bin('=', col('app'), param(n.app)), bin('=', col('name'), param(n.name))) })
+        if ((await tx.query(seen.sql, seen.params)).length) return false
+      }
       for (const s of stmts) await tx.exec(s.sql, s.params)
       if (lite && (await tx.query('PRAGMA foreign_key_check', [])).length) throw new Error(`migration ${n.key} would leave rows pointing at missing records`)
       const ins = journalRow(d, n.app, n.name, sum)
       await tx.exec(ins.sql, ins.params)
+      return true
     })
   } finally {
     if (lite) await driver.exec('PRAGMA foreign_keys = ON', [])
@@ -280,7 +292,8 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Mi
   const graph = await MigrationGraph.load(appsDir, opts)
   graph.assertNoConflicts()
   const plan = graph.order()
-  return withConn(db, async conn => {
+  return withConn(db, conn => conn.dialect.name === 'mysql' ? mysqlLocked(conn, c => run(c)) : run(conn))
+  async function run(conn: Connection): Promise<{ applied: string[] }> {
     const done = await readJournal(conn, !opts.plan)
     for (const n of plan) {
       if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(`migration ${n.key} was edited after it was applied`)
@@ -295,15 +308,40 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Mi
       const r = step(n, state, run ? conn.dialect : undefined)
       if (!done.has(n.key)) {
         const sum = checksum(n.migration)
+        let ran = true   // false: a concurrent run applied it first (postgres lock)
         if (opts.plan) { /* listed only */ }
-        else if (opts.fake) await apply(conn, n, [], sum)
-        else if (conn.dialect.transactionalDDL) await apply(conn, n, r.ops.flat(), sum)
+        else if (opts.fake) ran = await apply(conn, n, [], sum)
+        else if (conn.dialect.transactionalDDL) ran = await apply(conn, n, r.ops.flat(), sum)
         else await applyStepwise(conn, n, r.ops, sum, done)
-        applied.push(n.key)
+        if (ran) applied.push(n.key)
       }
       state = r.state
     }
     return { applied }
+  }
+}
+
+// #21: mysql DDL is not transactional, so the whole run holds a session lock on ONE pooled connection;
+// a second run waits for it, then reads the journal the first one wrote.
+const MYSQL_LOCK_WAIT_S = 600
+async function mysqlLocked<R>(conn: Connection, fn: (c: Connection) => Promise<R>): Promise<R> {
+  if (!conn.driver.session) return fn(conn)
+  return conn.driver.session(async d => {
+    // per database: two apps on one server must not block each other
+    const [{ db }] = await d.query('SELECT DATABASE() AS db', []) as [{ db: string | null }]
+    const name = `tvine_migrate:${db ?? ''}`.slice(0, 64)   // mysql caps lock names at 64 chars
+    const [row] = await d.query('SELECT GET_LOCK(?, ?) AS ok', [name, MYSQL_LOCK_WAIT_S])
+    if (Number(row?.ok) !== 1) throw new Error(`another tvine migrate held the lock for ${MYSQL_LOCK_WAIT_S} s; try again when it is done`)
+    // a connection whose lock could not be released must not go back to the pool: `fatal` makes the
+    // driver destroy it (the session ends, so mysql frees the lock). The migrate error itself always wins.
+    const release = () => d.query('SELECT RELEASE_LOCK(?)', [name]).then(() => true, () => false)
+    let out: R
+    try { out = await fn({ ...conn, driver: d }) } catch (e) {
+      if (!(await release())) throw Object.assign(new Error((e as Error).message, { cause: e }), { fatal: true })
+      throw e
+    }
+    if (!(await release())) throw Object.assign(new Error('migrate finished but its lock could not be released'), { fatal: true })
+    return out
   })
 }
 

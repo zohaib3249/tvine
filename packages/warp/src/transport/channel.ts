@@ -4,6 +4,7 @@ import type { SessionStore } from '../core/session.js'
 import { clientIp } from '../core/request.js'
 import { ev } from '../core/events.js'
 import { render } from '../serialize/envelope.js'
+import { ipKey } from '../security/ratelimit.js'
 
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
 const HEARTBEAT_MS = 25_000
@@ -50,7 +51,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     }
     const hdr = (n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
     const remote = req.socket.remoteAddress ?? ''
-    const ip = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
+    const ip = ipKey(clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy))   // IPv6 per /64, like rate buckets
 
     const inspector = url.searchParams.get('group') === 'inspector'
     // Inspector feed: dev only, AND socket loopback (never X-Forwarded-For), AND no proxy header (a local

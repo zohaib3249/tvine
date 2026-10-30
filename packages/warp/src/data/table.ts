@@ -28,7 +28,7 @@ export class Table {
     return this.entries.flatMap(([n, f]) => {
       const k = f.key(n)
       if (!(k in data) || data[k] === undefined) return []
-      const vals = f.toDb(data[k], d)
+      const vals = named(this.name, n, () => f.toDb(data[k], d))
       return f.columns(n).map((c, i): [string, unknown] => [c, vals[i]])
     })
   }
@@ -60,7 +60,7 @@ export class Table {
       }
       const r = f.schema().safeParse(v)
       if (!r.success) throw new DomainError('invalid_param', `${this.name}.${field}: ${r.error.issues[0].message}`, field)
-      const vals = f.toDb(r.data, d)
+      const vals = named(this.name, field, () => f.toDb(r.data, d))
       f.columns(field).forEach((cn, i) => set.push([cn, param(vals[i])]))
     }
     if (!set.length) return undefined
@@ -81,5 +81,13 @@ export class Table {
       if (f.opts.index) out.push(d.render({ t: 'createIndex', name: `${this.name}_${n}_idx`, table: this.name, cols: [f.columns(n)[0]] }))
     }
     return out
+  }
+}
+
+// a field's own value error (a datetime out of the db's range) names the model field
+function named<R>(model: string, field: string, fn: () => R): R {
+  try { return fn() } catch (e) {
+    if (e instanceof DomainError && e.code === 'invalid_param' && !e.field) throw new DomainError(e.code, `${model}.${field}: ${e.message}`, field)
+    throw e
   }
 }

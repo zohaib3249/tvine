@@ -124,7 +124,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
 export interface ApiTransportOptions {
   route: (path: string) => string | undefined
   asSession: (v: string | undefined) => { token: string; sid: string } | undefined   // validates x-tvine-session
-  touched: Set<string>                                                              // C2: renders that read a session
+  tokens: { read(t: string): void }                                                 // C2: renders that read a session
 }
 
 const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, unknown_action: 404 }
@@ -160,7 +160,7 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       const f = verifyForward(fwd, settings)
       const own = f?.as === undefined ? undefined : o.asSession(f.as)
       if (!f || (f.as !== undefined && !own)) return send(res, FORBIDDEN)
-      if (own) o.touched.add(own.token)
+      if (own) o.tokens.read(own.token)
       const page = new URL(f.path, 'http://tvine.local').pathname
       const request = await buildRequest({ url: f.path, route: o.route(page) ?? page, headers: {}, ip: f.ip || 'unknown', via: 'human' }, settings)
       if (own || f.agent) request.agent = { is: true, via: 'http' }
