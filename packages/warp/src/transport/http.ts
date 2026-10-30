@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
-import { DomainError } from '../core/errors.js'
+import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
@@ -208,12 +208,18 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
     setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
     const t0 = performance.now()
-    const session = (ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined) ?? sessions.create()
+    const known = ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined
+    const session = known ?? sessions.create()
     const q = new URLSearchParams(u.searchParams)
     q.delete('sid'); q.delete('format')
     const page = request.path + (q.size ? `?${q}` : '')
     setCtx({ sid: session.sid, rev: session.rev, page })
-    const snap = await server.snapshot(page, session.sid)
+    let snap
+    try { snap = await server.snapshot(page, session.sid) } catch (e) {
+      if (!known) setCtx({ sid: '', rev: 0, page })   // a refused render or a redirect mints no session cookie
+      if (e instanceof Goto) return reply(200, [ev.goto(e.url)])
+      throw e
+    }
     const etag = `"${createHash('sha1').update(format).update(JSON.stringify(snap)).digest('base64url')}"`
     // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
     const ms = Math.round(performance.now() - t0)

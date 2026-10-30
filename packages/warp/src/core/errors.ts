@@ -8,6 +8,11 @@ export class DomainError extends Error {
   }
 }
 
+// The page a snapshot render was for redirected (Next redirect()): agents get a `goto`, not an error.
+export class Goto extends Error {
+  constructor(public url: string) { super(`redirect to ${url}`); this.name = 'Goto' }
+}
+
 // Recovery hint appended to err messages on the wire (core-errors.md taxonomy).
 export const recovery: Record<ErrCode, string> = {
   invalid_param: 'fix the field named in the error to match the expected type; see the action spec in the snapshot',
