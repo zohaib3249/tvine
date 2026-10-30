@@ -30,6 +30,7 @@ export interface Snapshot {
   sid: Sid; rev: Rev
   nodes: Node[]; links: Link[]
   widgets?: WidgetFrag[]            // v2 `k:"w"` fragments (snapshot-format.md); absent on v1-only pages
+  folds?: Record<string, string>    // link id → entity node it directly followed (v2 `href` folding)
 }
 
 export interface Command {
