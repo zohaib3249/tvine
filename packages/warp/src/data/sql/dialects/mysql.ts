@@ -29,6 +29,16 @@ const fks = (state: ProjectState, model: string, table: string, only?: string) =
 
 type Op<K extends Operation['kind']> = Extract<Operation, { kind: K }>
 
+// An fk needs an index led by its column, and mysql reuses whichever one exists (dropping its own), so
+// DROP INDEX on that index is refused while the fk stands: lift the fk around it (re-adding recreates
+// an index if none is left).
+function liftFk(field: string | undefined, model: string, from: ProjectState, to: ProjectState, inner: Statement[]): Statement[] {
+  const spec = field === undefined ? undefined : findModel(from, model)!.model.fields[field]
+  const fk = spec?.kind === 'fk' && findModel(to, model)!.model.fields[field!] ? fks(to, model, model, field)[0] : undefined
+  if (!fk) return inner
+  return [alter(model, `DROP FOREIGN KEY ${q(fkName(model, fk.col))}`), ...inner, alter(model, `ADD ${fk.ddl}`)]
+}
+
 function alterField(op: Op<'alterField'>, from: ProjectState, to: ProjectState): Statement[] {
   const { was, now } = alterGuard(op, mysql, from, to)
   const wasSpec = findModel(from, op.model)!.model.fields[op.name]
@@ -39,14 +49,8 @@ function alterField(op: Op<'alterField'>, from: ProjectState, to: ProjectState):
   b.forEach((c, i) => { if (c !== a[i]) modify.push(alter(op.model, `MODIFY COLUMN ${c}`)) })
   if (!was.opts.unique && now.opts.unique) after.push(alter(op.model, `ADD UNIQUE KEY ${q(col)} (${q(col)})`))
   const ix = indexDiff(mysql, from, op.model, to, op.model)
-  // an fk needs an index on its column; once `index: true` exists mysql may have dropped its own one,
-  // so DROP INDEX is refused while the fk stands: lift the fk around it (re-adding recreates its index)
-  const fk = wasSpec.kind === 'fk' && was.opts.index && !now.opts.index ? fks(to, op.model, op.model, op.name)[0] : undefined
-  return [
-    ...(fk ? [alter(op.model, `DROP FOREIGN KEY ${q(fkName(op.model, fk.col))}`)] : []),
-    ...before, ...ix.drop, ...modify, ...after, ...ix.create,
-    ...(fk ? [alter(op.model, `ADD ${fk.ddl}`)] : []),
-  ]
+  const losesIndex = (was.opts.index && !now.opts.index) || (was.opts.unique && !now.opts.unique)
+  return liftFk(losesIndex ? op.name : undefined, op.model, from, to, [...before, ...ix.drop, ...modify, ...after, ...ix.create])
 }
 
 // mysql caps identifiers at 64 chars: a longer index name (<model>_<field>_idx) is cut and suffixed
@@ -113,6 +117,10 @@ export const mysql: Dialect = {
         const spec = findModel(from, op.model)!.model.fields[op.name]
         const drop = spec.kind === 'fk' ? [alter(op.model, `DROP FOREIGN KEY ${q(fkName(op.model, fieldOf(spec, from).columns(op.name)[0]))}`)] : []
         return [...drop, ...defaultRender(op, mysql, from, to)]
+      }
+      case 'removeIndex': {   // an explicit index led by an fk column may be the fk's index
+        const lead = findModel(from, op.model)!.model.indexes[op.name]?.fields[0]
+        return liftFk(lead, op.model, from, to, defaultRender(op, mysql, from, to))
       }
       default: return defaultRender(op, mysql, from, to)
     }
