@@ -1,10 +1,11 @@
-import { useId } from 'react'
-import { currentPage, register } from './runtime/registry.js'
+import { useId, type ReactElement } from 'react'
+import { register } from './runtime/registry.js'
 import type { AgentSpec } from './types.js'
 
 // Server-component form (no hooks). id is required: without useId there is no stable default.
-export function registerAgent(type: string, spec: AgentSpec & { id: string }): void {
-  register({
+// Returns the fragment element to render.
+export function registerAgent(type: string, spec: AgentSpec & { id: string }): ReactElement {
+  return register({
     id: spec.id,
     type,
     data: spec.data,
@@ -14,7 +15,8 @@ export function registerAgent(type: string, spec: AgentSpec & { id: string }): v
 }
 
 // Server (react-server) build. Client build lives in useAgent.client.ts.
-export function useAgent(type: string, spec: AgentSpec): void {
+// Default id is `${type}:${useId()}` (no route is known at render; pass id for stable ids).
+export function useAgent(type: string, spec: AgentSpec): ReactElement {
   const auto = useId()
-  registerAgent(type, { ...spec, id: spec.id ?? `${currentPage()}:${type}:${auto}` })
+  return registerAgent(type, { ...spec, id: spec.id ?? `${type}:${auto}` })
 }

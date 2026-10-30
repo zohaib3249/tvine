@@ -1,6 +1,5 @@
 // Structural mirrors of @tvine/warp core/types (Node, ActionRef, Link, ActionDef).
-// ponytail: warp's public entry does not export these yet; switch to
-// a type-only import from @tvine/warp once it does.
+// TODO(W1): import from @tvine/warp (its public entry does not export these yet).
 
 export interface ActionRef {
   id: string
