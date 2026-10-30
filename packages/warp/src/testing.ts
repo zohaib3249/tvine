@@ -17,6 +17,9 @@ export interface AgentClient {
 }
 
 export function agentClient(server: AgentServer): AgentClient {
+  // Pins the v1 snapshot shape on the server it drives: decode() reads v1 nodes, and v2 table rows are not
+  // expanded back into nodes yet (W5/W6). Remove when the helpers handle v2 (compatibility-v1.md).
+  server.ctx.settings.agent = { ...server.ctx.settings.agent, shape: 'v1' }
   const pages = new Map<string, Snapshot>()   // route → last snapshot (binds come from here)
   let sid = ''
   const headers = { [server.ctx.settings.header]: '1', accept: 'application/tvine+json' }
@@ -72,7 +75,7 @@ function decode(raw: string): { sid: Sid; events: Event[] } {
   const [, sid = '', rev = '0'] = /sid=(\S*) rev=(\d+)/.exec(String(o['#tvine'])) ?? []
   const snapshot: Snapshot | undefined = 'page' in o ? {
     page: o.page, title: o.title ?? '', sid, rev: Number(rev),
-    nodes: (o.nodes ?? []).map((n: any) => ({ id: n.id, type: n.type, data: n.data ?? {}, actions: n.actions ?? [] })),
+    nodes: (o.nodes ?? []).map((n: any) => ({ id: n.id, type: n.type ?? n.kind, data: n.data ?? {}, actions: n.actions ?? [] })),
     links: o.links ?? [],
   } : undefined
   const events: Event[] = []

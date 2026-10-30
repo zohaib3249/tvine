@@ -2,6 +2,8 @@ import type { Event, Rev, Settings, Sid, Snapshot } from '../core/types.js'
 import { recoveryOf } from '../core/errors.js'
 import { toJson } from './json.js'
 import { toNotation, bare, cell, quote } from './notation.js'
+import { disclose, kindOfWidget, toTree, type Shaped } from '../shape/disclose.js'
+import { HINT2 } from '../shape/notation.js'
 
 export type Format = 'json' | 'notation'
 export type Shapers = Record<string /* node type */, (data: Record<string, unknown>) => Record<string, unknown>>
@@ -11,10 +13,13 @@ export interface RenderOpts { ctx: Ctx; shapers?: Shapers }
 const HINT = '#hint @type @id=node id then cols, rows=values in order, "-"=null | ! act name(p:type) bind=<b> -> POST {action,params,sid,bind}'
 
 // json → the `"#tvine":"..."` first member; notation → line 1 (+ hint line for snapshots).
-export function head(s: { sid: Sid; rev: Rev; page: string; format: Format; hint?: boolean }): string {
-  if (s.format === 'json') return `"#tvine":${JSON.stringify(`1 sid=${s.sid} rev=${s.rev} page=${s.page}`)}`
-  const l1 = `#tvine/1 sid=${s.sid} rev=${s.rev} page=${bare(s.page)}`
-  return s.hint ? `${l1}\n${HINT}` : l1
+// view: v2 shapes only (`view=full|L1|L0|L2`); hint: v1 → the v1 hint, a string → that hint line.
+export function head(s: { sid: Sid; rev: Rev; page: string; format: Format; hint?: boolean | string; view?: string }): string {
+  const v = s.view ? ` view=${s.view}` : ''
+  if (s.format === 'json') return `"#tvine":${JSON.stringify(`1 sid=${s.sid} rev=${s.rev} page=${s.page}${v}`)}`
+  const l1 = `#tvine/1 sid=${s.sid} rev=${s.rev} page=${bare(s.page)}${v}`
+  const h = s.hint === true ? HINT : s.hint
+  return h ? `${l1}\n${h}` : l1
 }
 
 type ErrEvent = Extract<Event, { kind: 'err' }>
@@ -57,15 +62,20 @@ export function clean(v: unknown): unknown {
   return v
 }
 
-// Snapshot with shapers applied to node.data and empties removed from it.
+// Snapshot with shapers applied to node.data (and v2 entity widgets' data, by kind) and empties removed.
 export function shape(s: Snapshot, shapers?: Shapers): Snapshot {
-  return {
+  const out: Snapshot = {
     ...s,
     nodes: s.nodes.map(n => {
       const f = shapers?.[n.type]
       return { ...n, data: clean(f ? f(n.data) : n.data) as Record<string, unknown> }
     }),
   }
+  if (s.widgets) out.widgets = s.widgets.map(w => {
+    const f = shapers?.[kindOfWidget(w)]
+    return w.data ? { ...w, data: clean(f ? f(w.data) : w.data) as Record<string, unknown> } : w
+  })
+  return out
 }
 
 export function snapshotOf(e: Event): Snapshot | undefined {
@@ -75,7 +85,8 @@ export function snapshotOf(e: Event): Snapshot | undefined {
 // ctx is REQUIRED (sid/rev/page): ok/goto/err events carry none; snapshot values win over it.
 // head + status? + body. sid/rev come from the first snapshot/update in `events`; `ctx` fills the
 // gaps (ok/goto/err carry no sid themselves).
-export function render(events: Event[], format: Format, _settings: Settings, { ctx, shapers }: RenderOpts): string {
+// settings.agent.shape: 'v2' (default) → the snapshot goes through the shaper (budgeted view); 'v1' → today's bytes.
+export function render(events: Event[], format: Format, settings: Settings, { ctx, shapers }: RenderOpts): string {
   const evs: Event[] = events.map(e => {
     if (e.kind === 'snapshot') return { kind: 'snapshot', snapshot: shape(e.snapshot, shapers) }
     if (e.kind === 'err' && e.snapshot) return { ...e, snapshot: shape(e.snapshot, shapers) }
@@ -87,6 +98,11 @@ export function render(events: Event[], format: Format, _settings: Settings, { c
   const sid = snap?.sid ?? upd?.sid ?? ctx?.sid
   const rev = snap?.rev ?? upd?.rev ?? patch?.rev ?? ctx?.rev
   if (sid === undefined || rev === undefined) throw new Error('render: no sid/rev in events or ctx')
-  const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint: format === 'notation' && !!snap })
-  return format === 'json' ? toJson(evs, h) : toNotation(evs, h)
+  const agent = settings?.agent
+  const v2: Shaped | undefined = snap && agent?.shape !== 'v1'
+    ? disclose(toTree(snap, { headless: true }), { budget: agent?.budget ?? 1500, rowsL1: agent?.rowsL1 ?? 10 })
+    : undefined
+  const hint = format === 'notation' && !!snap && (!v2 || (v2.nodes.some(n => n.rows || n.actions || n.links) || !!v2.links) && HINT2)
+  const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint, view: v2?.view })
+  return format === 'json' ? toJson(evs, h, v2) : toNotation(evs, h, v2)
 }

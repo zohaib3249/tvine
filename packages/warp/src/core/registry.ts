@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
+import { entityType, type WidgetFrag } from '../shape/disclose.js'
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
 export class RegistryError extends Error {
@@ -25,8 +26,12 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
   const low = html.replace(/[A-Z]/g, c => c.toLowerCase()) // ASCII-only: keeps offsets aligned
   const bad = () => new RegistryError('internal', `invalid embed fragment for ${route}`)
   let pg: { page: string; title: string } | undefined
-  const nodes = new Map<string, any>(), links = new Map<string, any>()
+  const nodes = new Map<string, any>(), links = new Map<string, any>(), widgets = new Map<string, WidgetFrag>()
   let personal = false, live = false
+  // link id → the entity node it directly follows (Data then its Link) when labelled with its name/title:
+  // `href` folding is positional. Only real folds are recorded, so most v1 pages extract as before.
+  const folds: Record<string, string> = {}
+  let lastEntity: { id: string; name: unknown } | undefined
   for (let i = 0; (i = low.indexOf('<script', i)) >= 0;) {
     const next = low[i + 7]
     if (next !== undefined && !/[\s>/]/.test(next)) { i += 7; continue } // e.g. <scripts: cheap check before any '>' search
@@ -41,7 +46,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
     let f: any
     try { f = JSON.parse(text) }
     catch { throw bad() }
-    if (f?.v !== 1) throw new RegistryError('internal', 'unsupported embed version')
+    if (f?.v !== 1 && f?.v !== 2) throw new RegistryError('internal', 'unsupported embed version')
     // fail closed: anything but absent/false marks the snapshot personal
     if (f.personal !== undefined && f.personal !== false) personal = true
     if (f.live !== undefined && f.live !== false) live = true   // changes without a write we see (time, other systems)
@@ -52,17 +57,39 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
     } else if (f.k === 'node') {
       if (!isObj(f.node) || !isStr(f.node.id) || !isStr(f.node.type)) throw bad()
       const prev = nodes.get(f.node.id)
+      lastEntity = /^(section|list|form|input)$/.test(f.node.type) ? undefined : { id: f.node.id, name: f.node.data?.name ?? f.node.data?.title }
       if (!prev) nodes.set(f.node.id, f.node)
       else if (dev() && canon(prev) !== canon(f.node)) {
         console.warn(`tvine: node id "${f.node.id}" repeated on ${route} with different content — first wins; give each an explicit id`)
       }
     } else if (f.k === 'link') {
       if (!isObj(f.link) || !isStr(f.link.id) || !isStr(f.link.href)) throw bad()
-      if (!links.has(f.link.id)) links.set(f.link.id, f.link)
+      if (!links.has(f.link.id)) { links.set(f.link.id, f.link); if (lastEntity && lastEntity.name === f.link.label) folds[f.link.id] = lastEntity.id }
+      lastEntity = undefined
+    } else if (f.k === 'w') {
+      // v2 widget: first id wins, except entities: keyed + merged on `e` (the full entity id) alone,
+      // every parent in `at`. An `e` without a `<type>:` prefix is not an entity (fail closed).
+      const w = f.w
+      lastEntity = undefined
+      if (!isObj(w) || !isStr(w.id) || !isStr(w.kind) || (w.p !== undefined && !isStr(w.p)) || (w.e !== undefined && !isStr(w.e))) throw bad()
+      const ent = entityType(w.e as string | undefined) !== undefined
+      const key = ent ? `e:${w.e}` : `w:${w.id}`
+      const prev = widgets.get(key)
+      if (!prev) widgets.set(key, ent ? { ...w, at: w.p === undefined ? [] : [w.p] } as WidgetFrag : w as unknown as WidgetFrag)
+      else if (ent) {
+        if (isStr(w.p) && !prev.at!.includes(w.p)) prev.at!.push(w.p)
+        if (isObj(w.data)) prev.data = { ...w.data, ...prev.data }
+      } else if (dev() && canon(prev) !== canon(w)) {
+        console.warn(`tvine: widget id "${w.id}" repeated on ${route} with different content — first wins`)
+      }
     } // unknown k: ignored (forward compatible)
   }
   if (!pg) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
-  return { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
+  if (dev()) for (const w of widgets.values()) {
+    if (nodes.has(w.id)) console.error(`tvine: widget id "${w.id}" collides with a v1 node on ${route} — the widget is dropped; give one an explicit id`)
+  }
+  const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
+  return { ...out, ...(widgets.size && { widgets: [...widgets.values()] }), ...(Object.keys(folds).length && { folds }) }
 }
 
 // Sorted-key JSON so key order never changes the etag.
@@ -99,8 +126,8 @@ export class SnapshotCache {
   // ver: the data version the render STARTED at (a write committed mid-render leaves the entry stale)
   set(route: string, snap: Body | Snapshot, ver = this.version()): string {
     const now = Date.now()
-    const { page, title, nodes, links } = snap
-    const body = deepFreeze({ page, title, nodes, links })
+    const { page, title, nodes, links, widgets, folds } = snap
+    const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }), ...(folds && { folds }) })
     const etag = createHash('sha1').update(canon(body)).digest('hex')
     if (this.ttlMs <= 0) return etag   // cache off: nothing stored
     for (const [k, e] of this.m) if (now - e.at > this.ttlMs) this.m.delete(k)
