@@ -44,7 +44,7 @@ export function Overlay({ props, w, kind, extra }: { props: DialogProps; w: Retu
   return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': kind, ...st }, { className, ...slots?.root }, s, <>
     {w.embed}
     <AutoOff>{part('button', { type: 'button', 'data-part': 'trigger', 'aria-haspopup': 'dialog', 'aria-expanded': open, ...st, onClick: () => set(true) }, slots?.trigger, s, trigger ?? label)}</AutoOff>
-    {open && part('dialog', { ref, 'aria-label': label, ...st, ...extra, onCancel: (e: Event) => { e.preventDefault(); set(false) } }, slots?.content, s, <>
+    {open && part('dialog', { ref, 'aria-label': label, ...st, ...extra, onCancel: (e: Event) => { e.preventDefault(); set(false) }, onClose: () => { if (open) set(false) } }, slots?.content, s, <>
       {children}
       <AutoOff>{part('button', { type: 'button', 'data-part': 'close', 'aria-label': 'Close', onClick: () => set(false) }, slots?.close, s, '×')}</AutoOff>
     </>)}

@@ -13,6 +13,7 @@ export type ToastItem = { id: string; title: string; description?: string; kind?
 type S = { items: ToastItem[] }
 type C = Record<string, Control<any, any>>
 
+const EMPTY: ToastItem[] = []
 let items: ToastItem[] = []
 let seq = 0
 const subs = new Set<() => void>()
@@ -46,7 +47,7 @@ const useToaster = defineWidget<ToasterProps & { items: ToastItem[] }, S, C>({
 })
 
 export function Toaster(props: DefinedProps<ToasterProps, C>) {
-  const all = useSyncExternalStore((f) => { subs.add(f); return () => { subs.delete(f) } }, () => items, () => items)
+  const all = useSyncExternalStore((f) => { subs.add(f); return () => { subs.delete(f) } }, () => items, () => EMPTY)
   const w = useToaster({ ...props, items: all })
   const s = w.state
   const open = all.filter((t) => !t.dismissed).slice(-(props.max ?? 5))

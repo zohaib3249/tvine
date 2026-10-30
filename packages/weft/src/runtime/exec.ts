@@ -101,8 +101,8 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
 
     const e = typeof target === 'string' ? reg.get(target) : undefined
     const c = e && callable(e, control)
-    // Missing, hidden, disabled, or bound to an agent-off action: the same answer (honesty rule).
-    if (!e || !c) return fail({ code: 'unknown_action', message: `unknown control ${control} on ${target}` })
+    // Missing, hidden, disabled, bound to an agent-off action, or behind an open modal ([inert], as tree()): the same answer.
+    if (!e || !c || e.el?.closest('[inert]')) return fail({ code: 'unknown_action', message: `unknown control ${control} on ${target}` })
     const bad = checkArgs(c.params, args)
     if (bad) return fail({ code: 'invalid_param', field: bad.field, message: bad.message })
 
