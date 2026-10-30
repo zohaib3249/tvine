@@ -26,11 +26,14 @@ export class Hooks {
     return () => { this.fns[name].delete(fn) }
   }
 
-  // Fire-and-forget: a throw or rejection is logged and never reaches the caller.
+  has(name: HookName): boolean { return this.fns[name].size > 0 }
+
+  // Fire-and-forget: a throw or rejection is logged and never reaches the caller (nor does a logger throw).
   emit<K extends HookName>(name: K, e: HookEvents[K]): void {
+    const fail = (x: unknown) => { try { this.onError(name, x) } catch { /* logger itself failed */ } }
     for (const fn of this.fns[name]) {
-      try { void Promise.resolve(fn(e)).catch((x: unknown) => this.onError(name, x)) }
-      catch (x) { this.onError(name, x) }
+      try { void Promise.resolve(fn(e)).catch(fail) }
+      catch (x) { fail(x) }
     }
   }
 }
@@ -47,6 +50,11 @@ export async function discoverMiddleware(appsDir: string): Promise<Map<string, M
     out.set(app, list as Middleware[])
   }
   return out
+}
+
+export function deepFreeze<T>(v: T): T {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const x of Object.values(v)) deepFreeze(x) }
+  return v
 }
 
 // Global then app middleware, outermost first, around `inner`. next() runs at most once.

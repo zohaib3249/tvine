@@ -106,5 +106,8 @@ export class SessionStore {
   }
 
   // Lifecycle observer (the `session` hook). The watcher must not throw (Hooks.emit isolates).
-  watch(fn: (sid: Sid, kind: 'created' | 'expired') => void): void { this.watchers.push(fn) }
+  watch(fn: (sid: Sid, kind: 'created' | 'expired') => void): () => void {
+    this.watchers.push(fn)
+    return () => { this.watchers = this.watchers.filter((w) => w !== fn) }
+  }
 }
