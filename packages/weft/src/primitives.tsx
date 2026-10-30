@@ -1,7 +1,5 @@
 import { Children, Fragment, cloneElement, isValidElement, type ComponentType, type ElementType, type ReactElement, type ReactNode } from 'react'
-import { bindAction, pageFragment, paramSpecs, register, registerLink } from './runtime/registry.js'
-import { FormWidget, LinkWidget } from './runtime/primitives.client.js'
-import { WidgetScope } from './widget/scope.js'
+import { bindFor, pageFragment, pairBind, paramSpecs, register, registerLink } from './runtime/registry.js'
 import { FieldError, FormClient, type Spec } from './runtime/form.client.js'
 import { idFor } from './useAgent.js'
 import type { ActionDef, Paginated } from './types.js'
@@ -46,8 +44,7 @@ function walk(node: ReactNode, scope: Scope, seen: Seen = newSeen()): ReactNode 
       seen.prims++
       return c.props.scope ? c : cloneElement(c, { scope })
     }
-    // W3's auto-instrumented intrinsics (AutoEl, props.$tag) are plain HTML, not opaque components.
-    if (typeof c.type !== 'string' && typeof c.type !== 'symbol' && !('$tag' in c.props)) seen.comps.add(nameOf(c.type))
+    if (typeof c.type !== 'string' && typeof c.type !== 'symbol') seen.comps.add(nameOf(c.type))
     const kids = c.props.children
     if (kids == null || typeof kids === 'function') return c
     return cloneElement(c, undefined, walk(kids, scope, seen))
@@ -76,9 +73,7 @@ export function Data({ type, value, agentId, personal, live, children, scope }: 
   type: string; value: Record<string, unknown>; agentId?: string; personal?: boolean; live?: boolean; children?: ReactNode
 }) {
   const s = scope ?? {}
-  const own = idFor(type, { id: agentId, data: value })
-  // v1 node id keeps the RSC prefix; client widgets inside scope under the GLOBAL entity id.
-  return <>{quiet(s, register({ id: pid(s, own), type, data: value, personal, live }))}<WidgetScope id={own} entity>{walk(children, s)}</WidgetScope></>
+  return <>{quiet(s, register({ id: pid(s, idFor(type, { id: agentId, data: value })), type, data: value, personal, live }))}{walk(children, s)}</>
 }
 
 // --- Section ----------------------------------------------------------------------------
@@ -90,7 +85,7 @@ export function Section({ name, as: As = 'section', className, children, scope }
   let kids: ReactNode
   if (typeof children === 'function') kids = children(inner)
   else { const seen = newSeen(); kids = walk(children, inner, seen); warnOpaque(`<Section name="${name}">`, seen) }
-  return <>{quiet(scope, register({ id, type: 'section', data: { name } }))}<As className={className}><WidgetScope id={`section:${name}`}>{kids}</WidgetScope></As></>
+  return <>{quiet(scope, register({ id, type: 'section', data: { name } }))}<As className={className}>{kids}</As></>
 }
 
 // --- Page -------------------------------------------------------------------------------
@@ -109,9 +104,6 @@ export function Page({ name, title, personal, live, children, scope }: Scoped & 
 // No dependency on next: pass `as={NextLink}` to get client navigation. `id` is the DOM id;
 // `agentId` overrides the agent link id (default `link:<href>`).
 const UNSAFE = /^(javascript|data|vbscript):/i
-// In-tab id: hrefs carry `?`, `=`, `&`, which widget ids don't allow (ids.ts); cleaned quietly here
-// (a query string is normal, not a dev mistake). The v1 link id in the snapshot keeps the raw href.
-const linkSeg = (id: string) => id.replace(/[^\p{L}\p{N}_.:@/+-]/gu, '_').slice(0, 256)
 export function Link({ href, label, params, personal, live, agentId, as: As = 'a', children, scope, ...rest }: Scoped & {
   href: string; label?: string; params?: string[]; personal?: boolean; live?: boolean; agentId?: string; as?: ElementType; children?: ReactNode
   [k: string]: unknown
@@ -126,7 +118,7 @@ export function Link({ href, label, params, personal, live, agentId, as: As = 'a
   const unsafe = UNSAFE.test(href.replace(/[\u0000- \u007F]/g, ''))
   if (unsafe && dev()) console.warn(`tvine: <Link href="${href}"> has an unsafe scheme; not exposed to agents`)
   const link = { id: pid(scope, agentId ?? `link:${href}`), href, label: text, ...(params && { params }) }
-  return <>{!unsafe && quiet(scope, <>{registerLink(link, { personal, live })}<LinkWidget seg={linkSeg(agentId ?? `link:${href}`)} label={text} href={href} /></>)}<As href={href} {...rest}>{children}</As></>
+  return <>{!unsafe && quiet(scope, registerLink(link, { personal, live }))}<As href={href} {...rest}>{children}</As></>
 }
 
 // --- List -------------------------------------------------------------------------------
@@ -166,7 +158,7 @@ export function List<T>({ name, items, query, children, as: As = 'ul', className
     <>
       {quiet(s, register({ id, type: 'list', data }))}
       {page?.nextCursor && quiet(s, registerLink({ id: `${id}:next`, href: nextHref(query, page.nextCursor), label: 'next', params: ['cursor'] }))}
-      <As className={className}><WidgetScope id={`list:${name}`}>{out}</WidgetScope></As>
+      <As className={className}>{out}</As>
     </>
   )
 }
@@ -204,8 +196,7 @@ export function Form({ action, bind, disabled, agentId, id, className, children,
   className?: string; children: Kids
 }) {
   const s = scope ?? {}
-  const own = formId(action, bind, agentId)
-  const fid = pid(s, own)
+  const fid = pid(s, formId(action, bind, agentId))
   const shape = (action.schema as { shape?: object } | null)?.shape
   const inner: Scope = { ...s, prefix: fid, form: { id: fid, action: action.id, fields: shape ? Object.keys(shape) : null } }
   let kids: ReactNode
@@ -216,14 +207,11 @@ export function Form({ action, bind, disabled, agentId, id, className, children,
   // Honesty rule: a form humans can't submit exposes no ActionRef to agents.
   const off = !!disabled || (buttons.length > 0 && buttons.every((b) => b.disabled))
   const intent = buttons.find((b) => b.intent)?.intent ?? action.id
-  const handle = off ? null : bindAction(action, bind)
-  const form = <FormClient action={action.id} bind={handle?.bind ?? ''} specs={specsFor(action.schema)}
-    disabled={off} id={id} className={className}>{kids}</FormClient>
   return (
     <>
       {quiet(s, register({ id: fid, type: 'form', data: { action: action.id, intent }, actions: off ? [] : [{ def: action, bindPayload: bind }] }))}
-      {/* Silent forms (past a List's pageSize) still scope their client children, but list no control. */}
-      <FormWidget seg={own} label={intent} handle={s.silent ? null : handle}>{form}</FormWidget>
+      <FormClient action={action.id} bind={off ? '' : bindFor(pairBind(action.id, bind))} specs={specsFor(action.schema)}
+        disabled={off} id={id} className={className}>{kids}</FormClient>
     </>
   )
 }

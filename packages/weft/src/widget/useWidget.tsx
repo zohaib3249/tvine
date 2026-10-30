@@ -3,7 +3,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
 import { describeWidget, widgetFragment } from '../runtime/fragment.js'
 import { getRegistry, type Entry } from '../runtime/registry.client.js'
 import { widgetId } from './ids.js'
-import { WidgetScopeCtx, chainOf, useScopeValue } from './scope.js'
+import { WidgetScopeCtx, useWidgetScope } from './scope.js'
 import type { AgentState, Json, Widget, WidgetSpec } from './types.js'
 
 const dev = () => process.env.NODE_ENV !== 'production'
@@ -22,9 +22,7 @@ function assertJson(v: unknown, path: string): void {
 // only in layout effects with a per-mount token, so StrictMode and discarded concurrent renders
 // leave exactly the committed widgets. Nothing in here subscribes to the registry.
 export function useWidget<S extends Json>(spec: WidgetSpec<S>): Widget {
-  const outer = useScopeValue()
-  const parent = outer.id
-  const chain = chainOf(outer)
+  const parent = useWidgetScope()
   const id = widgetId(parent, spec)
   if (dev()) {
     if (!spec.label) throw new Error(`tvine: widget ${id} needs a non-empty label`)
@@ -46,7 +44,7 @@ export function useWidget<S extends Json>(spec: WidgetSpec<S>): Widget {
   useLayoutEffect(() => {
     let active = false
     const e: Entry = {
-      id, parent, kind: spec.kind, spec, el: el.current, token: Symbol(id), order: 0, chain,
+      id, parent, kind: spec.kind, spec, el: el.current, token: Symbol(id), order: 0,
       agent: (a) => {
         setAgent((prev) => (prev.active === a.active && prev.verb === a.verb ? prev : a))
         if (a.active !== active) { active = a.active; e.spec.hooks?.onAgentFocus?.(active) }
@@ -60,17 +58,12 @@ export function useWidget<S extends Json>(spec: WidgetSpec<S>): Widget {
 
   // Every commit: pointer write of the latest spec (controls are read at call time).
   useLayoutEffect(() => {
-    if (entry.current) { entry.current.chain = chain; getRegistry().update(id, entry.current.token, spec) }
+    if (entry.current) getRegistry().update(id, entry.current.token, spec)
   })
 
-  const key = chain.join('\n')
-  const Scope = useMemo(() => {
-    const value = { id, up: chain }
-    return function Scope({ children }: { children: ReactNode }) {
-      return <WidgetScopeCtx.Provider value={value}>{children}</WidgetScopeCtx.Provider>
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- chain by value (key)
-  }, [id, key])
+  const Scope = useMemo(() => function Scope({ children }: { children: ReactNode }) {
+    return <WidgetScopeCtx.Provider value={id}>{children}</WidgetScopeCtx.Provider>
+  }, [id])
 
   return {
     id, ref, embed, Scope, agent,

@@ -18,7 +18,7 @@ export type {
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
 export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
-export { allowAny, denyAgents, deniesAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
+export { allowAny, denyAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
 export {
   createAgentServer, currentRequest, currentSession, formDispatcher, loadSettings, type PageAccess, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,
   type FormSource, type NextApp, type NextFactory,
