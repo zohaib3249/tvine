@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
-import { appModule, liveManifest, setLiveManifest } from './core/actions.js'
+import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
@@ -92,7 +92,7 @@ async function fromApp<T>(spec: string): Promise<T> {
 
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
   const file = appModule(process.cwd(), 'settings')
-  const base = file ? ((await import(pathToFileURL(file).href)) as { default: Settings }).default : {}
+  const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
   return defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
 }
 

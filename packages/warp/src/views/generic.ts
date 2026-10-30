@@ -28,6 +28,14 @@ export const defineSerializer = <T>(s: Serializer<T>): Serializer<T> => s
 
 export abstract class View {
   static permissions: Permission[] = []             // static → merged into every action's rules
+
+  // Django's as_view() for one action: the registered def (qualified id, merged rules) of a generated or
+  // @action action, e.g. `<Form action={ProductDetail.asAction('addToCart')}>`. Works from a page bundle.
+  static asAction<V extends View>(this: abstract new () => V, name: (keyof V & string) | GeneratedAction): ActionDef {
+    const d = registeredDef(this, name)
+    if (!d) throw new Error(`${this.name}.asAction('${name}'): no registered action of that name; export the view from apps/<app>/views.ts and boot the server`)
+    return d
+  }
 }
 
 // ---- @action ------------------------------------------------------------------------------------

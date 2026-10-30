@@ -3,10 +3,9 @@
 // and register their generated + @action actions.
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { ActionManifest, APP_RE, appModule, isActionDef, type Rate } from '../core/actions.js'
+import { ActionManifest, APP_RE, appModule, importApp, isActionDef, type Rate } from '../core/actions.js'
 import type { ActionDef } from '../core/types.js'
-import { bindRegistered, isViewClass, viewActions } from './generic.js'
+import { bindRegistered, isViewClass, viewActions, type Shapers } from './generic.js'
 
 export async function discover(appsDir: string, defaults: { rate?: Rate } = {}): Promise<ActionManifest> {
   const m = new ActionManifest(defaults)
@@ -16,11 +15,11 @@ export async function discover(appsDir: string, defaults: { rate?: Rate } = {}):
     const views = appModule(dir, 'views')
     if (!views) continue
     if (!APP_RE.test(app)) throw new Error(`${views}: folder name "${app}" must match ${APP_RE}`)
-    const mod = await import(pathToFileURL(views).href)
+    const mod = await importApp(views)
     const rulesFile = appModule(dir, 'rules')
-    const rules = rulesFile ? await import(pathToFileURL(rulesFile).href) : {}
+    const rules = rulesFile ? await importApp(rulesFile) : {}
     const serFile = appModule(dir, 'serializers')
-    const shapers = serFile ? (await import(pathToFileURL(serFile).href)).serializers : undefined
+    const shapers = serFile ? (await importApp(serFile)).serializers as Shapers | undefined : undefined
     const found: [string, ActionDef][] = []
     for (const [exp, v] of Object.entries(mod)) {
       if (isActionDef(v)) found.push([exp, v])

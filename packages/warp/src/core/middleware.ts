@@ -2,8 +2,7 @@
 // Middleware wraps dispatch after the security steps; hooks observe, never block.
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { APP_RE, appModule } from './actions.js'
+import { APP_RE, appModule, importApp } from './actions.js'
 import type { Command, ErrCode, Event, Middleware, Sid } from './types.js'
 
 export type { Middleware }
@@ -47,7 +46,7 @@ export async function discoverMiddleware(appsDir: string): Promise<Map<string, M
     const file = appModule(join(appsDir, app), 'middleware')
     if (!file) continue
     if (!APP_RE.test(app)) throw new Error(`${file}: folder name "${app}" must match ${APP_RE}`)
-    const list: unknown = (await import(pathToFileURL(file).href)).default
+    const list: unknown = (await importApp(file)).default
     if (!Array.isArray(list) || !list.every((f) => typeof f === 'function')) throw new Error(`${file}: default export must be an array of functions`)
     out.set(app, list as Middleware[])
   }

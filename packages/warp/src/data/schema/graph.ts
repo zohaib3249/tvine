@@ -2,13 +2,13 @@
 // into a DAG across apps. order() = deterministic topological plan; >1 leaf in one app = conflict.
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { importApp } from '../../core/actions.js'
 import type { Migration } from './operations.js'
 
-// Migration and models modules are TypeScript: the CLI runs under a TS-capable loader (tsx);
-// tests use vitest. A Loader returns the module namespace (migrations use its `default`).
+// Migration and models modules are TypeScript: importApp loads them through esbuild; tests use vitest.
+// A Loader returns the module namespace (migrations use its `default`).
 export type Loader = (path: string) => Promise<Record<string, unknown>>
-export const importLoader: Loader = p => import(pathToFileURL(p).href)
+export const importLoader: Loader = importApp
 
 export interface MigrationNode { app: string; name: string; key: string; migration: Migration }
 

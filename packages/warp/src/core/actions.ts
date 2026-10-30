@@ -1,5 +1,7 @@
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { createRequire, registerHooks } from 'node:module'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
 import { checkRate } from '../security/ratelimit.js'
@@ -23,6 +25,29 @@ const LIVE = Symbol.for('tvine.actions')
 const g = globalThis as { [LIVE]?: ActionManifest }
 export const liveManifest = (): ActionManifest | undefined => g[LIVE]
 export function setLiveManifest(m: ActionManifest | undefined): void { g[LIVE] = m }
+
+// Imports an app module. App TypeScript (any .ts/.mts outside node_modules, so also what apps/ import) goes
+// through esbuild: Node's own type stripping rejects decorator syntax (`@action`) and enums.
+export async function importApp(file: string): Promise<Record<string, unknown>> {
+  if (TS.test(file)) tsHooks()
+  return import(pathToFileURL(file).href)
+}
+const TS = /\.m?ts$/
+let hooked = false
+function tsHooks(): void {
+  if (hooked) return
+  if (typeof registerHooks !== 'function') throw new Error(`loading TypeScript app modules needs Node >= 22.15 (this is ${process.version}); or compile apps/ to .js`)
+  const { transformSync } = createRequire(import.meta.url)('esbuild') as typeof import('esbuild')
+  registerHooks({
+    load(url, context, nextLoad) {
+      if (!url.startsWith('file:') || url.includes('/node_modules/') || !TS.test(new URL(url).pathname)) return nextLoad(url, context)
+      const file = fileURLToPath(url)
+      const { code } = transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'esm', target: 'node22', sourcefile: file, sourcemap: 'inline' })
+      return { format: 'module', source: code, shortCircuit: true }
+    },
+  })
+  hooked = true
+}
 
 // Bare name here (or already `<app>.<name>`); the manifest rewrites id to `${app}.${name}` on register.
 // An unregistered copy (a page bundle) reads its id from the live manifest by that name.
