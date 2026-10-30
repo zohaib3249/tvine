@@ -1,13 +1,10 @@
-import { readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
 
 export { DomainError } from './errors.js'
 
-type Rate = NonNullable<ActionRules['rate']>
-const APP_RE = /^[a-z][a-z0-9_]*$/
+export type Rate = NonNullable<ActionRules['rate']>
+export const APP_RE = /^[a-z][a-z0-9_]*$/
 
 // Bare name here; the manifest rewrites id to `${app}.${name}` on register.
 export function defineAction<S extends z.ZodType>(
@@ -19,7 +16,7 @@ export function defineAction<S extends z.ZodType>(
   return { id: name, schema, run, rules }
 }
 
-const isActionDef = (v: unknown): v is ActionDef =>
+export const isActionDef = (v: unknown): v is ActionDef =>
   typeof v === 'object' && v !== null &&
   typeof (v as ActionDef).id === 'string' && typeof (v as ActionDef).run === 'function' &&
   typeof (v as ActionDef).schema?.safeParse === 'function'
@@ -32,14 +29,18 @@ function paramType(t: z.ZodTypeAny): string {
   return 'json'
 }
 
-function deriveSpec(schema: z.ZodTypeAny): ActionRef['params'] {
+// Pure: ActionRef params from a def's zod object schema (weft / MCP / snapshot use it too).
+export function paramSpecs(def: Pick<ActionDef, 'schema'>): ActionRef['params'] {
+  const schema = def.schema
   if (!(schema instanceof z.ZodObject)) return []
   return Object.entries(schema.shape as Record<string, z.ZodTypeAny>).map(([name, f]) => {
     let inner = f
     let required = true
-    while (inner instanceof z.ZodOptional || inner instanceof z.ZodDefault) {
-      required = false
-      inner = inner instanceof z.ZodOptional ? inner.unwrap() : inner.removeDefault()
+    for (;;) {
+      if (inner instanceof z.ZodOptional) { required = false; inner = inner.unwrap() }
+      else if (inner instanceof z.ZodDefault) { required = false; inner = inner.removeDefault() }
+      else if (inner instanceof z.ZodEffects) inner = inner.innerType()     // preprocess/refine keep the base type
+      else break
     }
     return { name, type: paramType(inner), required }
   })
@@ -51,42 +52,25 @@ function checkRate(id: string, r?: Rate) {
   }
 }
 
+const qualified = new WeakMap<ActionDef, ActionId>()
+
 export class ActionManifest {
   private defs = new Map<ActionId, ActionDef>()
   private specs = new Map<ActionId, ActionRef['params']>() // ponytail: schemas are static and ids bounded, so no eviction
 
   constructor(private defaults: { rate?: Rate } = {}) {}
 
-  // Boot-time scan of apps/*/views.ts. Pass settings.limits.rate as defaults.rate.
-  // Class-based Views (Task 7) are skipped here for now.
-  static async discover(appsDir: string, defaults: { rate?: Rate } = {}): Promise<ActionManifest> {
-    const m = new ActionManifest(defaults)
-    for (const app of (await readdir(appsDir)).sort()) {
-      const dir = join(appsDir, app)
-      if (!(await stat(dir)).isDirectory()) continue
-      const views = join(dir, 'views.ts')
-      if (!(await stat(views).catch(() => null))) continue
-      if (!APP_RE.test(app)) throw new Error(`${views}: folder name "${app}" must match ${APP_RE}`)
-      const mod = await import(pathToFileURL(views).href)
-      const rulesFile = join(dir, 'rules.ts')
-      const rules = (await stat(rulesFile).catch(() => null)) ? await import(pathToFileURL(rulesFile).href) : {}
-      for (const [exp, v] of Object.entries(mod)) {
-        if (!isActionDef(v)) continue
-        try {
-          m.register(app, v, rules)
-        } catch (e) {
-          throw new Error(`${views} export ${exp}: ${(e as Error).message}`)
-        }
-      }
-    }
-    return m
-  }
+  // Boot-time scan of apps/*/views.ts lives in views/discover.ts (core never imports views).
 
   // appRules = exports of apps/<app>/rules.ts. Precedence: action > app > settings.
   // Permissions are cumulative (app then action; first deny wins per permissions.md).
   register(app: string, def: ActionDef, appRules: Partial<ActionRules> = {}): void {
     if (!APP_RE.test(app)) throw new Error(`app name "${app}" must match ${APP_RE}`)
-    const id = `${app}.${def.id}`
+    // W1: the final id is written onto the caller's def object, so `import { addToCart }` sees
+    // 'cart.addToCart'. A def keeps one id for life (re-registering under the same id is fine).
+    const prev = qualified.get(def)
+    const id = prev ?? `${app}.${def.id}`
+    if (prev && !prev.startsWith(`${app}.`)) throw new Error(`action already registered as ${prev}; cannot register it under app "${app}"`)
     if (this.defs.has(id)) throw new Error(`duplicate id ${id}`)
     const own = def.rules ?? {}
     const rules: ActionRules = {
@@ -97,6 +81,8 @@ export class ActionManifest {
     const perms = [...(appRules.permissions ?? []), ...(own.permissions ?? [])]
     if (perms.length) rules.permissions = perms
     checkRate(id, rules.rate)
+    qualified.set(def, id)
+    def.id = id
     this.defs.set(id, { ...def, id, rules })
   }
 
@@ -109,7 +95,7 @@ export class ActionManifest {
     if (!s) {
       const d = this.defs.get(id)
       if (!d) return []
-      this.specs.set(id, (s = deriveSpec(d.schema)))
+      this.specs.set(id, (s = paramSpecs(d)))
     }
     return s
   }
