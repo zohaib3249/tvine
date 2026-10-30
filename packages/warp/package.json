@@ -15,7 +15,13 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.4",
     "nanoid": "^5",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
   }
 }

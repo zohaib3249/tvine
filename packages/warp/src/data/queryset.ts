@@ -16,6 +16,9 @@ export interface QuerySpec {
 export interface DataSource<T> {
   query(spec: QuerySpec): Promise<{ items: T[]; total?: number }>
   get(id: string | number): Promise<T | undefined>
+  // Push-down writes (engine sources only); resolve to the number of rows touched.
+  update?(where: Where[], patch: Record<string, unknown>): Promise<number>
+  delete?(where: Where[]): Promise<number>
 }
 
 export interface Paginated<T> {
@@ -124,6 +127,16 @@ export class QuerySet<T extends object> {
       cursor = p.nextCursor
     } while (cursor && out.length < limit)
     return out.slice(0, limit)
+  }
+
+  async update(patch: Partial<Record<keyof T & string, unknown>>): Promise<number> {
+    if (!this.source.update) throw new Error('this data source is read-only')
+    return this.source.update(this.state.where, patch)
+  }
+
+  async delete(): Promise<number> {
+    if (!this.source.delete) throw new Error('this data source is read-only')
+    return this.source.delete(this.state.where)
   }
 
   async first(): Promise<T | undefined> {
