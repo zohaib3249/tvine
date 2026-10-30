@@ -45,17 +45,15 @@ export function Accordion(props: DefinedProps<AccordionProps, C>) {
   }
   return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': 'accordion', 'data-disabled': flag(disabled) }, { className, ...slots?.root }, s, <>
     {w.embed}
-    <AutoOff>
-      {items.map((t) => {
+    {items.map((t) => {
         const on = open.includes(t.value), st = { 'data-state': on ? 'open' : 'closed', 'data-disabled': flag(disabled || t.disabled) }
         return part('div', { key: t.value, ...st }, slots?.item, s, <>
-          <h3>{part('button', {
+          <h3><AutoOff>{part('button', {
             type: 'button', id: `${id}-t-${t.value}`, 'aria-expanded': on, 'aria-controls': `${id}-p-${t.value}`, 'data-value': t.value,
             disabled: disabled || t.disabled, onClick: () => flip(t.value), ...st,
-          }, slots?.trigger, s, t.label)}</h3>
-          {part('div', { role: 'region', id: `${id}-p-${t.value}`, 'aria-labelledby': `${id}-t-${t.value}`, hidden: !on, ...st }, slots?.panel, s, t.content)}
+          }, slots?.trigger, s, t.label)}</AutoOff></h3>
+          {part('div', { role: 'region', id: `${id}-p-${t.value}`, 'aria-labelledby': `${id}-t-${t.value}`, hidden: !on, inert: !on || undefined, ...st }, slots?.panel, s, t.content)}
         </>)
       })}
-    </AutoOff>
   </>)
 }

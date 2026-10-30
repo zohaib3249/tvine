@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control, ControlCtx } from '../widget/types.js'
 import { agentNavigate } from '../runtime/nav.js'
-import { AutoOff, flag, headlessOf, part, type Slots, type SlotProps } from './_parts.js'
+import { AutoOff, flag, headlessOf, invalid, part, type Slots, type SlotProps } from './_parts.js'
 
 // widgets/pagination.md: <nav aria-label="Pagination"> of real links. Every agent move goes through
 // W8's agentNavigate (same-origin check, real click, settle).
@@ -35,11 +35,11 @@ const usePagination = defineWidget<PaginationProps, S, C>({
   kind: 'pagination',
   state: (p) => ({ page: p.page, pageCount: p.pageCount }),
   controls: ({ props: p, el }) => ({
-    page: { ...nav(p, el, (a) => a.to), params: { to: { type: 'number', min: 1, max: p.pageCount } } },
+    page: { ...nav(p, el, (a) => { if (!Number.isInteger(a.to)) throw invalid('to', 'page must be a whole number'); return a.to }), params: { to: { type: 'number', min: 1, max: p.pageCount, step: 1 } } },
     ...(p.page < p.pageCount && { next: nav(p, el, () => p.page + 1) }),
     ...(p.page > 1 && { prev: nav(p, el, () => p.page - 1) }),
   }) as C,
-  headless: (p) => { const h = p.hrefFor ? undefined : headlessOf({ url: p.param ?? 'page' }, 'any'); return h ? { page: h, next: h, prev: h } : {} },
+  headless: (p) => { const h = p.hrefFor ? undefined : headlessOf({ url: p.param ?? 'page' }, 'any'); return h ? { page: h } : {} },
   describe: () => ({ label: 'Pagination' }),
   spec: (p) => ({ name: p.name ?? 'pages', changesContent: true }),
 })

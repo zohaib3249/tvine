@@ -16,7 +16,9 @@ export type LinkProps = SlotProps<S> & {
   children: ReactNode
 }
 
+// Server (no location): only relative same-site paths ("/x", "?q", "#h"; not "//host") are safe.
 const sameSite = (href: string) => {
+  if (typeof location === 'undefined') return /^(\/(?![\/\\])|[?#])/.test(href)
   try { const u = new URL(href, location.href); return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === location.origin } catch { return false }
 }
 const text = (p: LinkProps) => p.label ?? (typeof p.children === 'string' ? p.children : p.href)
@@ -24,14 +26,13 @@ const text = (p: LinkProps) => p.label ?? (typeof p.children === 'string' ? p.ch
 const useLink = defineWidget<LinkProps, S, C>({
   kind: 'link',
   state: (p) => (p.current ? { current: true } : {}) as S,
-  controls: ({ props: p, el }) => (typeof location === 'undefined' || !sameSite(p.href) ? {} as C : {
+  controls: ({ props: p, el }) => (!sameSite(p.href) ? {} as C : {
     navigate: { kind: 'navigate', run: async (_: unknown, ctx) => {
       await agentNavigate(p.href, ctx.signal, () => { const a = el(); if (!a) throw new Error('link is not mounted'); a.click() })
     } },
   }),
-  headless: (p) => ({ navigate: { url: p.href } }),
   describe: (p) => ({ label: text(p), summary: [p.href] }),
-  spec: (p) => ({ name: p.name ?? p.href }),
+  spec: (p) => ({ name: p.name ?? p.href, data: { href: p.href } }),   // headless: a plain GET of href
 })
 
 export function Link(props: DefinedProps<LinkProps, C>) {

@@ -4,7 +4,8 @@ import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control } from '../widget/types.js'
 import { AutoOff, flag, headlessOf, inner, part, useControllable, type Slots, type SlotProps } from './_parts.js'
 
-// widgets/tabs.md: APG Tabs. Every panel is SSR'd (inactive `hidden`) so headless agents read them all.
+// widgets/tabs.md: APG Tabs. Every panel is SSR'd (inactive `hidden inert`) so headless agents read them all;
+// only the triggers sit under AutoOff, so plain fields inside panels register on their own.
 // ponytail: flat `items` instead of Tabs.Root/List/Trigger/Panel compound parts; add those when a layout needs them.
 type C = Record<string, Control<any, any>>
 type S = { value: string }
@@ -56,10 +57,10 @@ export function Tabs(props: DefinedProps<TabsProps, C>) {
             'data-disabled': flag(disabled || t.disabled), onClick: () => pick(t.value),
           }, slots?.trigger, s, t.label)
         }))}
-      {items.map((t) => part('div', {
-        key: t.value, role: 'tabpanel', id: `${id}-p-${t.value}`, 'aria-labelledby': `${id}-t-${t.value}`, tabIndex: 0,
-        hidden: t.value !== v, 'data-state': t.value === v ? 'active' : 'inactive',
-      }, slots?.panel, s, t.content))}
     </AutoOff>
+    {items.map((t) => part('div', {
+        key: t.value, role: 'tabpanel', id: `${id}-p-${t.value}`, 'aria-labelledby': `${id}-t-${t.value}`, tabIndex: 0,
+        hidden: t.value !== v, inert: t.value !== v || undefined, 'data-state': t.value === v ? 'active' : 'inactive',
+      }, slots?.panel, s, t.content))}
   </>)
 }

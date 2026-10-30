@@ -37,7 +37,7 @@ const useStepper = defineWidget<Internal, S, C>({
       go: { kind: 'navigate', params: { step: { type: 'string', enum: reach } }, run: (a: { step: string }, ctx) => move(a.step, false, 'ol', ctx) },
     } as C
   },
-  headless: (p) => { const h = headlessOf(p); return h ? { next: h, prev: h, go: h } : {} },
+  headless: (p) => { const h = headlessOf(p); return h ? { go: h } : {} },
   describe: (p) => ({ label: p.label }),
   spec: (p) => ({ name: p.name, changesContent: true }),
 })
@@ -71,7 +71,9 @@ export function Stepper(props: DefinedProps<StepperProps, C>) {
         return part('li', { key: st.value, 'data-state': state, 'data-disabled': flag(locked), 'aria-current': st.value === v ? 'step' : undefined }, slots?.item, s,
           <button type="button" disabled={locked} onClick={() => void move(st.value, false)}>{st.label}</button>)
       }))}</nav>
-      {steps.map((st) => part('section', { key: st.value, id: `${id}-${st.value}`, 'aria-label': st.label, hidden: st.value !== v }, slots?.panel, s, st.content))}
+    </AutoOff>
+    {steps.map((st) => part('section', { key: st.value, id: `${id}-${st.value}`, 'aria-label': st.label, hidden: st.value !== v, inert: st.value !== v || undefined }, slots?.panel, s, st.content))}
+    <AutoOff>
       {errors && part('div', { role: 'alert' }, slots?.error, s, Object.values(errors).join(' '))}
       {i > 0 && part('button', { type: 'button', 'data-step-prev': '', disabled, onClick: () => void move(steps[i - 1]!.value, false) }, slots?.prev, s, 'Back')}
       {i < steps.length - 1 && part('button', { type: 'button', 'data-step-next': '', disabled, onClick: () => void move(steps[i + 1]!.value, true) }, slots?.next, s, 'Next')}
