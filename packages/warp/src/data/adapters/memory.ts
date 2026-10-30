@@ -4,15 +4,23 @@ import { decodeCursor, type DataSource, type Op, type Order, type QuerySpec, typ
 
 type Row = Record<string, unknown>
 
+// money ({value, currency}) answers like the SQL field: an object compares amount AND currency, a bare
+// number the amount; gt/lt use the amount
+type Money = { value: number; currency: string }
+const isMoney = (v: unknown): v is Money => typeof v === 'object' && v !== null && 'value' in v && 'currency' in v
+const amt = (v: unknown) => (isMoney(v) ? v.value : v)
+const same = (a: unknown, b: unknown) =>
+  isMoney(a) && isMoney(b) ? a.value === b.value && a.currency === b.currency : amt(a) === amt(b)
+
 function test(a: unknown, op: Op, b: unknown): boolean {
   switch (op) {
-    case 'eq': return a === b
-    case 'ne': return a !== b
-    case 'gt': return (a as number) > (b as number)
-    case 'gte': return (a as number) >= (b as number)
-    case 'lt': return (a as number) < (b as number)
-    case 'lte': return (a as number) <= (b as number)
-    case 'in': return Array.isArray(b) && b.includes(a)
+    case 'eq': return same(a, b)
+    case 'ne': return !same(a, b)
+    case 'gt': return (amt(a) as number) > (amt(b) as number)
+    case 'gte': return (amt(a) as number) >= (amt(b) as number)
+    case 'lt': return (amt(a) as number) < (amt(b) as number)
+    case 'lte': return (amt(a) as number) <= (amt(b) as number)
+    case 'in': return Array.isArray(b) && b.some(x => same(a, x))
     case 'contains': return typeof a === 'string' && a.toLowerCase().includes(String(b).toLowerCase())
   }
 }
