@@ -61,9 +61,10 @@ function parseLookup(l: string): { field: string; op: Op | undefined } {
 const num = z.preprocess(v => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v), z.number())
 function valueSchema(f: AnyField): z.ZodTypeAny {
   switch (f.kind) {
-    // money: the number goes to the field's own lookup()/toDb unchanged; the field owns its units
-    // (major-units switch is a follow-up task at the field level, views need no change)
-    case 'id': case 'int': case 'float': case 'money': return num
+    // money: major units ("30" = $30); the field's own value schema rejects >2 decimals here so the
+    // error names the URL param; the field's lookup()/toDb converts to cents
+    case 'money': return num.refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
+    case 'id': case 'int': case 'float': return num
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
