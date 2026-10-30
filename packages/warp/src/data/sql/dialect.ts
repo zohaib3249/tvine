@@ -43,6 +43,7 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       case 'isNull': return `${e(x.e)} IS ${x.negated ? 'NOT ' : ''}NULL`
       case 'in': return x.list.length ? `${e(x.e)} IN (${x.list.map(e).join(', ')})` : d.bool[0]
       case 'like': return `${x.ci ? `${checkIdent(d.lowerFn)}(${e(x.e)})` : e(x.e)} LIKE ${e(x.pattern)} ESCAPE ${d.likeEscape}`
+      case 'castText': return `CAST(${e(x.e)} AS TEXT)`
       case 'raw':
         if (!(RAW as readonly string[]).includes(x.sql)) throw new Error('Raw accepts compile-time constants only')
         return x.sql === '0' ? d.bool[0] : x.sql === '1' ? d.bool[1] : x.sql

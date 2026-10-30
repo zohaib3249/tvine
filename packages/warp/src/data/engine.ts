@@ -86,7 +86,7 @@ export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } =
       tx.conn = { ...conn, driver: txd }
       return Promise.race([bound.run(tx, fn), aborted])
     }, { signal })
-      .then(r => { tx.closed ??= 'committed'; return r }, e => { tx.closed ??= 'rolled back'; throw e })
+      .then(r => { tx.closed = 'committed'; return r }, e => { tx.closed ??= 'rolled back'; throw e })   // COMMIT resolved = committed, even if an abort landed mid-commit
       .finally(() => signal?.removeEventListener('abort', onAbort))
   })
   // commit hooks run after the outermost COMMIT, outside the block, ALL of them, in registration order

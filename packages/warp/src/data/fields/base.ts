@@ -2,7 +2,7 @@
 // values travel to the driver (params only, never SQL text), how they come back, and how it is
 // filtered. Tables only collect fields. (Django's db_type / get_db_prep_value / from_db_value.)
 import type { z } from 'zod'
-import { and, bin, fn, FALSE, inList, isNotNull, isNull, like, or, param, type Expr } from '../sql/ast.js'
+import { and, bin, castText, fn, FALSE, inList, isNotNull, isNull, like, or, param, type Expr } from '../sql/ast.js'
 import type { Dialect } from '../sql/dialect.js'
 import type { Op } from '../queryset.js'
 
@@ -69,9 +69,10 @@ export abstract class Field<V = unknown, O extends boolean = boolean, K extends 
   }
 }
 
-// case-insensitive substring match; the term is a param with LIKE wildcards escaped
+// case-insensitive substring match on the column's text form (so int / uuid columns work on
+// postgres too); the term is a param with LIKE wildcards escaped
 export const containsExpr = (col: Expr, term: string): Expr =>
-  like(fn('coalesce', col, param('')), param('%' + term.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'), true)
+  like(fn('coalesce', castText(col), param('')), param('%' + term.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'), true)
 
 // DDL cannot take params; defaults are developer constants from models.ts, rendered as checked literals.
 export function ddlLiteral(v: unknown): string {

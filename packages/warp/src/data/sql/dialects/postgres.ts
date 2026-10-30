@@ -1,6 +1,6 @@
 // postgres: "x" quoting, $1..$n params, lower() (Unicode-aware under a UTF-8 database), TRUE/FALSE,
 // NULLS FIRST/LAST so nulls sort smallest like sqlite (the keyset cursor relies on it).
-// '\' needs no doubling: standard_conforming_strings is on (the default since 9.1).
+// LIKE … ESCAPE E'\\': an escape-string literal reads the same whatever standard_conforming_strings is.
 // Migrations: native ALTER COLUMN — never a rebuild; the whole migration runs in one transaction.
 import { isNull, param, type SqlNode } from '../ast.js'
 import { checkIdent, renderNode, type Dialect, type Statement } from '../dialect.js'
@@ -11,10 +11,16 @@ import { fieldOf, findModel, type FieldSpec, type ProjectState } from '../../sch
 type AlterOp = Extract<Operation, { kind: 'alterField' }>
 type AddOp = Extract<Operation, { kind: 'addField' }>
 
-// pg's own name for an inline UNIQUE column constraint.
-// ponytail: after a renameModel/renameField pg keeps the old constraint name; altering unique on
-// such a column needs a runSQL until constraint names are tracked in state.
-const uniqueName = (table: string, col: string) => `${table}_${col}_key`
+// pg's own name for an object it names (makeObjectName): `<a>_<b>_<label>`, trimmed to 63 bytes
+// by shortening the longer of a / b one char at a time. Identifiers are ASCII (checkIdent).
+export function pgObjectName(a: string, b: string, label: string): string {
+  const avail = 63 - (label.length + 1) - 1
+  let x = a.length, y = b.length
+  while (x + y > avail) { if (x > y) x--; else y-- }
+  return `${a.slice(0, x)}_${b.slice(0, y)}_${label}`
+}
+// the inline UNIQUE constraint pg created for a column; renames below keep it in step
+const uniqueName = (table: string, col: string) => pgObjectName(table, col, 'key')
 
 function alterField(op: AlterOp, from: ProjectState, to: ProjectState): Statement[] {
   const r = (n: SqlNode) => postgres.render(n)
@@ -27,6 +33,14 @@ function alterField(op: AlterOp, from: ProjectState, to: ProjectState): Statemen
   if (was.references(postgres) !== now.references(postgres)) {
     throw new Error(`alterField ${op.model}.${op.name} changes its foreign key target; write removeField + addField or a runSQL migration`)
   }
+  // casts that would silently change stored values (1.5 → 2) need a hand-written data migration
+  const LOSSY: [string, string][] = [['DOUBLE PRECISION', 'BIGINT']]
+  was.dbType(postgres).forEach((t, i) => {
+    const t2 = now.dbType(postgres)[i]
+    if (LOSSY.some(([x, y]) => x === t && y === t2)) {
+      throw new Error(`alterField ${op.model}.${op.name} changes ${t} → ${t2}, which would round stored values: write a runSQL data migration`)
+    }
+  })
   const out: Statement[] = []
   const alter = (name: string, action: string) => out.push(r({ t: 'alterTable', name: op.model, alterColumn: { name, action } }))
   const [ta, tb] = [was.dbType(postgres), now.dbType(postgres)]
@@ -61,6 +75,22 @@ function addAutoDatetime(op: AddOp, from: ProjectState, to: ProjectState): State
   ]
 }
 
+// pg never renames constraints with their table / column: do it, so a later unique toggle finds them
+type RenameOp = Extract<Operation, { kind: 'renameField' | 'renameModel' }>
+function renameUniques(op: RenameOp, from: ProjectState): Statement[] {
+  const model = op.kind === 'renameField' ? op.model : op.from
+  const table = op.kind === 'renameField' ? op.model : op.to
+  const q = postgres.quoteIdent
+  return Object.entries(findModel(from, model)!.model.fields)
+    .filter(([n, f]) => f.opts.unique && (op.kind === 'renameModel' || n === op.from))
+    .map(([n, f]) => {
+      const col = (name: string) => fieldOf(f, from).columns(name)[0]
+      return [uniqueName(model, col(n)), op.kind === 'renameField' ? uniqueName(model, col(op.to)) : uniqueName(table, col(n))]
+    })
+    .filter(([a, b]) => a !== b)
+    .map(([a, b]) => ({ sql: `ALTER TABLE ${q(table)} RENAME CONSTRAINT ${q(a)} TO ${q(b)}`, params: [] }))
+}
+
 export const postgres: Dialect = {
   name: 'postgres',
   quoteIdent: n => `"${checkIdent(n)}"`,
@@ -68,11 +98,12 @@ export const postgres: Dialect = {
   render: node => renderNode(node, postgres),
   lowerFn: 'lower',
   transactionalDDL: true,
-  likeEscape: "'\\'",
+  likeEscape: "E'\\\\'",
   bool: ['FALSE', 'TRUE'],
   nullsSmallest: false,
   renderOperation(op, from, to) {
     if (op.kind === 'alterField') return alterField(op, from, to)
+    if (op.kind === 'renameField' || op.kind === 'renameModel') return [...defaultRender(op, postgres, from, to), ...renameUniques(op, from)]
     const o = op.kind === 'addField' ? op.field.opts : undefined
     if (op.kind === 'addField' && op.field.kind === 'datetime' && o?.auto && !o.optional && o.default === undefined) return addAutoDatetime(op, from, to)
     return defaultRender(op, postgres, from, to)
