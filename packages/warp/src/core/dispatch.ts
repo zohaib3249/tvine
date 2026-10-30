@@ -16,7 +16,7 @@ import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
 
-export type Log = (level: 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
+export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 
 export interface ServerCtx {
   actions: ActionManifest
@@ -221,7 +221,12 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
 async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {
   if (quiet.has(request)) return undefined
   try { return await server.snapshot(pageOf(request), sid) }
-  catch (e) { server.log('error', 'snapshot render failed', { page: pageOf(request), error: errStr(e) }); return undefined }
+  catch (e) {
+    // a page that redirects (Next redirect()) is not a failure: the agent gets a goto to it either way
+    if ((e as { name?: string })?.name === 'Goto') server.log('info', 'snapshot render redirected', { page: pageOf(request), to: (e as { url?: string }).url })
+    else server.log('error', 'snapshot render failed', { page: pageOf(request), error: errStr(e) })
+    return undefined
+  }
 }
 
 type Hold = { settled?: Promise<unknown> }   // the handler's own promise, which may outlive the timeout
