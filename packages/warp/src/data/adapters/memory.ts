@@ -1,5 +1,6 @@
 // In-process DataSource over an array. Used for demo and tests; the array is read live,
 // so later pushes are visible to subsequent queries.
+import { DomainError } from '../../core/errors.js'
 import { decodeCursor, type DataSource, type Op, type Order, type QuerySpec, type Where } from '../queryset.js'
 
 type Row = Record<string, unknown>
@@ -12,7 +13,17 @@ const amt = (v: unknown) => (isMoney(v) ? v.value : v)
 const same = (a: unknown, b: unknown) =>
   isMoney(a) && isMoney(b) ? a.value === b.value && a.currency === b.currency : amt(a) === amt(b)
 
+// the money field's own refusal (data/fields/money.ts): an object filter value needs its currency
+const checkMoneyFilter = (b: unknown) => {
+  for (const x of Array.isArray(b) ? b : [b]) {
+    if (typeof x === 'object' && x !== null && !Array.isArray(x) && typeof (x as { currency?: unknown }).currency !== 'string') {
+      throw new DomainError('invalid_param', 'a money filter object needs a currency (or pass a bare amount)')
+    }
+  }
+}
+
 function test(a: unknown, op: Op, b: unknown): boolean {
+  if (isMoney(a)) checkMoneyFilter(b)
   switch (op) {
     case 'eq': return same(a, b)
     case 'ne': return !same(a, b)
