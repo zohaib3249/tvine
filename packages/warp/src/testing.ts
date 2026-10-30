@@ -4,7 +4,8 @@
 import { randomUUID } from 'node:crypto'
 import { request } from 'node:http'
 import { duplexPair } from 'node:stream'
-import type { ActionId, Event, Session, Sid, Snapshot } from './core/types.js'
+import type { ActionId, Event, Session, Settings, Sid, Snapshot } from './core/types.js'
+import { signBind } from './security/sign.js'
 import { createAgentServer, type AgentServer, type AgentServerOptions } from './server.js'
 
 export interface AgentClient {
@@ -16,16 +17,30 @@ export interface AgentClient {
   session(sid: Sid): Session | undefined   // white-box assertion access
 }
 
+// The bind a page signs for `<Form action bind={payload}>` (weft pairBind: payload + $action), for tests
+// that call actions with no page to read the bind from (API-only apps, backend tests).
+export function signedBind(action: ActionId, payload: Record<string, unknown>, settings: Settings): string {
+  return signBind({ ...payload, $action: action }, settings)
+}
+
+// agentClient reads the v1 snapshot shape: decode() reads v1 nodes, and v2 table rows are not expanded back
+// into nodes yet (W5/W6; compatibility-v1.md). The pin holds only while this client has a request in flight,
+// counted per server so concurrent calls restore the server's own setting.
+const pins = new WeakMap<object, { n: number; saved: Settings['agent'] }>()
+async function pinnedV1<T>(settings: Settings, f: () => Promise<T>): Promise<T> {
+  const p = pins.get(settings) ?? { n: 0, saved: settings.agent }
+  if (p.n++ === 0) { p.saved = settings.agent; settings.agent = { ...settings.agent, shape: 'v1' } }
+  pins.set(settings, p)
+  try { return await f() } finally { if (--p.n === 0) settings.agent = p.saved }
+}
+
 export function agentClient(server: AgentServer): AgentClient {
-  // Pins the v1 snapshot shape on the server it drives: decode() reads v1 nodes, and v2 table rows are not
-  // expanded back into nodes yet (W5/W6). Remove when the helpers handle v2 (compatibility-v1.md).
-  server.ctx.settings.agent = { ...server.ctx.settings.agent, shape: 'v1' }
   const pages = new Map<string, Snapshot>()   // route → last snapshot (binds come from here)
   let sid = ''
   const headers = { [server.ctx.settings.header]: '1', accept: 'application/tvine+json' }
 
   async function send(method: string, route: string, body?: string) {
-    const r = await call(server, method, route, body === undefined ? headers : { ...headers, 'content-type': 'application/json' }, body)
+    const r = await pinnedV1(server.ctx.settings, () => call(server, method, route, body === undefined ? headers : { ...headers, 'content-type': 'application/json' }, body))
     const d = decode(r.raw)
     if (d.sid) sid = d.sid
     const snap = d.events.map((e) => (e.kind === 'snapshot' ? e.snapshot : e.kind === 'err' ? e.snapshot : undefined)).find(Boolean)

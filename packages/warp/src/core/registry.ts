@@ -73,6 +73,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
       lastEntity = undefined
       if (!isObj(w) || !isStr(w.id) || !isStr(w.kind) || (w.p !== undefined && !isStr(w.p)) || (w.e !== undefined && !isStr(w.e))) throw bad()
       const ent = entityType(w.e as string | undefined) !== undefined
+      if (w.e !== undefined && !ent && dev()) console.error(`tvine: widget "${w.id}" has e="${w.e}" — an entity id is <type>:<key> (e.g. product:12); treated as no entity`)
       const key = ent ? `e:${w.e}` : `w:${w.id}`
       const prev = widgets.get(key)
       if (!prev) widgets.set(key, ent ? { ...w, at: w.p === undefined ? [] : [w.p] } as WidgetFrag : w as unknown as WidgetFrag)
