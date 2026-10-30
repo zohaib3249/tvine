@@ -9,7 +9,7 @@ type McTool = {
   execute: (args: any) => Promise<{ content: { type: 'text'; text: string }[] }>
 }
 type ModelContext = {
-  registerTool?: (t: McTool) => unknown
+  registerTool?: (t: McTool, o?: { signal: AbortSignal }) => unknown
   unregisterTool?: (name: string) => unknown
   provideContext?: (c: { tools: McTool[] }) => unknown
 }
@@ -27,20 +27,51 @@ function provideTools(tools: McTool[]): () => void {
     }
     return () => {}
   }
+  const ac = new AbortController()
   if (mc.registerTool) {
-    tools.forEach((t) => mc.registerTool!(t))
-    return () => tools.forEach((t) => mc.unregisterTool?.(t.name))
+    // Current API: removal is by aborting the signal given at registration.
+    for (const t of tools) {
+      try {
+        Promise.resolve(mc.registerTool(t, { signal: ac.signal })).catch(devWarn)
+      } catch (e) { devWarn(e) }
+    }
+    // Fallback for older builds that ignore the signal but have unregisterTool.
+    ac.signal.addEventListener('abort', () => tools.forEach((t) => { try { mc.unregisterTool?.(t.name) } catch {} }))
+    return () => ac.abort() // idempotent
   }
+  // Oldest shape. NOTE: this fallback's unregister clears ALL page tools, not just ours.
   mc.provideContext?.({ tools })
   return () => { mc.provideContext?.({ tools: [] }) }
+}
+
+function devWarn(e: unknown) {
+  if (!warned && process.env.NODE_ENV !== 'production') {
+    warned = true
+    console.info('[tvine] WebMCP registration failed', e)
+  }
+}
+
+// randomUUID is undefined on non-secure contexts (plain http).
+function newId(): string {
+  const c = (globalThis as any).crypto
+  if (c?.randomUUID) return c.randomUUID()
+  const b: Uint8Array = c.getRandomValues(new Uint8Array(16))
+  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
 export function registerWebMcp(opts: { header?: string } = {}): () => void {
   const header = opts.header ?? 'x-tvine'
   const url = () => { const l = (globalThis as any).location; return l.pathname + l.search }
   const send = async (init: RequestInit & { headers: Record<string, string> }) => {
-    const res = await fetch(url(), { ...init, headers: { [header]: '1', ...init.headers }, credentials: 'same-origin' })
-    return { content: [{ type: 'text' as const, text: await res.text() }] }
+    let text: string
+    try {
+      const res = await fetch(url(), { ...init, headers: { [header]: '1', ...init.headers }, credentials: 'same-origin' })
+      text = await res.text()
+    } catch (e) {
+      // Thrown messages never reach the agent; return the error as a value.
+      text = `err internal "network error: ${(e instanceof Error ? e.message : String(e)).replace(/"/g, "'")}"`
+    }
+    return { content: [{ type: 'text' as const, text }] }
   }
   return provideTools([
     {
@@ -67,7 +98,7 @@ export function registerWebMcp(opts: { header?: string } = {}): () => void {
         send({
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/tvine+json' },
-          body: JSON.stringify({ action, params, cmdId: cmdId ?? crypto.randomUUID() }),
+          body: JSON.stringify({ action, params, cmdId: cmdId ?? newId() }),
         }),
     },
   ])
