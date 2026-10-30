@@ -15,7 +15,8 @@ export interface Io { out(s: string): void; err(s: string): void; exit(code: num
 const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c) }
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
-  start [--port 3000]           serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s)
+  start [--port 3000] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
+                                --api-only: no frontend (Next runs separately with TVINE_API_URL)
   dev [--port 3000]             runserver: in-process next dev (needs next installed)
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
   check                         settings + actions + migrations gate (exit 1 on problems)
@@ -29,7 +30,7 @@ type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
-  start: { options: { port: str }, args: [0, 0] },
+  start: { options: { port: str, 'api-only': bool }, args: [0, 0] },
   dev: { options: { port: str }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
   check: { options: {}, args: [0, 0] },
@@ -87,7 +88,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
         if (!dev) process.env.NODE_ENV ||= 'production'   // empty (NODE_ENV=) counts as unset
         if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
-        const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
+        const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
         const stop = () => {

@@ -22,6 +22,7 @@ import { defineSettings, merge, type SettingsInput } from './settings.js'
 import { channelTransport } from './transport/channel.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
+import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
 import { inspectorFeed } from './transport/inspector.js'
@@ -61,6 +62,7 @@ export interface AgentServer {
 
 // weft stores these on globalThis (Next builds several module graphs); warp never imports weft.
 const SIGNER = Symbol.for('tvine.signer'), DISPATCHER = Symbol.for('tvine.dispatcher'), PAGES = Symbol.for('tvine.pages')
+const API = Symbol.for('tvine.api')   // @tvine/weft/api's in-process transport
 const g = globalThis as Record<symbol, unknown>
 const API_ROUTES: RouteInfo[] = [{ path: '/' }]
 const pathOf = (req: IncomingMessage) => (req.url ?? '/').split('?')[0]!
@@ -172,6 +174,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     },
     (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
+    apiTransport(ctx, { route, touched, asSession: (v) => internalOf(v, nonce) }),
     httpTransport(ctx, { routes, match: route }),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
@@ -213,12 +216,14 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
   const dispatcher = formDispatcher(ctx, route, src)
   const pages = pagesFor(ctx, route, src, touched)
-  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest(), pages: g[PAGES] }
+  const api = apiFor(ctx, route, src, touched)
+  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest(), pages: g[PAGES], api: g[API] }
   if (prev.dispatcher) say('WARNING: another tvine server already registered the <Form> dispatcher; this one replaces it until close()', 'warn')
   g[SIGNER] = signer
   g[DISPATCHER] = dispatcher
   setLiveManifest(actions)   // page bundles' copies of apps/ resolve ids and view defs through it
   g[PAGES] = pages
+  g[API] = api
 
   // 5. session sweep; 6. server hygiene (SSE sets its own socket timeout to 0)
   const sweep = setInterval(() => ctx.sessions.sweep(), settings.session.ttlMs / 4)
@@ -252,6 +257,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       if (g[DISPATCHER] === dispatcher) g[DISPATCHER] = prev.dispatcher
       if (liveManifest() === actions) setLiveManifest(prev.actions)
       if (g[PAGES] === pages) g[PAGES] = prev.pages
+      if (g[API] === api) g[API] = prev.api
       for (const r of sse) r.end()
       if (server.listening) {
         await new Promise<void>((ok) => {
@@ -381,5 +387,34 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
       return request
     },
+  }
+}
+
+// @tvine/weft/api in one process: a server component / server action calls dispatch() as the page's request.
+// An agent's snapshot render runs as the agent (x-tvine-session); a request with `next-action` is a server
+// action (may mutate, may create the session cookie); anything else is a render (read actions only).
+// ponytail: `next-action` is how Next marks server-action POSTs; a client faking it only affects its own render
+export function apiFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource, touched: Set<string>): (call: ApiCall) => Promise<ApiResult> {
+  const { settings, sessions } = server
+  const name = settings.session.cookieName
+  return async (call) => {
+    const h: Record<string, string> = Object.fromEntries(await src.headers())
+    const own = internalOf(h[AS_SESSION], src.nonce)
+    if (own) touched.add(own.token)   // C2: this agent render read its session
+    const st = stampOf(h, settings, src.nonce)
+    const url = st.own ? h[URL_STAMP] ?? '/' : '/'
+    const path = new URL(url, 'http://tvine.local').pathname
+    const shown = Object.fromEntries(Object.entries(h).filter(([k]) => !k.toLowerCase().startsWith('x-tvine-')))
+    const request = await buildRequest({ url, route: route(path) ?? path, headers: shown, ip: st.ip || 'unknown', via: 'human' }, settings)
+    if (own) {
+      request.agent = { is: true, via: 'http' }
+      return invoke(server, call, { request, sid: own.sid, mode: 'render' })
+    }
+    const jar = await src.cookies()
+    const action = h['next-action'] !== undefined
+    return invoke(server, call, {
+      request, cookie: jar.get(name)?.value, mode: action ? 'action' : 'render',
+      mint: (s) => { jar.set(name, sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
+    })
   }
 }
