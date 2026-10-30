@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ActionManifest } from '../core/actions.js'
 import type { ActionRef, Settings } from '../core/types.js'
+import { connections } from '../data/db.js'
 
 export interface RouteInfo { path: string; name?: string }
 export interface HealthStats { sessions: number; db?: unknown }
@@ -86,7 +87,7 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
       case '/tvine/health':
         return get(JSON_CT, 'no-store', () => {
-          const { sessions, db } = stats()
+          const { sessions, db = connections.stats() } = stats()   // pool stats unless the caller supplies db
           return JSON.stringify({
             ok: true, uptime: Math.floor((Date.now() - startedAt) / 1000),
             actions: manifest.all().length, sessions, ...(db !== undefined && { db }),
