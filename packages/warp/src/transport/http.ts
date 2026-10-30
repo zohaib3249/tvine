@@ -216,7 +216,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     setCtx({ sid: session.sid, rev: session.rev, page })
     let snap
     try { snap = await server.snapshot(page, session.sid) } catch (e) {
-      if (!known) setCtx({ sid: '', rev: 0, page })   // a refused render or a redirect mints no session cookie
+      if (!known) { sessions.delete(session.sid); setCtx({ sid: '', rev: 0, page }) }   // a refused render or a redirect leaves no session and no cookie
       if (e instanceof Goto) return reply(200, [ev.goto(e.url)])
       throw e
     }

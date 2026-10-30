@@ -88,6 +88,9 @@ export class SessionStore {
 
   get size(): number { return this.byId.size }
 
+  // Drop a session now (e.g. one created for a render that was then refused): the normal evict path.
+  delete(sid: Sid): void { if (this.byId.has(sid)) this.evict(sid) }
+
   // ponytail: full scan per call; caller runs it on an interval of ttl/4. Cap+cursor if sessions get numerous.
   sweep(): number {
     const now = Date.now()
