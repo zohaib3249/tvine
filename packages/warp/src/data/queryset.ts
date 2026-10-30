@@ -1,5 +1,6 @@
 // QuerySet: internal chain API over a DataSource. Devs reach it only as Model.objects.
 // Spec: docs/design/conventions/orm-queryset.md
+import { DomainError } from '../core/errors.js'
 
 export type Op = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains'
 export type Where = { field: string; op: Op; value: unknown; not?: boolean }  // not: negated (exclude)
@@ -57,9 +58,16 @@ export function decodeCursor(cursor: string): unknown[] {
 
 interface State { where: Where[]; order: Order[]; search?: QuerySpec['search'] }
 
+export const MAX_IN = 1000          // every value is a bound param; engines cap params per statement
+
 function toWhere(w: Partial<Record<string, unknown>> | Where[]): Where[] {
-  if (Array.isArray(w)) return w
-  return Object.entries(w).map(([field, value]) => ({ field, op: 'eq', value }))
+  if (!Array.isArray(w)) return Object.entries(w).map(([field, value]) => ({ field, op: 'eq', value }))
+  for (const c of w) {
+    if (c.op === 'in' && Array.isArray(c.value) && c.value.length > MAX_IN) {
+      throw new DomainError('invalid_param', `too many values in IN filter (max ${MAX_IN})`, c.field)
+    }
+  }
+  return w
 }
 
 function clampSize(size: number | undefined): number {

@@ -35,6 +35,7 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       case 'or': return `(${x.es.map(e).join(' OR ')})`
       case 'isNull': return `${e(x.e)} IS ${x.negated ? 'NOT ' : ''}NULL`
       case 'in': return x.list.length ? `${e(x.e)} IN (${x.list.map(e).join(', ')})` : '0'
+      // TODO(Task 20): ESCAPE '\' must become dialect-rendered — mysql treats backslash as a string escape
       case 'like': return `${x.ci ? `${checkIdent(d.lowerFn)}(${e(x.e)})` : e(x.e)} LIKE ${e(x.pattern)} ESCAPE '\\'`
       case 'raw':
         if (!(RAW as readonly string[]).includes(x.sql)) throw new Error('Raw accepts compile-time constants only')

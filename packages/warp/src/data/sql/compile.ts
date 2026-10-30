@@ -21,8 +21,10 @@ export function resolve(t: TableDef, name: string): { f: F; field: string; col: 
 export function cond(t: TableDef, w: Where, d: Dialect): Expr {
   const { f, col: c } = resolve(t, w.field)
   if (!w.not) return f.lookup(w.op, c, w.value, d)
-  // null-inclusive negation (orm-queryset.md): missing values match exclude()
+  // null-inclusive negation (orm-queryset.md): missing values match exclude() — except when the
+  // value itself is null: exclude(eq null) = IS NOT NULL, exclude(ne x) = eq x (incl. IS NULL)
   if (w.op === 'ne') return f.lookup('eq', c, w.value, d)
+  if (w.op === 'eq' && w.value == null) return f.lookup('ne', c, null, d)
   return or(isNull(c), not(f.lookup(w.op, c, w.value, d)))
 }
 

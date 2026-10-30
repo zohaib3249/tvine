@@ -82,6 +82,7 @@ export function ddlLiteral(v: unknown): string {
   throw new Error(`unsupported column default ${String(v)}`)
 }
 
+// postgres/mysql entries in every field: untested until Task 20 (docker conformance)
 export const byDb = (d: Dialect, t: Record<DbName, string>) => t[d.name]
 
 export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => f.key(name)

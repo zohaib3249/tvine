@@ -29,7 +29,8 @@ function wrapErr(def: ModelDef, e: unknown): never {
 // already own the connection), nested atomic reuses it. Once the block ends (commit, rollback or
 // abort) the binding is closed, so a late query from the callback throws instead of escaping.
 class TxError extends Error {}
-interface Tx { conn: Connection; closed?: string; hooks: (() => unknown)[] }
+type Closed = 'committed' | 'rolled back' | 'aborted'
+interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[] }
 const bound = new AsyncLocalStorage<Tx>()
 let tail: Promise<unknown> = Promise.resolve()
 
@@ -37,7 +38,7 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
   const tx = bound.getStore()
   if (tx) {
     return Promise.resolve().then(() => {
-      if (tx.closed) throw new TxError(`query after the atomic block ${tx.closed}`)
+      if (tx.closed) throw new TxError(`query after the atomic block was ${tx.closed}`)
       return fn(tx.conn)
     })
   }
@@ -46,10 +47,14 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
   return run
 }
 
+// A hook that throws AFTER the commit must not turn a committed atomic() into an error: it is reported here.
+let onCommitError: (e: unknown) => void = e => console.error('onCommit hook failed:', e)
+export function setOnCommitErrorHandler(fn: (e: unknown) => void): void { onCommitError = fn }
+
 export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } = {}): Promise<R> {
   const outer = bound.getStore()
   if (outer) {
-    if (outer.closed) return Promise.reject(new TxError(`atomic() after the atomic block ${outer.closed}`))
+    if (outer.closed) return Promise.reject(new TxError(`atomic() after the atomic block was ${outer.closed}`))
     return fn()
   }
   const { signal } = opts
@@ -60,24 +65,30 @@ export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } =
     let onAbort!: () => void
     // abort = mark dead first (late queries throw), then the race rejects → driver rolls back
     const aborted = new Promise<never>((_, rej) => {
-      onAbort = () => { tx.closed = 'was aborted'; rej(signal!.reason ?? new TxError('atomic block aborted')) }
+      onAbort = () => { tx.closed ??= 'aborted'; rej(signal!.reason ?? new TxError('atomic block aborted')) }
       signal?.addEventListener('abort', onAbort, { once: true })
     })
     aborted.catch(() => undefined)
     return conn.driver.transaction(() => Promise.race([bound.run(tx, fn), aborted]))
-      .finally(() => { signal?.removeEventListener('abort', onAbort); tx.closed ??= 'has finished' })
+      .then(r => { tx.closed ??= 'committed'; return r }, e => { tx.closed ??= 'rolled back'; throw e })
+      .finally(() => signal?.removeEventListener('abort', onAbort))
   })
-  // commit hooks run after the outermost COMMIT, outside the block, in registration order
+  // commit hooks run after the outermost COMMIT, outside the block, ALL of them, in registration order
   return run.then(async r => {
-    for (const h of tx.hooks) await h()
+    for (const h of tx.hooks) {
+      try { await h() } catch (e) { onCommitError(e) }
+    }
     return r
   })
 }
 
-// Run fn after the outermost atomic() commits; dropped on rollback; immediately outside atomic().
+// Inside atomic(): run fn after the outermost commit (dropped on rollback). Outside atomic(), or
+// late from a block that already committed: run now. Late from a block that rolled back / was
+// aborted: throw — the writes it would announce never happened.
 export function onCommit(fn: () => unknown): void | Promise<void> {
   const tx = bound.getStore()
   if (tx && !tx.closed) { tx.hooks.push(fn); return }
+  if (tx && tx.closed !== 'committed') throw new TxError(`onCommit() after the atomic block was ${tx.closed}`)
   return Promise.resolve(fn()).then(() => undefined)
 }
 
