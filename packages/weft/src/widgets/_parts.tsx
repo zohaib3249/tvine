@@ -1,5 +1,5 @@
 'use client'
-import { cloneElement, isValidElement, useState, type CSSProperties, type ReactElement, type ReactNode, type Ref } from 'react'
+import { cloneElement, createElement, isValidElement, useState, type CSSProperties, type ReactElement, type ReactNode, type Ref } from 'react'
 import { WeftError } from '../widget/hooks.js'
 import type { ActionHandle, ControlCtx, HeadlessMap } from '../widget/types.js'
 
@@ -40,7 +40,7 @@ export function part<S>(Tag: string, own: Record<string, any>, slot: SlotProps<S
     if (props.ref || (cp as { ref?: Ref<unknown> }).ref) merged.ref = mergeRefs(props.ref, (cp as { ref?: Ref<unknown> }).ref)
     return cloneElement(children, merged)
   }
-  return <Tag {...props}>{children}</Tag>
+  return createElement(Tag, props, children)
 }
 
 // Controlled when `value` is given, else own state seeded from `defaultValue`.
