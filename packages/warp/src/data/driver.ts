@@ -118,20 +118,44 @@ export function pgDriver(url: string, opts: PoolOpts): Driver & { stats(): PoolS
 // mysql2/promise pool: acquire → run → release per statement; waiters are served FIFO by the pool,
 // acquireMs is enforced here (mysql2 has no acquire timeout). Every new connection gets a pinned
 // session first: strict sql_mode WITHOUT NO_BACKSLASH_ESCAPES / ANSI_QUOTES (the dialect's literals
-// rely on it), UTC, utf8mb4_bin. Statements with params use server-side prepared statements
+// rely on it), UTC, utf8mb4_bin, READ COMMITTED (as postgres / Django). Statements with params use server-side prepared statements
 // (execute); dates and JSON travel as strings (the datetime / json fields own the format).
 // `mysql2` is an optional peer dependency, imported on the first query.
 type MyPool = import('mysql2/promise').Pool
 type MyConn = import('mysql2/promise').PoolConnection
-const SESSION = "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION', time_zone = '+00:00'"
+const SESSION = [
+  "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION', time_zone = '+00:00'",
+  'SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED',
+]
 const LONGLONG = 8
 
-// the url → connection options; a bad url never echoes itself (it holds the password)
-function mysqlConfig(url: string) {
+// url + pool settings → mysql2 pool options. A bad url never echoes itself (it holds the password).
+// Query params: ssl=true|false, sslmode=disable|require|verify-ca|verify-full (require = encrypt without
+// verifying the certificate, like libpq); anything else is refused, never silently dropped.
+export function mysqlOptions(url: string, opts: PoolOpts) {
   let u: URL
   try { u = new URL(url) } catch { throw new Error('invalid mysql url (expected mysql://user:pass@host:port/db)') }
   const dec = (s: string) => (s ? decodeURIComponent(s) : undefined)
-  return { host: u.hostname || 'localhost', port: u.port ? Number(u.port) : 3306, user: dec(u.username), password: dec(u.password), database: dec(u.pathname.slice(1)) }
+  let ssl: { rejectUnauthorized: boolean } | undefined
+  for (const [k, v] of u.searchParams) {
+    const bad = () => new Error(`unsupported mysql url value for ${k} (ssl: true / false; sslmode: disable / require / verify-ca / verify-full)`)
+    if (k === 'ssl') {
+      if (!['true', '1', 'false', '0'].includes(v)) throw bad()
+      ssl = v === 'true' || v === '1' ? { rejectUnauthorized: true } : undefined
+    } else if (k === 'sslmode') {
+      if (v === 'disable') ssl = undefined
+      else if (v === 'require') ssl = { rejectUnauthorized: false }
+      else if (v === 'verify-ca' || v === 'verify-full') ssl = { rejectUnauthorized: true }
+      else throw bad()
+    } else throw new Error(`unsupported mysql url parameter ${JSON.stringify(k)} (supported: ssl, sslmode)`)
+  }
+  return {
+    host: u.hostname || 'localhost', port: u.port ? Number(u.port) : 3306, user: dec(u.username), password: dec(u.password), database: dec(u.pathname.slice(1)),
+    ...(ssl ? { ssl } : {}),
+    connectionLimit: opts.max, maxIdle: opts.max, idleTimeout: opts.idleMs, connectTimeout: opts.acquireMs,
+    waitForConnections: true, queueLimit: 0, charset: 'utf8mb4_bin', dateStrings: true, jsonStrings: true, supportBigNumbers: true,
+    maxPreparedStatements: 256,                           // per connection (LRU); mysql2's default 16000 can hit max_prepared_stmt_count
+  }
 }
 
 async function myRun(c: MyConn, sql: string, params: unknown[]) {
@@ -159,13 +183,10 @@ export function mysqlDriver(url: string, opts: PoolOpts): Driver & { stats(): Po
   let waiting = 0
   const pinned = new WeakSet<object>()
   const getPool = () => (pool ??= (async () => {
-    const cfg = mysqlConfig(url)
+    const cfg = mysqlOptions(url, opts)
     let my: typeof import('mysql2/promise')
     try { my = await import('mysql2/promise') } catch { throw new Error('install mysql2 to use mysql:// or mariadb:// urls (npm i mysql2)') }
-    return (ready = ((my as { default?: typeof my }).default ?? my).createPool({
-      ...cfg, connectionLimit: opts.max, maxIdle: opts.max, idleTimeout: opts.idleMs, connectTimeout: opts.acquireMs,
-      waitForConnections: true, queueLimit: 0, charset: 'utf8mb4_bin', dateStrings: true, jsonStrings: true, supportBigNumbers: true,
-    }))
+    return (ready = ((my as { default?: typeof my }).default ?? my).createPool(cfg))
   })())
   const acquire = async (): Promise<MyConn> => {
     const p = await getPool()
@@ -180,7 +201,7 @@ export function mysqlDriver(url: string, opts: PoolOpts): Driver & { stats(): Po
       throw e
     } finally { waiting--; clearTimeout(timer) }
     if (!pinned.has(c.connection)) {
-      try { await c.query(SESSION) } catch (e) { c.destroy(); throw e }
+      try { for (const s of SESSION) await c.query(s) } catch (e) { c.destroy(); throw e }
       pinned.add(c.connection)
     }
     return c

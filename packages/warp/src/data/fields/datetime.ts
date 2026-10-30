@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { byDb, Field } from './base.js'
+import { DomainError } from '../../core/errors.js'
 import type { Dialect } from '../sql/dialect.js'
 
 // sqlite: integer epoch ms; postgres: TIMESTAMPTZ (µs precision, so every JS ms survives exactly;
@@ -15,7 +16,11 @@ export class DatetimeField extends Field<Date, boolean, 'datetime', boolean> {
     if (d.name === 'sqlite' && v instanceof Date) return [v.getTime()]
     if (d.name === 'mysql') {
       const t = v instanceof Date ? v : new Date(v as string)
-      if (!Number.isNaN(t.getTime())) return [t.toISOString().slice(0, 23).replace('T', ' ')]
+      if (!Number.isNaN(t.getTime())) {
+        const y = t.getUTCFullYear()
+        if (y < 1000 || y > 9999) throw new DomainError('invalid_param', `datetime ${t.toISOString()} is outside years 1000–9999`)
+        return [t.toISOString().slice(0, 23).replace('T', ' ')]
+      }
     }
     return [v]
   }

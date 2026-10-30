@@ -5,9 +5,9 @@ import type { Dialect } from '../sql/dialect.js'
 export class TextField extends Field<string, boolean, 'text', boolean> {
   readonly kind = 'text' as const
   // mysql cannot index or unique a TEXT column: a unique / indexed text field is VARCHAR(255) there
-  // (values longer than 255 chars are refused by strict mode); plain text stays TEXT (64 KB)
+  // (values longer than 255 chars are refused by strict mode); plain text is LONGTEXT (TEXT caps at 64 KB)
   dbType(d: Dialect) {
-    return [byDb(d, { sqlite: 'TEXT', postgres: 'TEXT', mysql: this.opts.unique || this.opts.index ? 'VARCHAR(255)' : 'TEXT' })]
+    return [byDb(d, { sqlite: 'TEXT', postgres: 'TEXT', mysql: this.opts.unique || this.opts.index ? 'VARCHAR(255)' : 'LONGTEXT' })]
   }
   zod() { return z.string() }
 }

@@ -227,7 +227,12 @@ async function applyStepwise({ driver, dialect: d }: Connection, n: MigrationNod
           `to resume at operation ${i + 1}; to change the migration instead, undo what it applied by hand and delete its '${n.name}#…' rows from ${JOURNAL}.`, { cause: e })
       }
       const row = journalRow(d, n.app, stepName(n, i, j), sum)
-      await driver.exec(row.sql, row.params)
+      try {
+        await driver.exec(row.sql, row.params)
+      } catch (e) {
+        throw new Error(`migration ${n.key}: statement ${j + 1} of operation ${i + 1} (${opLabel(list[i])}) ran but was not recorded (${(e as Error).message}): ` +
+          `insert the journal row ('${n.app}', '${stepName(n, i, j)}') into ${JOURNAL} by hand, or a re-run will run that statement again`, { cause: e })
+      }
     }
   }
   const steps = ops.flatMap((stmts, i) => stmts.map((_, j) => param(stepName(n, i, j))))

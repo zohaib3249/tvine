@@ -10,7 +10,7 @@ import { pkField } from './fields/index.js'
 
 // ---- error vocabulary ------------------------------------------------------------------------
 function wrapErr(def: ModelDef, e: unknown): never {
-  if (e instanceof DomainError || e instanceof TxError) throw e
+  if (e instanceof DomainError || e instanceof TxError || e instanceof ReadBackError) throw e
   const c = (e as { cause?: unknown }).cause ?? e
   const code = (c as { code?: string }).code ?? ''
   const msg = String((c as Error).message ?? '')
@@ -22,9 +22,15 @@ function wrapErr(def: ModelDef, e: unknown): never {
     if (code === '23505') throw new DomainError('domain', `${def.name}.${field} must be unique`, field)
     throw new DomainError('invalid_param', `${def.name}.${field} is required`, field)
   }
-  // mysql: "Duplicate entry 'x' for key 'vendor.name'", "Column 'name' cannot be null", "Field 'name' doesn't have a default value"
+  // mysql: "Duplicate entry 'x' for key 'vendor.name'" (PRIMARY = the pk), "Column 'name' cannot be null",
+  // "Field 'name' doesn't have a default value", "Data too long for column 'title'", "Incorrect integer value: … for column 'count'"
   if (code.startsWith('ER_')) {
-    const field = (/for key '(?:[^']*\.)?([^'.]+)'/.exec(msg) ?? /^(?:Column|Field) '([^']+)'/.exec(msg))?.[1]?.replace(/Id$/, '')
+    const key = (/for key '(?:[^']*\.)?([^'.]+)'/.exec(msg) ?? /^(?:Column|Field) '([^']+)'/.exec(msg))?.[1]
+      ?? /for column (\S+)/.exec(msg)?.[1].split('.').pop()?.replace(/[`']/g, '')   // mariadb: `db`.`table`.`col`
+    const field = (key === 'PRIMARY' ? pkField(def)[0] : key)?.replace(/Id$/, '')
+    if (code === 'ER_DATA_TOO_LONG' || code.startsWith('ER_TRUNCATED_WRONG_VALUE') || code === 'ER_WARN_DATA_OUT_OF_RANGE') {
+      throw new DomainError('invalid_param', field ? `${def.name}.${field} is too long or invalid` : `a ${def.name} value is too long or invalid`, field)
+    }
     if (/^ER_(NO_)?(ROW_IS_REFERENCED|REFERENCED_ROW)/.test(code)) throw new DomainError('domain', `${def.name} is still referenced by other records, or points at a record that does not exist`)
     if (code === 'ER_DUP_ENTRY') throw new DomainError('domain', `${def.name}.${field} must be unique`, field)
     if (code === 'ER_BAD_NULL_ERROR' || code === 'ER_NO_DEFAULT_FOR_FIELD') throw new DomainError('invalid_param', `${def.name}.${field} is required`, field)
@@ -46,6 +52,7 @@ function wrapErr(def: ModelDef, e: unknown): never {
 // abort) the binding is closed, so a late query from the callback throws instead of escaping.
 // postgres / mysql (pooled): no queue; atomic() holds ONE pool connection for the whole block (tx.conn.driver).
 class TxError extends Error {}
+class ReadBackError extends Error {}
 type Closed = 'committed' | 'rolled back' | 'aborted'
 interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[]; open?: () => Promise<unknown> }   // open: lazy block, BEGIN on first query
 const bound = new AsyncLocalStorage<Tx>()
@@ -204,7 +211,9 @@ export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise
       const { lastId } = await driver.exec(s.sql, s.params)
       const [pk, f] = pkField(def)
       const g = t.get(data[f.key(pk)] ?? lastId, dialect)
-      return t.hydrate((await driver.query(g.sql, g.params))[0], dialect)
+      const [row] = await driver.query(g.sql, g.params)
+      if (!row) throw new ReadBackError(`${def.name}: the inserted row could not be read back (pk ${String(data[f.key(pk)] ?? lastId)})`)
+      return t.hydrate(row, dialect)
     } catch (e) { return wrapErr(def, e) }
   })
 }

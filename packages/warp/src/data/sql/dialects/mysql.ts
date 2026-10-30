@@ -6,6 +6,7 @@
 // Migrations: native MODIFY COLUMN; DDL auto-commits (transactionalDDL false) — the runner applies and
 // journals step by step (migrate.ts). Foreign keys are named table constraints (mysql ignores an
 // inline REFERENCES); renames keep their names — and unique key names — in step.
+import { createHash } from 'node:crypto'
 import { renderNode, checkIdent, type Dialect, type Statement } from '../dialect.js'
 import { ddlLiteral } from '../../fields/base.js'
 import { fkName } from '../../fields/fk.js'
@@ -38,8 +39,19 @@ function alterField(op: Op<'alterField'>, from: ProjectState, to: ProjectState):
   b.forEach((c, i) => { if (c !== a[i]) modify.push(alter(op.model, `MODIFY COLUMN ${c}`)) })
   if (!was.opts.unique && now.opts.unique) after.push(alter(op.model, `ADD UNIQUE KEY ${q(col)} (${q(col)})`))
   const ix = indexDiff(mysql, from, op.model, to, op.model)
-  return [...before, ...ix.drop, ...modify, ...after, ...ix.create]
+  // an fk needs an index on its column; once `index: true` exists mysql may have dropped its own one,
+  // so DROP INDEX is refused while the fk stands: lift the fk around it (re-adding recreates its index)
+  const fk = wasSpec.kind === 'fk' && was.opts.index && !now.opts.index ? fks(to, op.model, op.model, op.name)[0] : undefined
+  return [
+    ...(fk ? [alter(op.model, `DROP FOREIGN KEY ${q(fkName(op.model, fk.col))}`)] : []),
+    ...before, ...ix.drop, ...modify, ...after, ...ix.create,
+    ...(fk ? [alter(op.model, `ADD ${fk.ddl}`)] : []),
+  ]
 }
+
+// mysql caps identifiers at 64 chars: a longer index name (<model>_<field>_idx) is cut and suffixed
+// with a hash of the full name — stable, so a later DROP INDEX finds it
+const fit = (name: string) => name.length <= 64 ? name : `${name.slice(0, 55)}_${createHash('sha1').update(name).digest('hex').slice(0, 8)}`
 
 function addField(op: Op<'addField'>, from: ProjectState, to: ProjectState): Statement[] {
   const o = op.field.opts
@@ -77,7 +89,8 @@ export const mysql: Dialect = {
       return { ...s, sql: `${s.sql} DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin` }
     }
     if (node.t === 'insert' && !node.cols.length) return raw(`INSERT INTO ${q(node.into)} () VALUES ()`)
-    if (node.t === 'dropIndex') return raw(`DROP INDEX ${q(node.name)}${node.table ? ` ON ${q(node.table)}` : ''}`)
+    if (node.t === 'dropIndex') return raw(`DROP INDEX ${q(fit(node.name))}${node.table ? ` ON ${q(node.table)}` : ''}`)
+    if (node.t === 'createIndex') return renderNode({ ...node, name: fit(node.name) }, mysql)
     return renderNode(node, mysql)
   },
   lowerFn: 'lower',
@@ -86,10 +99,10 @@ export const mysql: Dialect = {
   bool: ['0', '1'],
   nullsSmallest: true,
   insertReturning: false,
-  // backslash is an escape in a mysql string literal; TEXT / JSON defaults must be an expression
+  // backslash is an escape in a mysql string literal; LONGTEXT / JSON defaults must be an expression
   literal(v, type) {
     const s = typeof v === 'string' ? `'${v.replace(/\\/g, '\\\\').replace(/'/g, "''")}'` : ddlLiteral(v)
-    return /^(TEXT|JSON)$/.test(type) ? `(${s})` : s
+    return /^(LONGTEXT|JSON)$/.test(type) ? `(${s})` : s
   },
   renderOperation(op, from, to) {
     switch (op.kind) {
