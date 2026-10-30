@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs'
-import { createRequire, registerHooks } from 'node:module'
+import { registerHooks } from 'node:module'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { z } from 'zod'
@@ -29,15 +29,15 @@ export function setLiveManifest(m: ActionManifest | undefined): void { g[LIVE] =
 // Imports an app module. App TypeScript (any .ts/.mts outside node_modules, so also what apps/ import) goes
 // through esbuild: Node's own type stripping rejects decorator syntax (`@action`) and enums.
 export async function importApp(file: string): Promise<Record<string, unknown>> {
-  if (TS.test(file)) tsHooks()
+  if (TS.test(file)) await (hooked ??= tsHooks())
   return import(pathToFileURL(file).href)
 }
 const TS = /\.m?ts$/
-let hooked = false
-function tsHooks(): void {
-  if (hooked) return
+let hooked: Promise<void> | undefined
+async function tsHooks(): Promise<void> {
   if (typeof registerHooks !== 'function') throw new Error(`loading TypeScript app modules needs Node >= 22.15 (this is ${process.version}); or compile apps/ to .js`)
-  const { transformSync } = createRequire(import.meta.url)('esbuild') as typeof import('esbuild')
+  // hidden from bundlers: Next bundles warp into page chunks and must not follow esbuild's native binary
+  const { transformSync } = (await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'esbuild')) as typeof import('esbuild')
   registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith('file:') || url.includes('/node_modules/') || !TS.test(new URL(url).pathname)) return nextLoad(url, context)
@@ -46,7 +46,6 @@ function tsHooks(): void {
       return { format: 'module', source: code, shortCircuit: true }
     },
   })
-  hooked = true
 }
 
 // Bare name here (or already `<app>.<name>`); the manifest rewrites id to `${app}.${name}` on register.

@@ -43,15 +43,27 @@ interface ActionOpts { rules?: ActionRules; permissions?: Permission[] }
 const decorated = new WeakMap<Function, { schema: z.ZodType; opts: ActionOpts }>()
 
 // TS 5 standard method decorator: registers the method as `<app>.<methodName>`, `this` = view.
+// Next's SWC compiles page bundles without TC39 decorators, so the same call also accepts the 2018-09
+// element descriptor (Next's default) and the legacy (prototype, key, descriptor) of experimentalDecorators.
 export function action<S extends z.ZodType>(schema: S, opts: ActionOpts = {}) {
   return <This, F extends (this: This, params: z.infer<S>, ctx: ViewCtx) => Promise<unknown>>(
-    method: F, context: ClassMethodDecoratorContext<This, F>,
+    method: F, context: ClassMethodDecoratorContext<This, F>, legacy?: PropertyDescriptor,
   ): void => {
-    if (context.static || context.private || typeof context.name !== 'string') {
-      throw new Error(`@action ${String(context.name)}: needs a public, non-static, string-named method`)
-    }
-    decorated.set(method, { schema, opts })
+    const [fn, name, ok] = decoratorCall(method, context, legacy)
+    if (!ok || typeof name !== 'string' || typeof fn !== 'function') throw new Error(`@action ${String(name)}: needs a public, non-static, string-named method`)
+    decorated.set(fn, { schema, opts })
   }
+}
+
+type Element = { kind: string; key: unknown; placement: string; descriptor: PropertyDescriptor }
+function decoratorCall(a: unknown, b: unknown, c: unknown): [fn: unknown, name: unknown, ok: boolean] {
+  if (b === undefined && a && typeof a === 'object' && 'descriptor' in a) {             // 2018-09
+    const el = a as Element
+    return [el.descriptor.value, el.key, el.kind === 'method' && el.placement === 'prototype']
+  }
+  if (typeof a !== 'function') return [(c as PropertyDescriptor | undefined)?.value, b, true]   // legacy: a = prototype
+  const ctx = b as ClassMethodDecoratorContext                                            // TC39
+  return [a, ctx.name, !ctx.static && !ctx.private]
 }
 
 // ---- lookups ------------------------------------------------------------------------------------
