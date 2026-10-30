@@ -55,13 +55,25 @@ export class RateLimiter {
 }
 
 // #20: one IPv6 client usually owns a whole /64, so per-address buckets would let it rotate freely;
-// IPv6 is keyed by its /64 prefix (any spelling), IPv4 per address.
+// IPv6 is keyed by its /64 prefix (any spelling), IPv4 per address. Every IPv4-mapped form
+// (::ffff:a.b.c.d, ::ffff:0102:0304, uncompressed too) is that IPv4 address, so one client has one key.
+// ponytail: NAT64 (64:ff9b::/96) stays an IPv6 /64 — every IPv4 client behind one NAT64 gateway shares a
+// bucket; unmap it too if a deployment sits behind NAT64.
 export function ipKey(ip: string): string {
   if (!isIPv6(ip)) return ip
-  const [head, tail = ''] = ip.toLowerCase().split('::')
+  const g = groups(ip.toLowerCase())
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return [g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255].join('.')
+  return `${g.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`
+}
+
+// the 8 16-bit groups of a valid IPv6 address (a dotted IPv4 tail is two groups)
+function groups(ip: string): number[] {
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
+  const v6 = dotted ? ip.slice(0, dotted.index) + [(+dotted[1]! << 8) | +dotted[2]!, (+dotted[3]! << 8) | +dotted[4]!].map((x) => x.toString(16)).join(':') : ip
+  const [head, tail] = v6.split('::')
   const h = head ? head.split(':') : [], t = tail ? tail.split(':') : []
-  const full = ip.includes('::') ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h
-  return `${full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`
+  const all = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
+  return all.map((x) => parseInt(x, 16))
 }
 
 // Boot-time validation (manifest rules and settings defaults): a 0 limit or window would deny forever / divide by 0.
