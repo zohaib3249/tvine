@@ -8,6 +8,7 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
 import { openConn } from './data/db.js'
 import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import { mcpEnabled } from './transport/mcp.js'
 
@@ -19,7 +20,7 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
                                 --api-only: no frontend (Next runs separately with TVINE_API_URL)
   dev [--port 3000]             runserver: in-process next dev (needs next installed)
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
-  check                         settings + actions + migrations gate (exit 1 on problems)
+  check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
   migrate [--check] [--plan] [--fake]
@@ -120,6 +121,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         return undefined
       }
       case 'check': {
+        const bad = await boundaryCheck(dirname(apps))
+        if (bad.length) { io.err(boundaryReport(bad)); io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM`); return 1 }
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.close()
         const url = srv.ctx.settings.db.url
