@@ -4,8 +4,9 @@ import type { ActionManifest } from './actions.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
 import { ev, isTerminal } from './events.js'
+import { compose, Hooks } from './middleware.js'
 import { SessionStore } from './session.js'
-import type { ActionCtx, ActionDef, ChannelLayer, Command, Event, Request, Session, Settings, Sid, Snapshot } from './types.js'
+import type { ActionCtx, ActionDef, ChannelLayer, Command, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { hashParams, IdempotencyCache } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
@@ -25,6 +26,8 @@ export interface ServerCtx {
   limiter: RateLimiter
   idempotency: IdempotencyCache
   log: Log
+  hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session', fn)
+  appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
 }
 
 const errStr = (e: unknown) => (e instanceof Error ? e.stack ?? e.message : String(e))
@@ -37,16 +40,25 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   const log: Log = o.log ?? (settings.logging === 'none' ? () => {} : (level, msg, data) => console[level](JSON.stringify({ level, msg, ...data })))
   const ctx: ServerCtx = {
     ...o, channels, log,
+    hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
+    appMiddleware: o.appMiddleware ?? new Map(),
     sessions: o.sessions ?? new SessionStore(settings.session, { channels }),
     limiter: o.limiter ?? new RateLimiter(settings.limits.rate),
     idempotency: o.idempotency ?? new IdempotencyCache(settings.session.ttlMs),
   }
+  ctx.sessions.watch((sid, kind) => ctx.hooks.emit('session', { sid, kind }))
   setOnCommitErrorHandler((e) => log('error', 'onCommit hook failed', { error: errStr(e) }))
   return ctx
 }
 
 export async function* dispatch(cmd: Command, server: ServerCtx, request: Request): AsyncIterable<Event> {
-  yield* await run(cmd, server, request)
+  const t0 = performance.now()
+  const events = await run(cmd, server, request)
+  // hooks see settled outcomes only: an ok was committed, an err committed nothing
+  const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+  if (err) server.hooks.emit('error', { cmd, code: err.code, message: err.message })
+  else server.hooks.emit('command', { cmd, events, ms: Math.round(performance.now() - t0) })
+  yield* events
 }
 
 // Sync edge: stops at the first terminal event (core-events.md ordering rule).
@@ -220,27 +232,43 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (cmd.rev !== undefined && cmd.rev !== session.rev) {
       return [ev.err('stale_rev', `rev ${cmd.rev} is stale (current ${session.rev})`, { snapshot: await snap(server, request, sid) })]
     }
-    // 7. validate: bind-only keys may not arrive as params; signed bind values win; class views validate themselves
-    const smuggled = bindKeys.find((k) => Object.hasOwn(cmd.params ?? {}, k))
-    if (smuggled) return [ev.err('invalid_param', `${smuggled} comes from the signed bind, not from params`, { field: smuggled })]
-    const input = { ...cmd.params, ...bound }
-    const params = def.rawParams ? input : validate(def.schema, input)
-    // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
-    const out = await execute(def, params, ctx, server, hold)
-    // 9. committed: apply staged session data, bump rev, flush channel events
-    try {
-      session.data = staged.data
-      if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
-      for (const [g, e] of outbox) server.channels.group(g).send(e)
-    } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
-    // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
-    let events: Event[]
-    if ('goto' in out) events = [ev.ok(def.id), ev.goto(out.goto)]
-    else {
-      const s = await snap(server, request, sid)
-      events = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))]
+    // 6.5 middleware (global, then the action's app) wraps steps 7–10; it may short-circuit or reshape events
+    let committed: Event[] | undefined
+    const inner = async function* (): AsyncIterable<Event> {
+      // 7. validate: bind-only keys may not arrive as params; signed bind values win; class views validate themselves
+      const smuggled = bindKeys.find((k) => Object.hasOwn(cmd.params ?? {}, k))
+      if (smuggled) { yield ev.err('invalid_param', `${smuggled} comes from the signed bind, not from params`, { field: smuggled }); return }
+      const input = { ...cmd.params, ...bound }
+      const params = def.rawParams ? input : validate(def.schema, input)
+      // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
+      const out = await execute(def, params, ctx, server, hold)
+      // 9. committed: apply staged session data, bump rev, flush channel events
+      try {
+        session.data = staged.data
+        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
+        for (const [g, e] of outbox) server.channels.group(g).send(e)
+      } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
+      // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
+      if ('goto' in out) committed = [ev.ok(def.id), ev.goto(out.goto)]
+      else {
+        const s = await snap(server, request, sid)
+        committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))]
+      }
+      yield* committed
     }
-    if (cmd.cmdId) server.idempotency.remember(sid, cmd.cmdId, hash, events)
+    const chain = [...settings.middleware, ...(server.appMiddleware.get(def.id.slice(0, def.id.indexOf('.'))) ?? [])]
+    let events: Event[]
+    try {   // drained in full (not collect()), so code after `yield* next()` runs
+      events = []
+      for await (const e of compose(chain, cmd, ctx, inner)) events.push(e)
+    }
+    catch (e) {
+      if (!committed) throw e
+      // committed work is never reported as failed (a retry would run it twice)
+      server.log('error', 'middleware failed after commit', { action: def.id, error: errStr(e) })
+      events = committed
+    }
+    if (committed && cmd.cmdId) server.idempotency.remember(sid, cmd.cmdId, hash, events)
     return events
   } catch (e) {
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]

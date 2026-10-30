@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
 import { ev } from '../core/events.js'
-import { buildRequest, requestId } from '../core/request.js'
+import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Permission, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, type UploadDef } from '../media/index.js'
 import { runPermissions } from '../security/permissions.js'
@@ -91,6 +91,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const ps = key === '/' ? [] : key.split('/').slice(1)
     return dynamics.find((p) => matches(p, ps))
   }
+  const canonical = (raw: string, parsed: string) => { try { return matchRoute(routeOf(raw, parsed)) } catch { return undefined } }
 
   async function guard(key: string, request: Request, session: Session | undefined): Promise<void> {
     const perms: Permission[] = guards.filter((g) => g.re.test(key)).flatMap((g) => g.permissions)
@@ -140,7 +141,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   async function handle(req: IncomingMessage, res: ServerResponse, forced: Format | undefined) {
     const t0 = performance.now()
-    const id = requestId({ get: (n) => { const v = req.headers[n.toLowerCase()]; return Array.isArray(v) ? v.join(', ') : v ?? null } })
+    const hdr = { get: (n: string) => { const v = req.headers[n.toLowerCase()]; return Array.isArray(v) ? v.join(', ') : v ?? null } }
+    const id = requestId(hdr)
     res.setHeader('x-request-id', id)
     res.setHeader('vary', `${settings.header}, accept`)
     const u = new URL(req.url ?? '/', BASE)
@@ -168,15 +170,29 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' } }))
       return status
     }
-    let status: number
+    let status = 0
     try {
       format = pickFormat(req, u.searchParams, forced)
-      const key = routeOf((req.url ?? '/').split('?')[0]!, u.pathname)
+      const raw = (req.url ?? '/').split('?')[0]!
+      // /shop/ → 308 /shop, only when the stripped path is itself canonical and routed (never //x: no open redirect)
+      if (raw.length > 1 && raw.endsWith('/')) {
+        const to = canonical(raw.slice(0, -1), u.pathname.slice(0, -1))
+        if (to === undefined) throw new Refuse(404, 'domain', 'not found')
+        res.writeHead(308, { location: raw.slice(0, -1) + u.search, 'cache-control': 'private, no-store' })
+        res.end()
+        status = 308
+        return
+      }
+      const key = routeOf(raw, u.pathname)
       const route = matchRoute(key)
       if (!route) throw new Refuse(404, 'domain', 'not found: this page has no agent view')
+      const isGet = req.method === 'GET'
+      if (isGet) {   // before auth and guards: a refused GET costs nothing
+        const rl = server.limiter.check({ ip: clientIp(hdr.get('x-forwarded-for'), req.socket.remoteAddress ?? '', settings.trustProxy) })
+        if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
+      }
       request = await buildRequest({ req, route, isAgent: true }, settings)
       request.id = id
-      const isGet = req.method === 'GET'
       const sidKey = (isGet ? u.searchParams.get('sid') : null) ?? (req.headers['x-tvine-sid'] as string | undefined)
       const cookie = cookieOf(req)
       const bySid = sidKey ? sessions.peek({ sid: sidKey }) : undefined
@@ -185,8 +201,6 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
       await guard(key, request, known)
       if (isGet) {
-        const rl = server.limiter.check({ ip: request.ip })
-        if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
         status = await agentGet(req, res, request, u, format, ctx, (c) => { ctx = c }, reply)
       } else {
         const cmd = await readCommand(req, request, sidKey ?? undefined, upload)
@@ -212,8 +226,10 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
         status = reply(500, [ev.err('internal', 'internal error')])
       }
-    } finally { await cleanup() }
-    log({ t: new Date().toISOString(), id, sid: sidHash(sid), route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
+    } finally {
+      await cleanup()
+      log({ t: new Date().toISOString(), id, sid: sidHash(sid), route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
+    }
   }
 
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
