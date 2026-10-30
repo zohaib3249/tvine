@@ -70,7 +70,9 @@ export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxByte
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
   const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage ?? new DiskStorage('./media', '/media') }
   const rules: UploadRules = { rate: opts.rate ?? { limit: 5, windowMs: 60_000 }, ...(opts.permissions && { permissions: opts.permissions }) }
-  const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), (p): Promise<UploadedFile> => receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file' }), rules)
+  const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
+    // multipart: transport-http already streamed the file into storage (request.files is transport-only)
+    ctx.request.files.find((f) => f.field === 'file') ?? receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file' }), rules)
   return Object.assign(def, { upload }) as UploadDef
 }
 
