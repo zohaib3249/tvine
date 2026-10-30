@@ -7,12 +7,12 @@ import { typeInto } from './typing.js'
 // All text goes through textContent and is composed here from verb + declared label: never page/agent HTML.
 
 // Theme = the CSS custom properties below (they inherit into the shadow root; nothing else does).
-// The pill's text/button colors are fixed and its theme color sits on an opaque base: a theme can't make Stop invisible.
+// The pill's font, z-index, text/button colors are fixed and its theme color sits on an opaque base: a theme can't make Stop invisible.
 const CSS = `
 :host{all:initial!important;display:block!important;position:fixed!important;inset:0!important;width:auto!important;height:auto!important;
   margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;
   pointer-events:none!important;visibility:visible!important;opacity:1!important;transform:none!important;clip-path:none!important;filter:none!important;
-  z-index:var(--tvine-agent-z,2147483000)!important;
+  z-index:2147483647!important;
   --c:var(--tvine-agent-color,#7c3aed);--fg:var(--tvine-agent-contrast,#fff);--d:var(--tvine-agent-danger-color,#dc2626);
   font:var(--tvine-agent-font,500 12px/1.2 system-ui)}
 [hidden]{display:none!important}
@@ -22,10 +22,10 @@ const CSS = `
 .cursor{position:fixed;left:0;top:0;width:var(--tvine-agent-cursor-size,20px);height:var(--tvine-agent-cursor-size,20px)}
 .cursor svg{width:100%;height:100%;fill:var(--c);stroke:var(--fg);stroke-width:1.5}
 .reduced *{transition:none!important}
-.pill{position:fixed;right:16px;bottom:16px;display:flex!important;align-items:center;gap:8px;min-width:160px;min-height:32px;padding:6px 8px 6px 12px;
+.pill{font:600 12px/1.2 system-ui!important;z-index:2147483647!important;position:fixed;right:16px;bottom:16px;display:flex!important;align-items:center;gap:8px;min-width:160px;min-height:32px;padding:6px 8px 6px 12px;
   border-radius:999px;background:linear-gradient(var(--c),var(--c)),#7c3aed;color:#fff;text-shadow:0 0 2px #000;outline:2px solid #fff;
   opacity:1!important;visibility:visible!important;pointer-events:auto!important;box-shadow:0 2px 8px #0008}
-.pill button{all:unset;cursor:pointer;padding:4px 10px;border-radius:999px;background:#fff;color:#111;text-shadow:none;font-weight:600}
+.pill button{all:unset;font:600 12px/1.2 system-ui!important;cursor:pointer;padding:4px 10px;border-radius:999px;background:#fff;color:#111;text-shadow:none;font-weight:600}
 `
 const CURSOR = '<svg viewBox="0 0 20 20"><path d="M2 2l6 16 2.5-6.5L17 9z"/></svg>'   // static, runtime-owned
 
@@ -206,8 +206,10 @@ export class Overlay {
 
   // ctx.presence for one step: point / type / say. `say` is reserved: labels come only from the runtime.
   presenceFor(a: Act, signal?: AbortSignal): Presence {
+    // The executor points before click-like controls and the control may point again: once per element per step.
+    let pointed: Element | null = null
     return {
-      point: (el) => this.point(el, a),
+      point: async (el) => { if (el && el === pointed) return; pointed = el; await this.point(el, a) },
       type: async (el, text) => {
         const o = this.opts(a)
         await typeInto(el, String(text), { signal, cps: o?.cps, instant: !o || this.reduced || o.typing === 'instant' })

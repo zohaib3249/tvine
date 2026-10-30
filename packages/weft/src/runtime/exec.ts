@@ -13,7 +13,8 @@ export interface UiStep { target: string; control: string; args?: Record<string,
 export interface UiCommand { steps?: UiStep[]; target?: string; control?: string; args?: Record<string, unknown>; cmdId?: string; rev?: number }
 export interface Touched { id: string; kind: string; label: string; state?: Json }
 export interface UiResult { cmdId: string; rev: number; page: string; steps: UiStepResult[]; touched: Touched[]; notice?: string }
-export interface UiError { code: ErrCode; message: string; reason?: string; field?: string }
+// maybeApplied: the step timed out or was stopped mid-call; it may still have taken effect → re-read, don't retry.
+export interface UiError { code: ErrCode; message: string; reason?: string; field?: string; maybeApplied?: true }
 
 export interface ExecOptions {
   via: CallOptions['via']
@@ -23,7 +24,7 @@ export interface ExecOptions {
   navigate?: CallOptions['navigate']
 }
 
-export const limits = { maxSteps: 20, stepTimeoutMs: 5_000, cmdTimeoutMs: 15_000, keep: 32 }
+export const limits = { maxSteps: 20, stepTimeoutMs: 5_000, cmdTimeoutMs: 15_000, keep: 32, drainMs: 30_000 }
 
 // ---- Stop (security.md §In-browser agents): blocks the executor and the WebMCP tools until Resume.
 // Survives reload for the session (sessionStorage; fallback in-memory).
@@ -50,13 +51,20 @@ export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   const hit = seen.get(cmdId)
   if (hit) return hit
   // One command at a time per tab: steps of two commands never interleave.
-  const p = tail.then(() => execute(cmd, cmdId, o))
-  tail = p.then(() => {}, () => {})
+  // A timed-out/stopped step's control keeps running: the next command waits for it (bounded by drainMs).
+  let running: Promise<unknown> = Promise.resolve()
+  const p = tail.then(() => execute(cmd, cmdId, o, (c) => { running = c }))
+  tail = p.then(() => drain(running), () => drain(running))
   seen.set(cmdId, p)
   // Blocked before anything ran (Stop): not a result worth replaying after Resume.
   p.then((r) => { if (r.error?.reason === 'stopped' && !r.result.steps.some((x) => x.ok)) seen.delete(cmdId) })
   if (seen.size > limits.keep) seen.delete(seen.keys().next().value!)
   return p
+}
+
+function drain(c: Promise<unknown>): Promise<void> {
+  let t: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([c.then(() => {}, () => {}), new Promise<void>((r) => { t = setTimeout(r, limits.drainMs) })]).finally(() => clearTimeout(t))
 }
 
 function newCmdId(): string {
@@ -66,7 +74,7 @@ function newCmdId(): string {
 
 const page = () => { const l = (globalThis as any).location; return l ? l.pathname + l.search : '' }
 
-async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions): Promise<Out> {
+async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (call: Promise<unknown>) => void): Promise<Out> {
   const reg = getRegistry()
   const steps: UiStepResult[] = [], touched = new Map<string, Entry>()
   const done = (error?: UiError): Out => ({
@@ -111,14 +119,15 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions): Promise<O
         via: o.via, cmdId, step: i, signal, presence, agent: o.agent, navigate: o.navigate,
         ...(o.run && { run: (h, p) => o.run!(h, p ?? {}, `${cmdId}.${i}`) }),
       })
+      hold(call)
       const result = await race(call, Math.min(limits.stepTimeoutMs, deadline - Date.now()), signal)
       const now = reg.get(target)
       const s = now && agentState(now.spec)
       steps.push({ i, target, ok: true, ...(s !== undefined && { state: s }), ...(result !== undefined && { result }) })
     } catch (err) {
-      if (signal.aborted) return fail(stopped())
+      if (signal.aborted) return fail({ ...stopped(), maybeApplied: true })
       if (err instanceof WeftError) return fail({ code: err.code, message: err.message, ...(err.reason && { reason: err.reason }), ...(err.field && { field: err.field }) })
-      if (err === TIMEOUT) return fail({ code: 'domain', reason: 'timeout', message: 'step timed out' })
+      if (err === TIMEOUT) return fail({ code: 'domain', reason: 'timeout', message: 'step timed out; it may still have taken effect: read_page before retrying', maybeApplied: true })
       return fail({ code: 'internal', message: err instanceof Error ? err.message : String(err) })
     } finally {
       end()

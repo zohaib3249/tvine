@@ -2,6 +2,7 @@
 import { disclose, expand, toTree, type WidgetFrag } from '@tvine/warp/shape'
 import type { ActionHandle, ActionOutcome } from '../widget/types.js'
 import { getOverlay } from '../presence/overlay.js'
+import { autoExcluded } from '../jsx/AutoEl.js'
 import { describeWidget } from './fragment.js'
 import { getRegistry, type RegistryNode } from './registry.client.js'
 import { isStopped, runUi, setStopped, type UiCommand } from './exec.js'
@@ -78,7 +79,7 @@ export const DESCRIPTIONS = {
   read_page: 'Read the current page as a structured snapshot (JSON): widgets with ids, state and controls. Call this first, and again after acting. view: auto|L0|L1|full.',
   expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
-  do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Call read_page first for actions and params. Retries with the same cmdId are safe.',
+  do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Page-level agent vetoes do not apply here; server permissions do. Call read_page first for actions and params. Retries with the same cmdId are safe.',
 } as const
 
 // The in-tab snapshot: the registry's widgets through the same shaper Warp uses (@tvine/warp/shape).
@@ -86,6 +87,8 @@ function tree() {
   const widgets: WidgetFrag[] = []
   const walk = (n: RegistryNode, p: string) => {
     for (const c of n.children) {
+      // Auto (plain-HTML) entries that are inert / hidden / aria-hidden / disabled: left out with their subtree.
+      if (c.spec && autoExcluded(c.spec)) continue
       if (c.spec) {
         const d = describeWidget(c.id, p, c.spec)
         // Controls bound to an agent-off action are not shown (the executor refuses them alike).

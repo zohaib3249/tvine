@@ -86,7 +86,7 @@ export interface Control<A extends Record<string, unknown> = Record<string, unkn
 
 export type UiStepResult =
   | { i: number; target: string; ok: true; state?: Json; result?: Json }
-  | { i: number; target: string; ok: false; code: ErrCode; reason?: string; field?: string; message: string }
+  | { i: number; target: string; ok: false; code: ErrCode; reason?: string; field?: string; message: string; maybeApplied?: true }
 
 export interface AgentActionEvent {
   target: string; control: string; args: Readonly<Record<string, unknown>>; via: ControlCtx['via']; cmdId: string
