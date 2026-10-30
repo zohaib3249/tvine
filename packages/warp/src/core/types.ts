@@ -102,7 +102,15 @@ export interface ActionCtx {
 
 // Permission / Middleware: conventions/permissions.md, conventions/middleware-hooks.md.
 // Declared here (not imported) because core/ may not depend on security/ or middleware modules.
-export type Permission = (ctx: ActionCtx) => boolean | Promise<boolean>
+// security/permissions will re-export both.
+export interface PermissionCtx {
+  sid: Sid; session: Session
+  action?: ActionId                  // absent on route guards
+  route: string
+  auth?: unknown                     // RESERVED v2 (claims from Command.auth)
+  ip: string
+}
+export type Permission = (ctx: PermissionCtx) => boolean | Promise<boolean>
 export type Middleware = (cmd: Command, ctx: ActionCtx,
   next: () => AsyncIterable<Event>) => AsyncIterable<Event>
 
