@@ -11,7 +11,7 @@ export class RegistryError extends Error {
 }
 
 type Body = Omit<Snapshot, 'sid' | 'rev'>
-const TVINE = /\btype\s*=\s*(["'])text\/tvine\1/i
+const TVINE = /(?<=^|[\s/])type\s*=\s*(["'])text\/tvine\1/i
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v: unknown): v is string => typeof v === 'string'
 
@@ -27,10 +27,10 @@ export function extract(html: string, route = '?'): Body & { personal: boolean }
   const nodes = new Map<string, any>(), links = new Map<string, any>()
   let personal = false
   for (let i = 0; (i = low.indexOf('<script', i)) >= 0;) {
-    const gt = html.indexOf('>', i)
-    if (gt < 0) break
     const next = low[i + 7]
-    if (next !== undefined && !/[\s>/]/.test(next)) { i += 7; continue } // e.g. <scripts
+    if (next !== undefined && !/[\s>/]/.test(next)) { i += 7; continue } // e.g. <scripts: cheap check before any '>' search
+    const gt = html.indexOf('>', i)
+    if (gt < 0) break // no '>' anywhere after here, so no later tag can close either
     const close = low.indexOf('</script', gt)
     if (close < 0) break
     const attrs = html.slice(i + 7, gt)
