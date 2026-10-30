@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TvineEvent } from '../types.js'
 
 const DECAY_MS = 30_000
@@ -16,15 +16,17 @@ export function useTvineChannel(opts: { enabled?: boolean; onUpdate?: () => void
   const [agentActive, setAgentActive] = useState(false)
   const [lastEvent, setLastEvent] = useState<TvineEvent>()
   const cb = useRef(opts.onUpdate)
-  cb.current = opts.onUpdate
+  useLayoutEffect(() => { cb.current = opts.onUpdate })
 
   useEffect(() => {
-    if (!enabled) { setStatus('off'); return }
+    if (!enabled) { setStatus('off'); setAgentActive(false); return }
     setStatus('connecting')
     const es = new EventSource('/tvine/channel')
     let decay: ReturnType<typeof setTimeout> | undefined
     const parse = (m: { data: string }): TvineEvent | undefined => { try { return JSON.parse(m.data) } catch { return undefined } }
     es.addEventListener('open', () => setStatus('live'))
+    // 401/403/429 arrive as plain JSON before any frame: the browser fires `error` and goes CLOSED, never retrying.
+    es.addEventListener('error', () => setStatus(es.readyState === EventSource.CLOSED ? 'expired' : 'connecting'))
     es.addEventListener('update', (m) => {
       const e = parse(m as MessageEvent); if (!e) return
       setLastEvent(e)
