@@ -13,6 +13,10 @@
     "./migrations": {
       "types": "./dist/data/migrations.d.ts",
       "import": "./dist/data/migrations.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
     }
   },
   "scripts": {

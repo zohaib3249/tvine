@@ -14,6 +14,7 @@ const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), ex
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
   start [--port 3000]           serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s)
+  dev [--port 3000]             runserver: in-process next dev (needs next installed)
   check                         settings + actions + migrations gate (exit 1 on problems)
   routes                        print the action manifest
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
@@ -26,6 +27,7 @@ const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
   start: { options: { port: str }, args: [0, 0] },
+  dev: { options: { port: str }, args: [0, 0] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
@@ -73,11 +75,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
-      case 'start': {
+      case 'start':
+      case 'dev': {
         const port = o.port === undefined ? Number(process.env.PORT ?? 3000) : Number(o.port)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
-        const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
-        await srv.listen(port)
+        const dev = cmd === 'dev'
+        if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
+        const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
+        await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)

@@ -19,7 +19,10 @@ const hideSid = (e: Event): Event =>
   e.kind === 'snapshot' ? { ...e, snapshot: { ...e.snapshot, sid: '' } }
   : e.kind === 'err' && e.snapshot ? { ...e, snapshot: { ...e.snapshot, sid: '' } } : e
 
-export interface HttpOptions { routes: RouteInfo[] }   // the route table (Next app routes); unknown paths → 404
+export interface HttpOptions {
+  routes: RouteInfo[]                               // the route table (Next app routes); unknown paths → 404
+  match?: (path: string) => string | undefined      // a ready matcher instead (shared with MCP; live in dev)
+}
 
 // One header lookup + one accept scan for human traffic.
 export function isAgent(req: IncomingMessage, settings: Settings): boolean {
@@ -56,7 +59,7 @@ function tooDeep(v: unknown, max = 64): boolean {
 export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings, sessions } = server
   const cookieName = settings.session.cookieName
-  const match = routeMatcher(opts.routes)
+  const match = opts.match ?? routeMatcher(opts.routes)
   const allowed = guardCheck(settings)
 
   // Only canonical paths: the raw path must already be what URL parsing (and so request.path, the
