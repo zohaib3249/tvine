@@ -11,7 +11,7 @@ const API = Symbol.for('tvine.api')
 type InProc = (call: { id: string; params: unknown; bind?: string; cmdId?: string }) => Promise<ApiResult>
 
 interface NextHeaders { get(name: string): string | null }
-interface NextCookies { get(name: string): { value: string } | undefined; set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax'; secure: boolean; path: string }): unknown }
+interface NextCookies { get(name: string): { value: string } | undefined; set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax'; secure: boolean; path: string; maxAge: number }): unknown }
 export interface NextAccess { headers(): Promise<NextHeaders>; cookies(): Promise<NextCookies> }
 
 const nextAccess = async (): Promise<NextAccess> => {
@@ -26,6 +26,14 @@ export function signForward(p: Record<string, unknown>, secret: string, now = Da
   return `${body}.${createHmac('sha256', secret).update(`tvine-forward.${body}`).digest('base64url')}`
 }
 
+// The entry `hops` from the right, as Warp's clientIp walks X-Forwarded-For; never further left.
+function trusted(v: string | null): string | undefined {
+  const hops = Number(process.env.TVINE_TRUST_PROXY ?? 0)
+  if (!(hops > 0) || !v) return undefined
+  const parts = v.split(',').map((s) => s.trim()).filter(Boolean)
+  return parts[parts.length - hops]
+}
+
 export function forwardTransport(o: { url: string; secret: string; cookieName?: string; next?: () => Promise<NextAccess> }): Transport {
   const name = o.cookieName ?? 'tvine_s'
   return async (id, params, opts?: ApiOpts) => {
@@ -34,8 +42,9 @@ export function forwardTransport(o: { url: string; secret: string; cookieName?: 
     const action = h.get('next-action') !== null
     let path = '/'
     try { const ref = h.get('referer'); if (action && ref) path = new URL(ref).pathname } catch { /* '/' */ }
-    // ponytail: rightmost X-Forwarded-For as Next sets it; a proxy in front of Next needs a trustProxy-like knob
-    const ip = (h.get('x-forwarded-for') ?? '').split(',').map((s) => s.trim()).filter(Boolean).at(-1) ?? 'unknown'
+    // X-Forwarded-* only through TVINE_TRUST_PROXY trusted hops (Warp's clientIp rule); else 'unknown' (one shared
+    // rate-limit key). ponytail: headers() has no socket ip; set TVINE_TRUST_PROXY behind a proxy for per-client keys
+    const ip = trusted(h.get('x-forwarded-for')) ?? 'unknown'
     const as = h.get('x-tvine-session') ?? undefined   // an agent's snapshot render; the API server checks its nonce
     const fwd = signForward({ cookie: jar.get(name)?.value, ...(as && { as }), ip, agent: false, path, mode: action ? 'action' : 'render' }, o.secret)
     try {
@@ -45,7 +54,7 @@ export function forwardTransport(o: { url: string; secret: string; cookieName?: 
         body: JSON.stringify({ params, bind: opts?.bind, cmdId: opts?.cmdId }),
       })
       const minted = r.headers.get('x-tvine-cookie')
-      if (minted) jar.set(name, minted, { httpOnly: true, sameSite: 'lax', secure: h.get('x-forwarded-proto') === 'https', path: '/' })
+      if (minted) jar.set(name, minted, { httpOnly: true, sameSite: 'lax', secure: trusted(h.get('x-forwarded-proto')) === 'https', path: '/', maxAge: Number(process.env.TVINE_SESSION_TTL_S ?? 86_400) })
       return (await r.json()) as ApiResult
     } catch (e) { return network(e) }
   }

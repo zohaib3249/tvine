@@ -89,35 +89,36 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   }
   let session = sessions.peek({ sid: who.sid, cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
-  let throwaway = false
+  let ephemeral = false
   if (session && who.sid !== undefined) {
     // An agent's snapshot render runs INSIDE that agent's command (dispatch step 10), which holds the sid's
-    // queue: dispatching on the same sid would wait for itself. Reads run on a copy of its session instead.
-    // ponytail: copy per call; a read-only dispatch entry that skips the queue would avoid it (dispatch.ts)
-    const copy = sessions.create()
-    copy.data = structuredClone(session.data)
-    session = copy
-    throwaway = true
+    // queue: dispatching on the same sid would wait for itself. Reads run on an ephemeral copy instead.
+    session = sessions.ephemeral(copyData(session.data))
+    ephemeral = true
   } else if (!session) {
     if (who.sid !== undefined) return fail('expired_sid', 'session expired')   // an agent render whose session is gone
     if (crossOrigin(who.request, settings)) return FORBIDDEN
     const rl = server.limiter.check({ ip: who.request.ip })
     if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
-    if (!read && !who.mint) return fail('expired_sid', 'this action needs a session')
-    session = sessions.create()
-    if (read) throwaway = true
-    else who.mint!(session)
+    if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
+    else if (!who.mint) return fail('expired_sid', 'this action needs a session')
+    else { session = sessions.create(); who.mint(session) }
   }
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
-    ...(call.bind !== undefined && { bind: call.bind }), ...(call.cmdId !== undefined && { cmdId: call.cmdId }),
+    ...(call.bind !== undefined && { bind: call.bind }),
+    ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
     return toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false })))
   } finally {
-    // ponytail: marked expired, swept within ttl/4; add SessionStore.drop() when anonymous read volume matters
-    if (throwaway) session.lastSeen = 0
+    if (ephemeral) sessions.dropEphemeral(session.sid)
   }
+}
+
+// The agent's data for a read-only copy: a deep clone, or (a value structuredClone refuses) a shallow one.
+function copyData(d: Map<string, unknown>): Map<string, unknown> {
+  try { return structuredClone(d) } catch { return new Map(d) }
 }
 
 // ---- POST /tvine/api/<id> -------------------------------------------------------------------

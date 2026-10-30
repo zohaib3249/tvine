@@ -70,7 +70,8 @@ export async function boundaryCheck(root: string): Promise<Violation[]> {
       for (const imp of meta.inputs[cur]?.imports ?? []) {
         if (imp.external) {
           if (imp.path === '@tvine/warp') {
-            const bad = warpNames(join(root, cur)).filter((n) => n === '*' || DATA_API.has(n))
+            // a dynamic import()/require() gets the whole module: flagged like `import *`
+            const bad = imp.kind === 'import-statement' ? warpNames(join(root, cur)).filter((n) => n === '*' || DATA_API.has(n)) : [`${imp.kind}`]
             if (bad.length) { found = { file: start, chain: chainTo(cur), what: `@tvine/warp data API (${bad.join(', ')})` }; break }
           } else if (imp.path.startsWith('@tvine/warp/migrations')) { found = { file: start, chain: chainTo(cur), what: imp.path }; break }
           continue
