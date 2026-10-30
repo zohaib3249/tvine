@@ -231,7 +231,15 @@ export function mysqlDriver(url: string, opts: PoolOpts): Driver & { stats(): Po
         throw e
       }
     },
-    session: fn => one(c => fn(onMyConn(c))),
+    // pinned: its transaction() is a real START TRANSACTION / COMMIT on that connection (nested ones join it)
+    session: fn => one(c => fn({
+      ...onMyConn(c),
+      async transaction(f) {
+        await c.query('START TRANSACTION')
+        try { const r = await f(onMyConn(c)); await c.query('COMMIT'); return r }
+        catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e }
+      },
+    })),
     // ponytail: size / idle read mysql2's pool internals (no public stats); revisit on a mysql2 major
     stats: () => {
       const p = (ready as unknown as { pool?: { _allConnections: { length: number }; _freeConnections: { length: number } } })?.pool

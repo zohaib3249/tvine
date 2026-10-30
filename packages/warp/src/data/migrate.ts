@@ -327,9 +327,21 @@ const MYSQL_LOCK_WAIT_S = 600
 async function mysqlLocked<R>(conn: Connection, fn: (c: Connection) => Promise<R>): Promise<R> {
   if (!conn.driver.session) return fn(conn)
   return conn.driver.session(async d => {
-    const [row] = await d.query('SELECT GET_LOCK(?, ?) AS ok', ['tvine_migrate', MYSQL_LOCK_WAIT_S])
+    // per database: two apps on one server must not block each other
+    const [{ db }] = await d.query('SELECT DATABASE() AS db', []) as [{ db: string | null }]
+    const name = `tvine_migrate:${db ?? ''}`.slice(0, 64)   // mysql caps lock names at 64 chars
+    const [row] = await d.query('SELECT GET_LOCK(?, ?) AS ok', [name, MYSQL_LOCK_WAIT_S])
     if (Number(row?.ok) !== 1) throw new Error(`another tvine migrate held the lock for ${MYSQL_LOCK_WAIT_S} s; try again when it is done`)
-    try { return await fn({ ...conn, driver: d }) } finally { await d.query('SELECT RELEASE_LOCK(?)', ['tvine_migrate']) }
+    // a connection whose lock could not be released must not go back to the pool: `fatal` makes the
+    // driver destroy it (the session ends, so mysql frees the lock). The migrate error itself always wins.
+    const release = () => d.query('SELECT RELEASE_LOCK(?)', [name]).then(() => true, () => false)
+    let out: R
+    try { out = await fn({ ...conn, driver: d }) } catch (e) {
+      if (!(await release())) throw Object.assign(new Error((e as Error).message, { cause: e }), { fatal: true })
+      throw e
+    }
+    if (!(await release())) throw Object.assign(new Error('migrate finished but its lock could not be released'), { fatal: true })
+    return out
   })
 }
 
