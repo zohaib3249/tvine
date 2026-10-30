@@ -163,7 +163,9 @@ const pagePath = (r: Request) => r.path + (r.query.size ? `?${r.query}` : '')
 // Every snapshot an MCP client sees drops actions disabled for MCP.
 function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
   const off = (id: ActionId) => { const d = server.actions.get(id); return !!d && !mcpEnabled(d, server.settings) }
-  return { ...s, nodes: s.nodes.map((n) => ({ ...n, actions: n.actions.filter((a) => !off(a.id)) })) }
+  const out = { ...s, nodes: s.nodes.map((n) => ({ ...n, actions: n.actions.filter((a) => !off(a.id)) })) }
+  if (s.widgets) out.widgets = s.widgets.map((w) => (w.actions ? { ...w, actions: w.actions.filter((a) => !off(a.id)) } : w))
+  return out
 }
 
 function reply(server: ServerCtx, events: Event[], ctx: Ctx): CallToolResult {
