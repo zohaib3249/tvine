@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import type { z } from 'zod'
 
 // Canonical shared types: docs/design/00-overview.md (+ amendments).
-// Type-only module: no runtime code.
+// Types plus one runtime constant (ANONYMOUS).
 
 export type Sid = string            // 21-char nanoid
 export type Rev = number            // monotonic per-session
@@ -64,6 +64,15 @@ export interface ReadonlyHeaders {
   get(name: string): string | null     // read-only: no set/delete
 }
 
+// request.md: request.user (Django request.user). Always present on Request.
+export interface TvineUser {
+  isAuthenticated: boolean
+  id?: string
+  name?: string
+  claims?: Record<string, unknown>      // whatever the dev's resolver returns
+}
+export const ANONYMOUS: TvineUser = Object.freeze({ isAuthenticated: false })
+
 export interface UploadedFile { field: string; key: string; url: string; type: string; size: number }
 
 export interface Request {
@@ -82,6 +91,7 @@ export interface Request {
     verified?: { directory: string; keyid: string }   // v1.1: Web Bot Auth
   }
   files: UploadedFile[]                 // media uploads (empty unless multipart)
+  user: TvineUser                      // ALWAYS present; anonymous = ANONYMOUS
   raw?: IncomingMessage                 // escape hatch, http transport only
 }
 
@@ -107,6 +117,7 @@ export interface PermissionCtx {
   sid: Sid; session: Session
   action?: ActionId                  // absent on route guards
   route: string
+  user: TvineUser                   // from request.user (always present)
   auth?: unknown                     // RESERVED v2 (claims from Command.auth)
   ip: string
 }
@@ -156,4 +167,5 @@ export interface Settings {
   logging: 'json' | 'pretty' | 'none'
   audit: boolean                    // v1.1
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
+  auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS
 }
