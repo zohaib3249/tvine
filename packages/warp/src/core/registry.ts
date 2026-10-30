@@ -11,23 +11,31 @@ export class RegistryError extends Error {
 }
 
 type Body = Omit<Snapshot, 'sid' | 'rev'>
-const OPEN = '<script type="text/tvine">'
-const REQUIRED = ['page', 'title', 'personal', 'nodes', 'links']
+const SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi
+const TVINE = /\btype\s*=\s*(["'])text\/tvine\1/i
 
-// Last embed block wins (nested layouts). JSON.parse handles `</script` inside strings
-// because the frontend escapes `<` as <.
+// Collects every real <script type="text/tvine"> fragment in document order (incl. streamed
+// Suspense chunks). Text inside other scripts (RSC payload strings) is never parsed. JSON.parse
+// handles `</script` inside strings because the frontend escapes `<` as \u003c.
 export function extract(html: string, route = '?'): Body & { personal: boolean } {
-  const i = html.lastIndexOf(OPEN)
-  if (i < 0) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
-  const start = i + OPEN.length
-  const end = html.indexOf('</script>', start)
-  let o: any
-  try { o = JSON.parse(html.slice(start, end < 0 ? undefined : end)) }
-  catch { throw new RegistryError('internal', `invalid embed block for ${route}`) }
-  if (o?.v !== 1) throw new RegistryError('internal', 'unsupported embed version')
-  for (const k of REQUIRED) if (!(k in o)) throw new RegistryError('internal', `embed missing "${k}" for ${route}`)
-  if (!Array.isArray(o.nodes) || !Array.isArray(o.links)) throw new RegistryError('internal', `embed nodes/links must be arrays for ${route}`)
-  return { page: o.page, title: o.title, personal: o.personal, nodes: o.nodes, links: o.links }
+  let pg: { page: string; title: string } | undefined
+  const nodes = new Map<string, any>(), links = new Map<string, any>()
+  let personal = false
+  for (const m of html.matchAll(SCRIPT)) {
+    if (!TVINE.test(m[1]!)) continue
+    let f: any
+    try { f = JSON.parse(m[2]!) }
+    catch { throw new RegistryError('internal', `invalid embed fragment for ${route}`) }
+    if (f?.v !== 1) throw new RegistryError('internal', 'unsupported embed version')
+    // fail closed: anything but absent/false marks the snapshot personal
+    if (f.personal !== undefined && f.personal !== false) personal = true
+    if (f.k === 'page') pg ??= { page: f.page, title: f.title }
+    else if (f.k === 'node' && f.node && !nodes.has(f.node.id)) nodes.set(f.node.id, f.node)
+    else if (f.k === 'link' && f.link && !links.has(f.link.id)) links.set(f.link.id, f.link)
+    // unknown k: ignored (forward compatible)
+  }
+  if (!pg) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
+  return { ...pg, personal, nodes: [...nodes.values()], links: [...links.values()] }
 }
 
 // Sorted-key JSON so key order never changes the etag.
