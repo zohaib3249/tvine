@@ -138,7 +138,7 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
   return async (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
     const path = (req.url ?? '').split('?')[0]!
     if (path !== routePrefix && !path.startsWith(`${routePrefix}/`)) return next()
-    const notFound = () => { res.statusCode = 404; res.end() }
+    const notFound = () => { res.statusCode = 404; res.setHeader('Cache-Control', 'no-store'); res.end() }
     if (req.method !== 'GET' && req.method !== 'HEAD') return notFound()
     let key: string
     try { key = decodeURIComponent(path.slice(routePrefix.length + 1)) } catch { return notFound() }
@@ -147,13 +147,19 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
       const file = join(storage.dir, key)
       const [info, st] = await Promise.all([readFile(join(storage.dir, `${key}.json`), 'utf8'), stat(file)])
       if (!st.isFile()) return notFound()
-      res.statusCode = 200
-      res.setHeader('Content-Type', (JSON.parse(info) as { type: string }).type)
-      res.setHeader('X-Content-Type-Options', 'nosniff')
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-      res.setHeader('Content-Length', String(st.size))
-      if (req.method === 'HEAD') return void res.end()
-      await pipeline(createReadStream(file), res)
+      // Success headers only once the file is really open: a failed open must give a clean 404.
+      const ok = () => {
+        res.statusCode = 200
+        res.setHeader('Content-Type', (JSON.parse(info) as { type: string }).type)
+        res.setHeader('X-Content-Type-Options', 'nosniff')
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        res.setHeader('Content-Length', String(st.size))
+      }
+      if (req.method === 'HEAD' || st.size === 0) { ok(); return void res.end() }
+      const rs = createReadStream(file, { end: st.size - 1 })
+      await new Promise<void>((resolve, reject) => { rs.once('open', () => resolve()); rs.once('error', reject) })
+      ok()
+      await pipeline(rs, res)
     } catch { if (!res.headersSent) notFound(); else res.destroy() }
   }
 }
