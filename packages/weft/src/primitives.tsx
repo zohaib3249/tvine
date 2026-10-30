@@ -1,6 +1,6 @@
 import { Children, Fragment, cloneElement, isValidElement, type ComponentType, type ElementType, type ReactElement, type ReactNode } from 'react'
-import { bindFor, pageFragment, paramSpecs, register, registerLink } from './runtime/registry.js'
-import { FieldError, FormClient } from './runtime/form.client.js'
+import { bindFor, pageFragment, pairBind, paramSpecs, register, registerLink } from './runtime/registry.js'
+import { FieldError, FormClient, type Spec } from './runtime/form.client.js'
 import { idFor } from './useAgent.js'
 import type { ActionDef, Paginated } from './types.js'
 
@@ -11,43 +11,69 @@ import type { ActionDef, Paginated } from './types.js'
 // and passes `scope` to every primitive it finds. That is plain element cloning: identical
 // under RSC, SSR, Suspense and streaming.
 // Ceiling: elements a custom component creates internally are not visible to the walk. For
-// those, use render-prop children `{(scope) => <Custom scope={scope} />}` and forward
-// `scope` to the primitives inside (every primitive takes a public `scope` prop).
+// those, use render-prop children `{(scope) => <Custom scope={scope} />}` (List: the third
+// render-prop arg) and forward `scope` to the primitives inside. Misses are loud in dev:
+// Section/Form/List warn when they saw only components, Input errors without a Form scope.
+// Human-side behaviour never depends on scope: disabling is a native <fieldset disabled>,
+// field errors come from client context.
 export interface Scope {
   prefix?: string                                   // id prefix: `section:cart > ...`
   page?: boolean                                    // inside a <Page>
   silent?: boolean                                  // past List pageSize: render, don't register
-  form?: { id: string; action: string; fields: string[] | null; disabled: boolean }
+  form?: { id: string; action: string; fields: string[] | null }
 }
 type Scoped = { scope?: Scope }
 type Kids = ReactNode | ((scope: Scope) => ReactNode)
+type Seen = { prims: number; comps: Set<string> }
 
 const PRIMS = new Set<unknown>()
 const dev = () => process.env.NODE_ENV !== 'production'
 const pid = (s: Scope | undefined, id: string) => (s?.prefix ? `${s.prefix} > ${id}` : id)
 const quiet = (s: Scope | undefined, el: ReactElement) => (s?.silent ? null : el)
+const newSeen = (): Seen => ({ prims: 0, comps: new Set() })
 
-function walk(node: ReactNode, scope: Scope, visit?: (el: ReactElement<Scoped>) => void): ReactNode {
+function nameOf(t: unknown): string {
+  const o = t as { displayName?: string; name?: string; render?: { name?: string }; type?: { name?: string } }
+  return o.displayName || o.name || o.render?.name || o.type?.name || 'Anonymous'
+}
+
+function walk(node: ReactNode, scope: Scope, seen: Seen = newSeen()): ReactNode {
   return Children.map(node, (c) => {
     if (!isValidElement<Scoped & { children?: ReactNode }>(c)) return c
     if (PRIMS.has(c.type)) {
-      visit?.(c)
+      seen.prims++
       return c.props.scope ? c : cloneElement(c, { scope })
     }
+    if (typeof c.type !== 'string' && typeof c.type !== 'symbol') seen.comps.add(nameOf(c.type))
     const kids = c.props.children
     if (kids == null || typeof kids === 'function') return c
-    return cloneElement(c, undefined, walk(kids, scope, visit))
+    return cloneElement(c, undefined, walk(kids, scope, seen))
   }) ?? null
 }
-const scoped = (kids: Kids, scope: Scope, visit?: (el: ReactElement<Scoped>) => void) =>
-  typeof kids === 'function' ? kids(scope) : walk(kids, scope, visit)
+
+function warnOpaque(tag: string, seen: Seen) {
+  if (!dev() || seen.prims > 0 || seen.comps.size === 0) return
+  console.warn(`tvine: ${tag} found no primitives in its children, only components (${[...seen.comps].join(', ')}). ` +
+    'Primitives rendered inside a component do not get this scope — use render-prop children ' +
+    '{(scope) => <Custom scope={scope} />} and pass scope on to them.')
+}
+
+// Visit-only scan through every element (primitives included) — no cloning.
+function scan(node: ReactNode, f: (el: ReactElement<Record<string, unknown>>) => void) {
+  Children.forEach(node, (c) => {
+    if (!isValidElement<{ children?: ReactNode }>(c)) return
+    f(c as ReactElement<Record<string, unknown>>)
+    const kids = c.props.children
+    if (kids != null && typeof kids !== 'function') scan(kids, f)
+  })
+}
 
 // --- Data -------------------------------------------------------------------------------
-export function Data({ type, value, id, personal, children, scope }: Scoped & {
-  type: string; value: Record<string, unknown>; id?: string; personal?: boolean; children?: ReactNode
+export function Data({ type, value, agentId, personal, children, scope }: Scoped & {
+  type: string; value: Record<string, unknown>; agentId?: string; personal?: boolean; children?: ReactNode
 }) {
   const s = scope ?? {}
-  return <>{quiet(s, register({ id: pid(s, idFor(type, { id, data: value })), type, data: value, personal }))}{walk(children, s)}</>
+  return <>{quiet(s, register({ id: pid(s, idFor(type, { id: agentId, data: value })), type, data: value, personal }))}{walk(children, s)}</>
 }
 
 // --- Section ----------------------------------------------------------------------------
@@ -55,7 +81,11 @@ export function Section({ name, as: As = 'section', className, children, scope }
   name: string; as?: ElementType; className?: string; children: Kids
 }) {
   const id = pid(scope, `section:${name}`)
-  return <>{quiet(scope, register({ id, type: 'section', data: { name } }))}<As className={className}>{scoped(children, { ...scope, prefix: id })}</As></>
+  const inner = { ...scope, prefix: id }
+  let kids: ReactNode
+  if (typeof children === 'function') kids = children(inner)
+  else { const seen = newSeen(); kids = walk(children, inner, seen); warnOpaque(`<Section name="${name}">`, seen) }
+  return <>{quiet(scope, register({ id, type: 'section', data: { name } }))}<As className={className}>{kids}</As></>
 }
 
 // --- Page -------------------------------------------------------------------------------
@@ -65,24 +95,49 @@ export function Page({ name, title, personal, children, scope }: Scoped & {
   name: string; title?: string; personal?: boolean; children: Kids
 }) {
   if (scope?.page && dev()) throw new Error(`tvine: nested <Page name="${name}"> — a route has exactly one Page`)
-  return <>{pageFragment({ page: name, title: title ?? name, personal })}{scoped(children, { ...scope, page: true })}</>
+  const inner = { ...scope, page: true }
+  return <>{pageFragment({ page: name, title: title ?? name, personal })}{typeof children === 'function' ? children(inner) : walk(children, inner)}</>
 }
 
 // --- Link -------------------------------------------------------------------------------
-// No dependency on next: pass `as={NextLink}` to get client navigation.
-export function Link({ href, label, params, personal, id, as: As = 'a', children, scope, ...rest }: Scoped & {
-  href: string; label?: string; params?: string[]; personal?: boolean; id?: string; as?: ElementType; children?: ReactNode
+// No dependency on next: pass `as={NextLink}` to get client navigation. `id` is the DOM id;
+// `agentId` overrides the agent link id (default `link:<href>`).
+const UNSAFE = /^(javascript|data|vbscript):/i
+export function Link({ href, label, params, personal, agentId, as: As = 'a', children, scope, ...rest }: Scoped & {
+  href: string; label?: string; params?: string[]; personal?: boolean; agentId?: string; as?: ElementType; children?: ReactNode
   [k: string]: unknown
 }) {
-  const text = label ?? (typeof children === 'string' || typeof children === 'number' ? String(children) : undefined)
-  if (text === undefined) throw new Error(`tvine: <Link href="${href}"> needs a label (children are not plain text)`)
-  const link = { id: pid(scope, id ?? `link:${href}`), href, label: text, ...(params && { params }) }
-  return <>{quiet(scope, registerLink(link, { personal }))}<As href={href} {...rest}>{children}</As></>
+  const parts = Children.toArray(children)
+  let text = label ?? (parts.every((p) => typeof p === 'string' || typeof p === 'number') ? parts.join('') : undefined)
+  if (text === undefined) {
+    if (dev()) throw new Error(`tvine: <Link href="${href}"> needs a label (children are not plain text)`)
+    text = href
+  }
+  // Browsers ignore control chars/whitespace inside a scheme ("java\tscript:").
+  const unsafe = UNSAFE.test(href.replace(/[\u0000- \u007F]/g, ''))
+  if (unsafe && dev()) console.warn(`tvine: <Link href="${href}"> has an unsafe scheme; not exposed to agents`)
+  const link = { id: pid(scope, agentId ?? `link:${href}`), href, label: text, ...(params && { params }) }
+  return <>{!unsafe && quiet(scope, registerLink(link, { personal }))}<As href={href} {...rest}>{children}</As></>
 }
 
 // --- List -------------------------------------------------------------------------------
-export function List<T>({ name, items, children, as: As = 'ul', className, scope }: Scoped & {
-  name: string; items: T[] | Paginated<T>; children: (item: T, i: number) => ReactNode; as?: ElementType; className?: string
+// `query`: the current search params (e.g. Next's searchParams) so the `next` link keeps
+// sort/filter state; `cursor` is replaced.
+type Query = URLSearchParams | Record<string, string | string[] | undefined>
+
+function nextHref(query: Query | undefined, cursor: string): string {
+  const q = new URLSearchParams(query instanceof URLSearchParams ? query : undefined)
+  if (query && !(query instanceof URLSearchParams)) {
+    for (const [k, v] of Object.entries(query)) for (const x of [v].flat()) if (x !== undefined) q.append(k, x)
+  }
+  q.set('cursor', cursor)
+  return `?${q}`
+}
+
+export function List<T>({ name, items, query, children, as: As = 'ul', className, scope }: Scoped & {
+  name: string; items: T[] | Paginated<T>; query?: Query
+  children: (item: T, i: number, scope: Scope) => ReactNode   // forward scope to row components
+  as?: ElementType; className?: string
 }) {
   const s = scope ?? {}
   const page = Array.isArray(items) ? undefined : items
@@ -91,16 +146,18 @@ export function List<T>({ name, items, children, as: As = 'ul', className, scope
     ? { name, count: page.total ?? rows.length, pageSize: page.pageSize, ...(page.nextCursor && { nextCursor: page.nextCursor }) }
     : { name, count: rows.length }
   const id = pid(s, `list:${name}`)
+  const seen = newSeen()
+  const out = rows.map((item, i) => {
+    // Agent rows are capped at pageSize; humans still see every row.
+    const rs = page && i >= page.pageSize ? { ...s, silent: true } : s
+    return <Fragment key={i}>{walk(children(item, i, rs), rs, seen)}</Fragment>
+  })
+  if (children.length < 3) warnOpaque(`<List name="${name}">`, seen)   // a 3-arg render prop takes scope itself
   return (
     <>
       {quiet(s, register({ id, type: 'list', data }))}
-      {page?.nextCursor && quiet(s, registerLink({ id: `${id}:next`, href: `?cursor=${encodeURIComponent(page.nextCursor)}`, label: 'next', params: ['cursor'] }))}
-      <As className={className}>
-        {rows.map((item, i) => (
-          // Agent rows are capped at pageSize; humans still see every row.
-          <Fragment key={i}>{walk(children(item, i), page && i >= page.pageSize ? { ...s, silent: true } : s)}</Fragment>
-        ))}
-      </As>
+      {page?.nextCursor && quiet(s, registerLink({ id: `${id}:next`, href: nextHref(query, page.nextCursor), label: 'next', params: ['cursor'] }))}
+      <As className={className}>{out}</As>
     </>
   )
 }
@@ -108,25 +165,51 @@ export function List<T>({ name, items, children, as: As = 'ul', className, scope
 // --- Form -------------------------------------------------------------------------------
 type ButtonProps = Scoped & {
   intent?: string; disabled?: boolean; asChild?: boolean; children: ReactNode; className?: string
-  action?: ActionDef; bind?: Record<string, unknown>; id?: string
+  action?: ActionDef; bind?: Record<string, unknown>; agentId?: string
 }
 
-export function Form({ action, bind, disabled, id, className, children, scope }: Scoped & {
-  action: ActionDef; bind?: Record<string, unknown>; disabled?: boolean; id?: string; className?: string; children: Kids
+// Default agent id: `form:<action>` (+ `:<bind values>`). Several bind-less forms for the
+// same action on one page need explicit agentIds (the extractor flags duplicate ids).
+function formId(action: ActionDef, bind: Record<string, unknown> | undefined, agentId: string | undefined): string {
+  if (agentId) return agentId
+  const vals = Object.values(bind ?? {})
+  if (vals.some((v) => typeof v !== 'string' && typeof v !== 'number')) {
+    throw new Error(`tvine: <Form action="${action.id}"> bind has non-string/number values; pass an explicit agentId`)
+  }
+  return ['form', action.id, ...vals].join(':')
+}
+
+type ZodLike = { _def?: { typeName?: string; innerType?: ZodLike } }
+function specsFor(schema: unknown): Spec[] {
+  const shape = ((schema as { shape?: Record<string, ZodLike> } | null)?.shape) ?? {}
+  return paramSpecs(schema).map((p) => {
+    let t = shape[p.name]
+    while (t?._def?.innerType) t = t._def.innerType
+    return { ...p, array: t?._def?.typeName === 'ZodArray' }
+  })
+}
+
+export function Form({ action, bind, disabled, agentId, id, className, children, scope }: Scoped & {
+  action: ActionDef; bind?: Record<string, unknown>; disabled?: boolean; agentId?: string; id?: string
+  className?: string; children: Kids
 }) {
   const s = scope ?? {}
-  const formId = pid(s, id ?? ['form', action.id, ...Object.values(bind ?? {})].join(':'))
+  const fid = pid(s, formId(action, bind, agentId))
   const shape = (action.schema as { shape?: object } | null)?.shape
+  const inner: Scope = { ...s, prefix: fid, form: { id: fid, action: action.id, fields: shape ? Object.keys(shape) : null } }
+  let kids: ReactNode
+  if (typeof children === 'function') kids = children(inner)
+  else { const seen = newSeen(); kids = walk(children, inner, seen); warnOpaque(`<Form action="${action.id}">`, seen) }
   const buttons: ButtonProps[] = []
-  const inner: Scope = { ...s, prefix: formId, form: { id: formId, action: action.id, fields: shape ? Object.keys(shape) : null, disabled: !!disabled } }
-  const kids = scoped(children, inner, (el) => { if (el.type === Button) buttons.push(el.props as ButtonProps) })
+  scan(kids, (el) => { if (el.type === Button) buttons.push(el.props as ButtonProps) })
   // Honesty rule: a form humans can't submit exposes no ActionRef to agents.
   const off = !!disabled || (buttons.length > 0 && buttons.every((b) => b.disabled))
   const intent = buttons.find((b) => b.intent)?.intent ?? action.id
   return (
     <>
-      {quiet(s, register({ id: formId, type: 'form', data: { action: action.id, intent }, actions: off ? [] : [{ def: action, bindPayload: bind }] }))}
-      <FormClient action={action.id} bind={off ? '' : bindFor(bind)} specs={paramSpecs(action.schema)} disabled={off} className={className}>{kids}</FormClient>
+      {quiet(s, register({ id: fid, type: 'form', data: { action: action.id, intent }, actions: off ? [] : [{ def: action, bindPayload: bind }] }))}
+      <FormClient action={action.id} bind={off ? '' : bindFor(pairBind(action.id, bind))} specs={specsFor(action.schema)}
+        disabled={off} id={id} className={className}>{kids}</FormClient>
     </>
   )
 }
@@ -136,39 +219,44 @@ export function Form({ action, bind, disabled, id, className, children, scope }:
 export function Input({ name, type = 'text', options, defaultValue, className, error, scope }: Scoped & {
   name: string; type?: 'text' | 'number' | 'email' | 'date' | 'checkbox' | 'file'
   options?: { value: string; label: string }[]; defaultValue?: unknown; className?: string
-  error?: ComponentType<{ message: string }>
+  error?: ComponentType<{ message: string }>   // a client component under RSC
 }) {
   const f = scope?.form
-  if (f?.fields && !f.fields.includes(name) && dev()) {
-    console.warn(`tvine: <Input name="${name}"> is not a param of ${f.action}; schema fields: ${f.fields.join(', ')}`)
+  if (dev()) {
+    if (!f) console.error(`tvine: <Input name="${name}"> has no <Form> scope: it is outside a Form, or inside a component the Form can't see — agents won't see it. Use {(scope) => <Custom scope={scope} />}.`)
+    else if (f.fields && !f.fields.includes(name)) console.warn(`tvine: <Input name="${name}"> is not a param of ${f.action}; schema fields: ${f.fields.join(', ')}`)
   }
   const dv = defaultValue as string | number | undefined
   const field = options
-    ? <select name={name} defaultValue={dv as string} className={className} disabled={f?.disabled || undefined}>
+    ? <select name={name} defaultValue={dv as string} className={className}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-    : <input name={name} type={type} className={className} disabled={f?.disabled || undefined}
+    : <input name={name} type={type} className={className}
         {...(type === 'checkbox' ? { defaultChecked: !!defaultValue } : { defaultValue: dv })} />
   return (
     <>
       {f && quiet(scope, register({ id: pid(scope, `input:${name}`), type: 'input', data: { name, type, ...(options && { options }) } }))}
       {field}
-      {f && <FieldError name={name} error={error} />}
+      <FieldError name={name} error={error} />
     </>
   )
 }
 
 // --- Button -----------------------------------------------------------------------------
-export function Button({ intent, disabled, asChild, children, className, action, bind, id, scope }: ButtonProps) {
+export function Button({ intent, disabled, asChild, children, className, action, bind, agentId, scope }: ButtonProps) {
   if (action && !scope?.form) {
     // Single-action form sugar.
-    return <Form action={action} bind={bind} id={id} scope={scope}><Button intent={intent} disabled={disabled} asChild={asChild} className={className}>{children}</Button></Form>
+    return <Form action={action} bind={bind} agentId={agentId} scope={scope}><Button intent={intent} disabled={disabled} asChild={asChild} className={className}>{children}</Button></Form>
   }
-  const off = disabled || scope?.form?.disabled || undefined
-  if (asChild && isValidElement<Record<string, unknown>>(children)) {
-    return cloneElement(children, { type: 'submit', ...(off && { disabled: true }), ...(className && { className }) })
+  if (dev()) {
+    if (action) console.warn(`tvine: <Button action="${action.id}"> is inside a <Form>; its own action is ignored (the Form's action submits)`)
+    else if (!scope?.form) console.warn('tvine: <Button> outside a <Form> and without an action registers nothing (or the Form cannot see it — pass scope)')
   }
-  return <button type="submit" disabled={off} className={className}>{children}</button>
+  if (asChild && isValidElement<{ className?: string }>(children)) {
+    const cls = [children.props.className, className].filter(Boolean).join(' ')
+    return cloneElement(children, { type: 'submit', ...(disabled && { disabled: true }), ...(cls && { className: cls }) } as object)
+  }
+  return <button type="submit" disabled={disabled || undefined} className={className}>{children}</button>
 }
 
 for (const p of [Data, Section, Page, Link, List, Form, Input, Button]) PRIMS.add(p)

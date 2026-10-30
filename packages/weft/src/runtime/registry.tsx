@@ -47,6 +47,12 @@ export function bindFor(payload?: Record<string, unknown>): string {
   return sign(payload)
 }
 
+// A bind is only valid for the action it was issued for: the action id is signed into the
+// payload so a bind for A can't be replayed against B (dispatcher checks $action === cmd.action).
+export function pairBind(action: string, payload?: Record<string, unknown>): Record<string, unknown> | undefined {
+  return payload && { ...payload, $action: action }
+}
+
 // `<` → < so no data string can close the tag.
 function fragment(body: Record<string, unknown>): ReactElement {
   const json = JSON.stringify({ v: 1, ...body }).replace(/</g, '\\u003c')
@@ -57,7 +63,7 @@ function fragment(body: Record<string, unknown>): ReactElement {
 export function register({ id, type, data, actions = [], personal }: RegisterInput): ReactElement {
   const node: Node = {
     id, type, data,
-    actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema), bind: bindFor(a.bindPayload) })),
+    actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema), bind: bindFor(pairBind(a.def.id, a.bindPayload)) })),
   }
   return fragment({ k: 'node', node, ...(personal && { personal: true }) })
 }
