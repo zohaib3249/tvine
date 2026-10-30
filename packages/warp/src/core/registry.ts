@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
+import type { WidgetFrag } from '../shape/disclose.js'
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
 export class RegistryError extends Error {
@@ -25,7 +26,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
   const low = html.replace(/[A-Z]/g, c => c.toLowerCase()) // ASCII-only: keeps offsets aligned
   const bad = () => new RegistryError('internal', `invalid embed fragment for ${route}`)
   let pg: { page: string; title: string } | undefined
-  const nodes = new Map<string, any>(), links = new Map<string, any>()
+  const nodes = new Map<string, any>(), links = new Map<string, any>(), widgets = new Map<string, WidgetFrag>()
   let personal = false, live = false
   for (let i = 0; (i = low.indexOf('<script', i)) >= 0;) {
     const next = low[i + 7]
@@ -41,7 +42,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
     let f: any
     try { f = JSON.parse(text) }
     catch { throw bad() }
-    if (f?.v !== 1) throw new RegistryError('internal', 'unsupported embed version')
+    if (f?.v !== 1 && f?.v !== 2) throw new RegistryError('internal', 'unsupported embed version')
     // fail closed: anything but absent/false marks the snapshot personal
     if (f.personal !== undefined && f.personal !== false) personal = true
     if (f.live !== undefined && f.live !== false) live = true   // changes without a write we see (time, other systems)
@@ -59,10 +60,23 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
     } else if (f.k === 'link') {
       if (!isObj(f.link) || !isStr(f.link.id) || !isStr(f.link.href)) throw bad()
       if (!links.has(f.link.id)) links.set(f.link.id, f.link)
+    } else if (f.k === 'w') {
+      // v2 widget: first id wins, except entities (`e`): one node, every parent in `at`
+      const w = f.w
+      if (!isObj(w) || !isStr(w.id) || !isStr(w.kind) || (w.p !== undefined && !isStr(w.p))) throw bad()
+      const prev = widgets.get(w.id)
+      if (!prev) widgets.set(w.id, w.e !== undefined ? { ...w, at: w.p === undefined ? [] : [w.p] } as WidgetFrag : w as unknown as WidgetFrag)
+      else if (prev.at && w.e === prev.e) {
+        if (isStr(w.p) && !prev.at.includes(w.p)) prev.at.push(w.p)
+        if (isObj(w.data)) prev.data = { ...w.data, ...prev.data }
+      } else if (dev() && canon(prev) !== canon(w)) {
+        console.warn(`tvine: widget id "${w.id}" repeated on ${route} with different content — first wins`)
+      }
     } // unknown k: ignored (forward compatible)
   }
   if (!pg) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
-  return { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
+  const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
+  return widgets.size ? { ...out, widgets: [...widgets.values()] } : out
 }
 
 // Sorted-key JSON so key order never changes the etag.
@@ -99,8 +113,8 @@ export class SnapshotCache {
   // ver: the data version the render STARTED at (a write committed mid-render leaves the entry stale)
   set(route: string, snap: Body | Snapshot, ver = this.version()): string {
     const now = Date.now()
-    const { page, title, nodes, links } = snap
-    const body = deepFreeze({ page, title, nodes, links })
+    const { page, title, nodes, links, widgets } = snap
+    const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }) })
     const etag = createHash('sha1').update(canon(body)).digest('hex')
     if (this.ttlMs <= 0) return etag   // cache off: nothing stored
     for (const [k, e] of this.m) if (now - e.at > this.ttlMs) this.m.delete(k)
