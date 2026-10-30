@@ -12,7 +12,7 @@ export interface Entry {
   order: number                    // mount sequence (dup resolution only)
   agent?(a: AgentState): void      // executor/presence marks the widget as targeted (re-renders that widget only)
 }
-export interface RegistryNode { id: string; kind: string; spec?: WidgetSpec; children: RegistryNode[] }
+export interface RegistryNode { id: string; kind: string; spec?: WidgetSpec; el?: HTMLElement | null; children: RegistryNode[] }
 
 const dev = () => process.env.NODE_ENV !== 'production'
 
@@ -96,7 +96,7 @@ export class Registry {
       if (list) list.push(e)
       else by.set(p, [e])
     }
-    const node = (e: Entry): RegistryNode => ({ id: e.id, kind: e.kind, spec: e.spec, children: (by.get(e.id) ?? []).map(node) })
+    const node = (e: Entry): RegistryNode => ({ id: e.id, kind: e.kind, spec: e.spec, el: e.el, children: (by.get(e.id) ?? []).map(node) })
     const r = this.live.get(root)
     return r ? node(r) : { id: root, kind: 'page', children: (by.get(root) ?? []).map(node) }
   }

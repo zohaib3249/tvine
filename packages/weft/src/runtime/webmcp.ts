@@ -90,6 +90,8 @@ function tree() {
     for (const c of n.children) {
       // Auto (plain-HTML) entries that are inert / hidden / aria-hidden / disabled: left out with their subtree.
       if (c.spec && autoExcluded(c.spec)) continue
+      // Any widget (built-ins too) behind an open modal: the background is inert, so skip it with its subtree.
+      if (c.el?.closest('[inert]')) continue
       if (c.spec) {
         const d = describeWidget(c.id, p, c.spec)
         // Controls bound to an agent-off action are not shown (the executor refuses them alike).
