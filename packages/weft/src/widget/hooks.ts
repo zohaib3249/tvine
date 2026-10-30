@@ -91,9 +91,11 @@ export async function callControl(target: string, control: string, args: Record<
       source: o.source ?? 'agent', via: o.via, cmdId: o.cmdId,
       signal: o.signal ?? new AbortController().signal,
       el: e.el, presence: o.presence ?? NO_PRESENCE,
-      // A bound server action goes through the same hooks with its own danger/attention before it is submitted.
+      // A bound server action goes through the hooks with its own danger/attention before it is submitted —
+      // unless it is this control's own bound handle: the hooks already decided on it (one call per click).
       run: async (handle, params = {}) => {
-        await before(hooks, { ...ev, args: Object.freeze({ ...params }), ...meta({ params: handle }) })
+        const own = c.headless && 'params' in c.headless && c.headless.params.id === handle.id && c.headless.params.bind === handle.bind
+        if (!own) await before(hooks, { ...ev, args: Object.freeze({ ...params }), ...meta({ params: handle }) })
         if (!o.run) throw new Error('tvine: ctx.run is not wired (no executor)')
         return o.run(handle, params)
       },

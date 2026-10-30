@@ -37,8 +37,9 @@ export class Registry {
     if (!cur) this.live.set(e.id, e)
     else {
       this.dups.set(e.id, [...(this.dups.get(e.id) ?? []), e])
-      // Same entity in two places (grid + "recently viewed") is normal dedupe, not a clash.
-      if (e.spec.entity === e.id && cur.spec.entity === cur.id) return this.mounted(e)
+      // Same entity in two places (grid + "recently viewed") is normal dedupe, not a clash. An entity
+      // widget's id IS its (cleaned) entity, so equal ids + both entities = same entity.
+      if (e.spec.entity && cur.spec.entity) return this.mounted(e)
       const msg = `tvine: duplicate widget id "${e.id}": ${cur.kind} "${cur.spec.label}" (mount #${cur.order}) and ${e.kind} "${e.spec.label}" (mount #${e.order}). The first stays addressable; give one a distinct name.`
       if (dev()) console.error(msg)
       else if (!this.warned.has(e.id)) { this.warned.add(e.id); console.warn(msg) }

@@ -4,18 +4,19 @@ import type { WidgetSpec } from './types.js'
 export const SEP = ' > '
 export const MAX_ID = 256
 
-// Segments come from user data (slugs, keys), so they must not be able to forge a path: no `>`,
-// no spaces, no control chars. Dev throws; production replaces unsafe chars with `_` and caps length.
+// Segments come from user data (slugs, keys, tags), so they must not be able to forge a path: no `>`,
+// no spaces, no control chars. Unsafe chars become `_` and length is capped, in every env; dev also
+// logs (never throws: a user tag with a space must not crash the page).
 const UNSAFE = /[^\p{L}\p{N}_.:@/+-]/gu
 
 function safe(seg: string, what: string): string {
-  const bad = seg.match(UNSAFE)
+  const bad = UNSAFE.test(seg)
+  UNSAFE.lastIndex = 0
+  if (!bad && seg.length <= MAX_ID) return seg
   if (process.env.NODE_ENV !== 'production') {
-    if (bad) throw new Error(`tvine: unsafe character ${JSON.stringify(bad[0])} in widget ${what} "${seg}" (allowed: letters, digits, _ . : @ / + -)`)
-    if (seg.length > MAX_ID) throw new Error(`tvine: widget ${what} longer than ${MAX_ID} chars`)
-    return seg
+    console.error(`tvine: unsafe widget ${what} "${seg.slice(0, 80)}" — only letters, digits, _ . : @ / + - and ≤ ${MAX_ID} chars; cleaned`)
   }
-  return (bad ? seg.replace(UNSAFE, '_') : seg).slice(0, MAX_ID)
+  return seg.replace(UNSAFE, '_').slice(0, MAX_ID)
 }
 
 export function segmentOf(spec: Pick<WidgetSpec, 'id' | 'name' | 'kind' | 'data'>): string {

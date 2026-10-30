@@ -18,6 +18,8 @@ export type DefinedProps<P, C> = P & {
   controls?: ControlOverrides<C>; hooks?: WidgetHooks
 }
 
+const defined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>
+
 // Every built-in is a defineWidget kind on useWidget (dogfooding: agents can't tell built-in from custom).
 export function defineWidget<P, S extends Json, C extends Record<string, Control<any, any>>>(def: WidgetDef<P, S, C>) {
   return function useDefinedWidget(props: DefinedProps<P, C>): Widget & { state: S } {
@@ -40,9 +42,10 @@ export function defineWidget<P, S extends Json, C extends Record<string, Control
     const desc = def.describe?.(props)
 
     const w = useWidget({
+      label: desc?.label ?? '', ...(desc?.summary && { summary: desc.summary }),
       ...def.spec?.(props),
-      kind: def.kind, id: props.id, name: props.name, disabled: props.disabled, presence: props.presence,
-      label: props.label ?? desc?.label ?? '', ...(desc?.summary && { summary: desc.summary }),
+      ...defined({ id: props.id, name: props.name, label: props.label, disabled: props.disabled, presence: props.presence }),
+      kind: def.kind,
       state, controls: applyOverrides(controls, props.controls), hooks: props.hooks,
     })
     const wref = w.ref
