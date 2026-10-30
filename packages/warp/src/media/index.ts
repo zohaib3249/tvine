@@ -1,0 +1,156 @@
+import { createWriteStream } from 'node:fs'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { nanoid } from 'nanoid'
+import { z } from 'zod'
+import { defineAction, DomainError } from '../core/actions.js'
+import type { ActionDef, ActionRules, UploadedFile } from '../core/types.js'
+
+export interface Storage {
+  put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void>
+  url(key: string): string
+  delete(key: string): Promise<void>
+}
+
+const KEY_RE = /^[A-Za-z0-9_-]+\.[a-z0-9]+$/
+const BASE64_MAX = 256 * 1024
+
+// Magic-byte table (v1 types). Hand-rolled instead of `file-type`: 5 signatures, no dependency.
+const SIGS: { type: string; ext: string; test: (b: Buffer) => boolean }[] = [
+  { type: 'image/png', ext: 'png', test: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  { type: 'image/jpeg', ext: 'jpg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { type: 'image/gif', ext: 'gif', test: (b) => ['GIF87a', 'GIF89a'].includes(b.subarray(0, 6).toString('latin1')) },
+  { type: 'image/webp', ext: 'webp', test: (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP' },
+  { type: 'application/pdf', ext: 'pdf', test: (b) => b.subarray(0, 5).toString('latin1') === '%PDF-' },
+]
+const sniff = (b: Buffer) => SIGS.find((s) => s.test(b))
+
+// Disk adapter. Writes `.tmp-*` in the same dir then renames (no partial files visible).
+// Sidecar `<key>.json` holds {type,size}; the handler serves Content-Type from it.
+export class DiskStorage implements Storage {
+  constructor(readonly dir: string, readonly routePrefix = '/media') {}
+
+  async put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void> {
+    if (!KEY_RE.test(key)) throw new Error(`bad storage key ${key}`)
+    await mkdir(this.dir, { recursive: true })
+    const tmp = join(this.dir, `.tmp-${nanoid()}`)
+    const metaTmp = `${tmp}.json`
+    try {
+      let size = meta.size
+      if (Buffer.isBuffer(data)) await writeFile(tmp, data)
+      else {
+        const out = createWriteStream(tmp)
+        await pipeline(data, out)
+        size = out.bytesWritten
+      }
+      await writeFile(metaTmp, JSON.stringify({ type: meta.type, size }))
+      await rename(metaTmp, join(this.dir, `${key}.json`))
+      await rename(tmp, join(this.dir, key))
+    } catch (e) {
+      await Promise.all([rm(tmp, { force: true }), rm(metaTmp, { force: true }), rm(join(this.dir, `${key}.json`), { force: true })])
+      throw e
+    }
+  }
+  url(key: string) { return `${this.routePrefix}/${key}` }
+  async delete(key: string) {
+    if (!KEY_RE.test(key)) return
+    await Promise.all([rm(join(this.dir, key), { force: true }), rm(join(this.dir, `${key}.json`), { force: true })])
+  }
+}
+
+type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
+export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions'] }
+export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types' | 'storage'>> }
+
+// Returns an ordinary ActionDef (JSON/base64 path via `file: {base64}`); transports call
+// receiveUpload(stream, def, {field}) directly for multipart.
+export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
+  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage ?? new DiskStorage('./media', '/media') }
+  const rules: UploadRules = { rate: opts.rate ?? { limit: 5, windowMs: 60_000 }, ...(opts.permissions && { permissions: opts.permissions }) }
+  const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), (p): Promise<UploadedFile> => receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file' }), rules)
+  return Object.assign(def, { upload }) as UploadDef
+}
+
+async function* guarded(head: Buffer[], rest: AsyncIterator<Buffer>, max: number, source: Readable): AsyncGenerator<Buffer> {
+  let n = 0
+  try {
+    for (const b of head) { n += b.length; if (n > max) throw tooLarge(max); yield b }
+    for (let r = await rest.next(); !r.done; r = await rest.next()) {
+      const b = Buffer.from(r.value)
+      n += b.length
+      if (n > max) throw tooLarge(max)
+      yield b
+    }
+  } finally { source.destroy() }
+}
+const tooLarge = (max: number) => new DomainError('too_large', `file exceeds ${max} bytes`, 'file')
+
+export async function receiveUpload(
+  src: Readable | { base64: string },
+  def: UploadDef, meta: { field: string },
+): Promise<UploadedFile> {
+  const { maxBytes, types, storage } = def.upload
+  const field = meta.field
+  let source: Readable
+  if (src instanceof Readable) source = src
+  else {
+    if (!src || typeof (src as { base64?: unknown }).base64 !== 'string') {
+      throw new DomainError('invalid_param', 'url ingestion disabled', field)
+    }
+    const b64 = src.base64
+    if (b64.length > Math.ceil((BASE64_MAX * 4) / 3) + 4) throw new DomainError('too_large', 'base64 upload exceeds 256 KB', field)
+    const buf = Buffer.from(b64, 'base64')
+    if (buf.length > BASE64_MAX) throw new DomainError('too_large', 'base64 upload exceeds 256 KB', field)
+    source = Readable.from([buf])
+  }
+
+  // Sniff before touching storage: collect ≥12 bytes (webp needs 12) or EOF.
+  const head: Buffer[] = []
+  let len = 0
+  const it = source[Symbol.asyncIterator]()
+  try {
+    while (len < 12) {
+      const r = await it.next()
+      if (r.done) break
+      head.push(Buffer.from(r.value))
+      len += head[head.length - 1]!.length
+    }
+  } catch (e) { source.destroy(); throw e }
+  const found = sniff(Buffer.concat(head))
+  if (!found || !types.includes(found.type)) {
+    source.destroy()
+    throw new DomainError('unsupported_type', `file type not allowed (allowed: ${types.join(', ')})`, field)
+  }
+  const key = `${nanoid()}.${found.ext}`
+  let size = 0
+  const counted = Readable.from((async function* () {
+    for await (const b of guarded(head, it as AsyncIterator<Buffer>, maxBytes, source)) { size += b.length; yield b }
+  })())
+  await storage.put(key, counted, { type: found.type, size: 0 })
+  return { field, key, url: storage.url(key), type: found.type, size }
+}
+
+// connect-style GET handler for `${routePrefix}/<key>`; paths outside the prefix fall through.
+export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
+  return async (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
+    const path = (req.url ?? '').split('?')[0]!
+    if (path !== routePrefix && !path.startsWith(`${routePrefix}/`)) return next()
+    const notFound = () => { res.statusCode = 404; res.end() }
+    if (req.method !== 'GET' && req.method !== 'HEAD') return notFound()
+    let key: string
+    try { key = decodeURIComponent(path.slice(routePrefix.length + 1)) } catch { return notFound() }
+    if (!KEY_RE.test(key) || key.endsWith('.json')) return notFound()
+    try {
+      const [info, body] = await Promise.all([readFile(join(storage.dir, `${key}.json`), 'utf8'), readFile(join(storage.dir, key))])
+      res.statusCode = 200
+      res.setHeader('Content-Type', (JSON.parse(info) as { type: string }).type)
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      res.setHeader('Content-Length', String(body.length)) // ponytail: whole file in memory (capped by maxBytes); stream if large media appears
+      res.end(req.method === 'HEAD' ? undefined : body)
+    } catch { notFound() }
+  }
+}
