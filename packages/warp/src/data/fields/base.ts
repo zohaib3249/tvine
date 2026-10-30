@@ -16,6 +16,8 @@ export interface Opts {
   searchable?: boolean
   index?: boolean
   hidden?: boolean                      // left out of generic views' default serializer output
+  readOnly?: boolean                    // generic views: never accepted as create/update input
+  writeOnly?: boolean                   // generic views: accepted as input, never output (overrides hidden's write-protect)
   auto?: boolean                        // datetime only: default now
 }
 

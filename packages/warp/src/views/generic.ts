@@ -11,13 +11,6 @@ import type { Model } from '../data/model.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
 
-// View-level field flags (no DDL, kept out of schema state). Declared here so data/fields stays untouched.
-declare module '../data/fields/base.js' {
-  interface Opts {
-    readOnly?: boolean                  // never accepted by default serializer input (create/update)
-    writeOnly?: boolean                 // with hidden: accepted as input, still left out of output
-  }
-}
 type Out = Record<string, unknown>
 export type Shapers = Record<string, (data: Out) => Out>    // apps/<app>/serializers.ts `serializers`
 
@@ -192,10 +185,10 @@ export abstract class GenericView<T extends object = any> extends View {
     const query = searchParams instanceof URLSearchParams ? searchParams : new URLSearchParams()
     const params: Record<string, string> = {}
     if (searchParams instanceof URLSearchParams) {
-      for (const k of new Set(query.keys())) if (k in known) params[k] = query.getAll(k).join(',')
+      for (const k of new Set(query.keys())) if (Object.hasOwn(known, k)) params[k] = query.getAll(k).join(',')
     } else {
       for (const [k, v] of Object.entries(searchParams)) {
-        if (v === undefined || !(k in known)) continue
+        if (v === undefined || !Object.hasOwn(known, k)) continue
         params[k] = Array.isArray(v) ? v.join(',') : v
         query.set(k, params[k])
       }
@@ -239,11 +232,16 @@ function effectiveFilters(v: GenericView): string[] {
 const effectiveSearch = (v: GenericView): string[] => v.searchFields ?? Object.entries(v.model.fields as Record<string, AnyField>)
   .filter(([, f]) => f.opts.searchable).map(([n, f]) => f.key(n))
 
-const DEFAULT_SER = Symbol('defaultSerializer')
+// One default serializer per (model, app shapers): built once, so inputOf's per-serializer cache holds too.
+const defaultSers = new WeakMap<object, Map<Shapers | undefined, Serializer<any>>>()
 function defaultSerializer<T extends object>(v: GenericView<T>): Serializer<T> {
-  const holder = v as unknown as { [DEFAULT_SER]?: Serializer<T> }
-  if (holder[DEFAULT_SER]) return holder[DEFAULT_SER]
-  const hidden = new Set(Object.entries(v.model.fields as Record<string, AnyField>).filter(([, f]) => f.opts.hidden).map(([n, f]) => f.key(n)))
+  let byShapers = defaultSers.get(v.model)
+  if (!byShapers) defaultSers.set(v.model, (byShapers = new Map()))
+  const cached = byShapers.get(v.shapers)
+  if (cached) return cached
+  // DRF: write_only fields are never output; hidden fields neither
+  const hidden = new Set(Object.entries(v.model.fields as Record<string, AnyField>)
+    .filter(([, f]) => f.opts.hidden || f.opts.writeOnly).map(([n, f]) => f.key(n)))
   const shape = v.shapers?.[v.model.name]
   const s: Serializer<T> = {
     input: createInput(v.model),
@@ -252,7 +250,7 @@ function defaultSerializer<T extends object>(v: GenericView<T>): Serializer<T> {
       return shape ? shape(out) : out
     },
   }
-  Object.defineProperty(v, DEFAULT_SER, { value: s })     // non-enumerable, on the boot instance
+  byShapers.set(v.shapers, s)
   return s
 }
 
@@ -337,8 +335,10 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     }
     const actions = (V as unknown as typeof GenericView).actions
     const updIn = actions.includes('update') ? inputFor(bootCtx('update')).schema : undefined
-    if (updIn && gv.lookupParam !== gv.lookupField && gv.lookupParam in updIn.shape) {
-      fail(`lookupParam "${gv.lookupParam}" collides with the writable field "${gv.lookupParam}"; rename the param`)
+    if (updIn && Object.hasOwn(updIn.shape, gv.lookupParam)) {
+      fail(gv.lookupParam === gv.lookupField
+        ? `lookup by writable field "${gv.lookupField}": set lookupParam (e.g. 'key') to make ${gv.lookupField} updatable, or list it in readOnlyFields`
+        : `lookupParam "${gv.lookupParam}" collides with the writable field "${gv.lookupParam}"; rename the param`)
     }
     const schemas = {
       list: () => listSchema, get: () => lookupObj.strict(), delete: () => lookupObj.strict(),
