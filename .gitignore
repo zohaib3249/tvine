@@ -6,3 +6,6 @@ dist
 /media/
 *.db
 .env*
+
+# Claude Code personal settings
+.claude/settings.local.json
