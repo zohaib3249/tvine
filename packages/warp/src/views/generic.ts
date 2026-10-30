@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { liveManifest } from '../core/actions.js'
 import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
-import { permissionCtx, runPermissions } from '../security/permissions.js'
+import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
 import { hasDefault, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
@@ -340,8 +340,13 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
   const name = V.name || 'View'
   const fail = (msg: string): never => { throw new Error(`${name}: ${msg}`) }
   const statics = (V as unknown as typeof View).permissions ?? []
+  // Runtime (instance) permissions that deny agents also go into rules, so the static tag reaches
+  // bindAction / MCP listings. Same decision as the runtime check — skipped when getPermissions is
+  // overridden (it may return something else per request).
+  const runtime = view instanceof GenericView && view.getPermissions === GenericView.prototype.getPermissions
+    ? (view as GenericView).permissions.filter(deniesAgents) : []
   const withPerms = (r: ActionRules = {}, extra: Permission[] = []): ActionRules => {
-    const permissions = [...statics, ...extra, ...(r.permissions ?? [])]
+    const permissions = [...statics, ...runtime, ...extra, ...(r.permissions ?? [])]
     return { ...r, ...(permissions.length && { permissions }) }
   }
   const defs: ActionDef[] = []

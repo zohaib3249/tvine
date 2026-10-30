@@ -1,21 +1,26 @@
 'use client'
-import { createContext, useContext, useLayoutEffect, type ReactNode } from 'react'
-import { getRegistry } from '../runtime/registry.client.js'
+import { createContext, useContext, type ReactNode } from 'react'
 import { joinId } from './ids.js'
 
-// control-tree.md: the nearest scoping widget's full id ('' = page). Context crosses portals,
-// so ids follow the React tree, not the DOM.
-export const WidgetScopeCtx = createContext('')
+// control-tree.md: the nearest scoping widget's full id ('' = page) plus every scope above it
+// (nearest first, registered widgets and RSC containers alike). Context crosses portals, so ids and
+// the hook chain follow the React tree, not the DOM. The chain is per mount, never keyed by id: the
+// same entity scope in two places keeps two different chains.
+export interface ScopeValue { id: string; up: readonly string[] }
+export const WidgetScopeCtx = createContext<ScopeValue>({ id: '', up: [] })
 
-export const useWidgetScope = (): string => useContext(WidgetScopeCtx)
+export const useWidgetScope = (): string => useContext(WidgetScopeCtx).id
+export const useScopeValue = (): ScopeValue => useContext(WidgetScopeCtx)
+
+// Ancestors of whatever sits directly inside `s` (nearest first).
+export const chainOf = (s: ScopeValue): readonly string[] => (s.id ? [s.id, ...s.up] : s.up)
 
 // Rendered by RSC containers (Section/Data/Form/List) so client widgets learn their parent.
 // `id` is the container's LOCAL segment and joins the outer scope (a server Section inside a client
-// Dialog → `dialog:x > section:y`); `entity` ids stay global. The container is not a registry entry,
-// so it records its outer scope: hook bubbling and vetoes pass through it to the widget outside.
+// Dialog → `dialog:x > section:y`); `entity` ids stay global. The outer scopes ride along in `up`,
+// so hook bubbling and vetoes pass through server-only containers to the widget outside.
 export function WidgetScope({ id, entity, children }: { id: string; entity?: boolean; children?: ReactNode }) {
-  const outer = useWidgetScope()
-  const value = entity ? id : joinId(outer, id)
-  useLayoutEffect(() => getRegistry().addScope(value, outer), [value, outer])
+  const outer = useContext(WidgetScopeCtx)
+  const value = { id: entity ? id : joinId(outer.id, id), up: chainOf(outer) }
   return <WidgetScopeCtx.Provider value={value}>{children}</WidgetScopeCtx.Provider>
 }
