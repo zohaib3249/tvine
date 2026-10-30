@@ -37,6 +37,12 @@ importers:
       '@types/better-sqlite3':
         specifier: ^9.6.0
         version: 9.6.0
+      react:
+        specifier: ^19
+        version: 19.3.1
+      react-dom:
+        specifier: ^19
+        version: 19.3.1(react@19.3.1)
 
   packages/weft:
     dependencies:
