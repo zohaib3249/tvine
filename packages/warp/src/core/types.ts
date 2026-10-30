@@ -136,6 +136,7 @@ export type Middleware = (cmd: Command, ctx: ActionCtx,
 export interface ActionDef<S extends z.ZodType = z.ZodType> {
   id: ActionId
   name?: string                     // defineAction's name, before discovery qualifies the id
+  defaultRules?: Pick<ActionRules, 'rate'>   // the def's own defaults: above settings, BELOW apps/<app>/rules.ts (e.g. uploads 5/min)
   schema: S
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
