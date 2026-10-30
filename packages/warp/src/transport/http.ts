@@ -13,6 +13,11 @@ import { bodyCap } from '../security/ratelimit.js'
 import { render, snapshotOf, type Ctx, type Format } from '../serialize/envelope.js'
 import type { RouteInfo } from './discovery.js'
 
+type Upload = { file?: UploadedFile; def?: UploadDef; keep?: boolean }
+const hideSid = (e: Event): Event =>
+  e.kind === 'snapshot' ? { ...e, snapshot: { ...e.snapshot, sid: '' } }
+  : e.kind === 'err' && e.snapshot ? { ...e, snapshot: { ...e.snapshot, sid: '' } } : e
+
 export interface HttpOptions { routes: RouteInfo[] }   // the route table (Next app routes); unknown paths → 404
 
 // One header lookup + one accept scan for human traffic.
@@ -29,7 +34,22 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
-  constructor(public status: number, public code: ErrCode, message: string, public field?: string) { super(message) }
+  constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
+}
+const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
+const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
+const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
+
+// JSON.parse accepts any depth; recursive consumers (hash, clone, zod) then blow the stack.
+function tooDeep(v: unknown, max = 64): boolean {
+  const stack: [unknown, number][] = [[v, 0]]
+  while (stack.length) {
+    const [x, d] = stack.pop()!
+    if (typeof x !== 'object' || x === null) continue
+    if (d >= max) return true
+    for (const y of Object.values(x)) stack.push([y, d + 1])
+  }
+  return false
 }
 
 // Glob → RegExp: `**` any depth (also the base itself: '/admin/**' guards '/admin'), `*` one segment.
@@ -55,13 +75,16 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   const dynamics = opts.routes.map((r) => r.path).filter((p) => p.includes('['))
   const cookieName = settings.session.cookieName
 
-  // The exact path dispatch/snapshot will use is the one checked here (decoded, so %61dmin ≡ admin).
-  function routeOf(path: string): string {
+  // Only canonical paths: the raw path must already be what URL parsing (and so request.path, the
+  // snapshot page) yields, with no //, trailing /, encoded / or \\, or dot segments. Matching uses the
+  // decoded form (%61dmin ≡ admin); dispatch and snapshot get the very same path.
+  function routeOf(raw: string, parsed: string): string {
+    const notFound = () => new Refuse(404, 'domain', 'not found')
+    if (raw !== parsed || raw.includes('//') || /%(2f|5c)/i.test(raw) || (raw.length > 1 && raw.endsWith('/'))) throw notFound()
     let d: string
-    try { d = decodeURIComponent(path) } catch { throw new Refuse(404, 'domain', 'not found') }
-    const segs = d.split('/')
-    if (d.includes('\\') || segs.some((s) => s === '.' || s === '..')) throw new Refuse(404, 'domain', 'not found')
-    return d.replace(/\/+$/, '') || '/'
+    try { d = decodeURIComponent(raw) } catch { throw notFound() }
+    if (d.includes('\\') || d.split('/').some((s) => s === '.' || s === '..')) throw notFound()
+    return d
   }
   function matchRoute(key: string): string | undefined {
     if (statics.has(key)) return key
@@ -126,18 +149,29 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     let action: string | undefined
     let ctx: Ctx = { sid: '', rev: 0, page: u.pathname }
     let sid = ''
+    // I3: a sid known only through the httpOnly cookie is never written into a response body.
+    let reveal = !cookieOf(req)
+    const upload: Upload = {}
+    // C1: a stored upload survives only as the result of a successful command; removed before replying
+    const cleanup = async () => {
+      const f = upload.file
+      if (!f || upload.keep) return
+      upload.file = undefined
+      await upload.def!.upload.storage.delete(f.key)
+        .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
+    }
     const reply = (status: number, events: Event[], headers: Record<string, string> = {}) => {
-      const snapSid = events.map(snapshotOf).find(Boolean)?.sid
-      sid = snapSid ?? ctx.sid
+      sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
       setCookie(req, res, sid)
+      const shown = reveal ? events : events.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
-      res.end(render(events, format, settings, { ctx: { ...ctx, sid } }))
+      res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' } }))
       return status
     }
     let status: number
     try {
       format = pickFormat(req, u.searchParams, forced)
-      const key = routeOf(u.pathname)
+      const key = routeOf((req.url ?? '/').split('?')[0]!, u.pathname)
       const route = matchRoute(key)
       if (!route) throw new Refuse(404, 'domain', 'not found: this page has no agent view')
       request = await buildRequest({ req, route, isAgent: true }, settings)
@@ -145,35 +179,41 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       const isGet = req.method === 'GET'
       const sidKey = (isGet ? u.searchParams.get('sid') : null) ?? (req.headers['x-tvine-sid'] as string | undefined)
       const cookie = cookieOf(req)
-      const known = (sidKey ? sessions.peek({ sid: sidKey }) : undefined) ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
+      const bySid = sidKey ? sessions.peek({ sid: sidKey }) : undefined
+      const known = bySid ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
+      if (bySid) reveal = true
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
       await guard(key, request, known)
-      if (isGet) status = await agentGet(req, res, request, u, format, ctx, (c) => { ctx = c }, reply)
-      else {
-        const { cmd, file, def } = await readCommand(req, request, sidKey ?? undefined)
+      if (isGet) {
+        const rl = server.limiter.check({ ip: request.ip })
+        if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
+        status = await agentGet(req, res, request, u, format, ctx, (c) => { ctx = c }, reply)
+      } else {
+        const cmd = await readCommand(req, request, sidKey ?? undefined, upload)
         action = cmd.action
+        if (cmd.sid !== undefined) reveal = true
         const events = await collect(dispatch(cmd, server, request))
-        if (file) {
-          const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
-          if ((ok?.result as UploadedFile | undefined)?.key !== file.key) await def!.upload.storage.delete(file.key)
-        }
+        const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
+        upload.keep = upload.file !== undefined && (ok?.result as UploadedFile | undefined)?.key === upload.file.key
+        await cleanup()
         ctx = renderCtx(server, cmd, request)
         const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
-        const code = !err ? 200 : err.code === 'domain' && err.message.startsWith('forbidden') ? 403 : STATUS[err.code] ?? 400
-        const retry = err?.code === 'rate_limited' && /(\d+)ms/.exec(err.message)?.[1]
-        status = reply(code, events, retry ? { 'retry-after': String(Math.max(1, Math.ceil(Number(retry) / 1000))) } : {})
+        const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
+        status = reply(code, events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
       }
     } catch (e) {
+      await cleanup()
       if (res.headersSent) { res.destroy(); status = 500 }
       else if (e instanceof Refuse) {
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
-        status = reply(e.status, [ev.err(e.code, e.message, e.field !== undefined ? { field: e.field } : undefined)])
+        const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }) }
+        status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
         status = reply(500, [ev.err('internal', 'internal error')])
       }
-    }
-    log({ t: new Date().toISOString(), id, sid, route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
+    } finally { await cleanup() }
+    log({ t: new Date().toISOString(), id, sid: sidHash(sid), route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
   }
 
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
@@ -197,21 +237,28 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   }
 
   // JSON command, or multipart upload (file streamed through the media module, never buffered whole).
-  async function readCommand(req: IncomingMessage, request: Request, headerSid: string | undefined):
-    Promise<{ cmd: Command; file?: UploadedFile; def?: UploadDef }> {
+  async function readCommand(req: IncomingMessage, request: Request, headerSid: string | undefined, upload: Upload): Promise<Command> {
     const ct = (req.headers['content-type'] ?? '').toLowerCase()
     const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(req.headers['content-type'] ?? '')
     if (mp) {
-      const { fields, file, def } = await multipart(req, mp[1] ?? mp[2]!)
+      // I2: the IP bucket is charged before a byte is stored (dispatch charges it again; fine)
+      const rl = server.limiter.check({ ip: request.ip })
+      if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
+      const fields = await multipart(req, mp[1] ?? mp[2]!, upload)
+      const { file, def } = upload as Required<Upload>
       request.files = [file]
-      return { cmd: toCommand({ ...fields, rev: fields.rev === undefined ? undefined : /^\d+$/.test(fields.rev) ? Number(fields.rev) : fields.rev, params: { file: { ...file } } }, headerSid), file, def }
+      // M3: params carry content facts, not the generated key, so a cmdId retry hashes the same
+      const cmd = toCommand({ ...fields, rev: fields.rev === undefined ? undefined : /^\d+$/.test(fields.rev) ? Number(fields.rev) : fields.rev, params: { file: { type: file.type, size: file.size } } }, headerSid)
+      if (cmd.action !== def.id) throw new Refuse(400, 'invalid_param', 'action does not match the upload the file was checked against', 'action')
+      return cmd
     }
     if (!/^application\/(json|tvine\+json)\s*(;|$)/.test(ct)) throw new Refuse(400, 'invalid_param', 'Content-Type must be application/json')
     const raw = await readBody(req, settings.limits.bodyBytes)
     if (!raw) throw new Refuse(413, 'invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`)
     let body: unknown
     try { body = JSON.parse(raw.toString('utf8')) } catch { throw new Refuse(400, 'invalid_param', 'body is not valid JSON') }
-    return { cmd: toCommand(body, headerSid) }
+    if (tooDeep(body)) throw new Refuse(400, 'invalid_param', 'body is nested too deeply')
+    return toCommand(body, headerSid)
   }
 
   function toCommand(v: unknown, headerSid: string | undefined): Command {
@@ -232,7 +279,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   // Streaming multipart/form-data. Text fields first (`action` before the file), one file part named
   // `file`. Text fields share limits.bodyBytes; the file is capped by the upload's maxBytes (media.md).
-  async function multipart(req: IncomingMessage, boundary: string): Promise<{ fields: Record<string, string>; file: UploadedFile; def: UploadDef }> {
+  async function multipart(req: IncomingMessage, boundary: string, upload: Upload): Promise<Record<string, string>> {
     const it = req[Symbol.asyncIterator]() as AsyncIterator<Buffer>
     const delim = Buffer.from(`\r\n--${boundary}`)
     const CRLF2 = Buffer.from('\r\n\r\n')
@@ -263,9 +310,13 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       }
     }
     await until(delim)   // preamble
-    const fields: Record<string, string> = {}
+    const fields: Record<string, string> = Object.create(null)
     let file: UploadedFile | undefined, def: UploadDef | undefined
     for (;;) {
+      if (file) {   // C2: nothing may follow the file (a later field could swap the action it was checked for)
+        while (buf.length < 2) await more()
+        if (buf.subarray(0, 2).toString('latin1') !== '--') throw new Refuse(400, 'invalid_param', 'no parts are allowed after the file part')
+      }
       while (buf.length < 2) await more()
       const tail = buf.subarray(0, 2).toString('latin1')
       buf = buf.subarray(2)
@@ -280,7 +331,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!d || !('upload' in d)) throw new Refuse(400, 'invalid_param', 'the action field must come before the file and name an upload action', 'action')
       def = d as UploadDef
       cap = textCap + def.upload.maxBytes
-      try { file = await receiveUpload(Readable.from(body()), def, { field: 'file' }) }
+      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file' }); upload.def = def }
       catch (e) {
         const c = (e as { code?: unknown }).code
         if (c === 'too_large') throw new Refuse(413, 'invalid_param', (e as Error).message, 'file')
@@ -293,7 +344,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (total > cap) throw new Refuse(413, 'invalid_param', 'request body too large')
     }
     if (!file || !def) throw new Refuse(400, 'invalid_param', 'multipart upload has no file part', 'file')
-    return { fields, file, def }
+    return fields
   }
 
   return (req, res, next) => {
