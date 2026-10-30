@@ -53,12 +53,13 @@ async function tsHooks(): Promise<void> {
 
 // Bare name here (or already `<app>.<name>`); the manifest rewrites id to `${app}.${name}` on register.
 // An unregistered copy (a page bundle) reads its id from the live manifest by that name.
-export function defineAction<S extends z.ZodType>(
+// The return type keeps the handler's result type R (ActionOut, for the generated api types).
+export function defineAction<S extends z.ZodType, R = unknown>(
   name: string,
   schema: S,
-  run: (params: z.infer<S>, ctx: ActionCtx) => Promise<unknown>,
+  run: (params: z.infer<S>, ctx: ActionCtx) => Promise<R>,
   rules?: ActionRules,
-): ActionDef<S> {
+): ActionDef<S> & { run(params: z.infer<S>, ctx: ActionCtx): Promise<R> } {
   let own: ActionId | undefined
   return {
     name,

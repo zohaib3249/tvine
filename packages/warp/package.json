@@ -4,8 +4,12 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": { "tvine": "bin/tvine.js" },
-  "engines": { "node": ">=22.15" },
+  "bin": {
+    "tvine": "bin/tvine.js"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,6 +26,10 @@
     "./shape": {
       "types": "./dist/shape/index.d.ts",
       "import": "./dist/shape/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/api.d.ts",
+      "import": "./dist/types/api.js"
     }
   },
   "scripts": {
