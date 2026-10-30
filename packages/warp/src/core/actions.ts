@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
 import { checkRate } from '../security/ratelimit.js'
@@ -6,6 +8,14 @@ export { DomainError } from './errors.js'
 
 export type Rate = NonNullable<ActionRules['rate']>
 export const APP_RE = /^[a-z][a-z0-9_]*$/
+
+// THE loader rule for apps/<app>/<name> (views, rules, serializers, middleware, models) and cwd settings:
+// source .ts or compiled .js/.mjs. Two side by side (a stale build next to the source) is refused, never guessed.
+export function appModule(dir: string, name: string): string | undefined {
+  const found = ['.ts', '.js', '.mjs'].map((x) => join(dir, name + x)).filter((f) => statSync(f, { throwIfNoEntry: false })?.isFile())
+  if (found.length > 1) throw new Error(`${found.join(' and ')}: more than one ${name} module; delete the stale one`)
+  return found[0]
+}
 
 // Bare name here; the manifest rewrites id to `${app}.${name}` on register.
 export function defineAction<S extends z.ZodType>(

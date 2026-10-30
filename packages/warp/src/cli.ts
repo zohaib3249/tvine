@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
+import { appModule } from './core/actions.js'
 import { openConn } from './data/db.js'
 import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -50,7 +51,7 @@ function loadEnv() {
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
 const hasModels = (apps: string) =>
-  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && ['models.ts', 'models.js'].some((f) => existsSync(join(apps, d.name, f))))
+  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && appModule(join(apps, d.name), 'models') !== undefined)
 
 function table(rows: string[][]): string {
   const w = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))

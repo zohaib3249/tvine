@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { appModule } from '../core/actions.js'
 import { openConn, type Connection } from './db.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
@@ -28,7 +29,7 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
   const out: Record<string, Model<any, any>[]> = {}
   const owner = new Map<string, string>()
   for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
-    const file = ['models.ts', 'models.js'].map(f => join(appsDir, app, f)).find(existsSync)
+    const file = appModule(join(appsDir, app), 'models')
     if (!file) continue                     // an app without models is fine; the empty-result check below guards the rest
     const mod = await (opts.load ?? importLoader)(file)
     for (const v of new Set(Object.values(mod))) {

@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
+import { appModule } from './core/actions.js'
 import { discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
@@ -73,7 +74,7 @@ async function fromApp<T>(spec: string): Promise<T> {
 }
 
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
-  const file = ['settings.ts', 'settings.js'].map((f) => resolve(f)).find(existsSync)
+  const file = appModule(process.cwd(), 'settings')
   const base = file ? ((await import(pathToFileURL(file).href)) as { default: Settings }).default : {}
   return defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
 }
@@ -101,6 +102,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
+  if (!actions.all().length && process.env.NODE_ENV === 'production') {
+    say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
+  }
 
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)

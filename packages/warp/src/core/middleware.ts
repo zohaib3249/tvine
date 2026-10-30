@@ -3,7 +3,7 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { APP_RE } from './actions.js'
+import { APP_RE, appModule } from './actions.js'
 import type { Command, ErrCode, Event, Middleware, Sid } from './types.js'
 
 export type { Middleware }
@@ -43,8 +43,9 @@ export class Hooks {
 export async function discoverMiddleware(appsDir: string): Promise<Map<string, Middleware[]>> {
   const out = new Map<string, Middleware[]>()
   for (const app of (await readdir(appsDir)).sort()) {
-    const file = join(appsDir, app, 'middleware.ts')
-    if (!(await stat(file).catch(() => null))?.isFile()) continue
+    if (!(await stat(join(appsDir, app)).catch(() => null))?.isDirectory()) continue
+    const file = appModule(join(appsDir, app), 'middleware')
+    if (!file) continue
     if (!APP_RE.test(app)) throw new Error(`${file}: folder name "${app}" must match ${APP_RE}`)
     const list: unknown = (await import(pathToFileURL(file).href)).default
     if (!Array.isArray(list) || !list.every((f) => typeof f === 'function')) throw new Error(`${file}: default export must be an array of functions`)
