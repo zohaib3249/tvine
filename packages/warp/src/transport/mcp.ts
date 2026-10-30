@@ -13,6 +13,7 @@ import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
 import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot } from '../core/types.js'
 import { render, type Ctx } from '../serialize/envelope.js'
+import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 
 export interface McpOptions {
   // Next route pattern for a site path ('/product/42' → '/product/[id]'); undefined = not a page.
@@ -144,8 +145,9 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const cmd: Command = tool.action
       ? { action: tool.action, params: rest, sid, cmdId, bind }
       : { action: p.data.action as string, params: p.data.params as Record<string, unknown>, sid, cmdId, bind }
-    const request = await requestFor(server, opts, src, url)
+    const request = await requestFor(server, opts, src, url, sid)
     if (!request) return notPage(server, url)
+    if (request === FORBIDDEN) return forbidden(server)
     const def = server.actions.get(cmd.action)
     if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], renderCtx(server, cmd, request))
     return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
@@ -174,6 +176,8 @@ const bad = (server: ServerCtx, e: z.ZodError) => {
   const i = e.issues[0]!
   return reply(server, [ev.err('invalid_param', `${i.path.join('.')}: ${i.message}`, { field: String(i.path[0] ?? '') })], blank('/'))
 }
+const forbidden = (server: ServerCtx) =>
+  reply(server, [ev.err('domain', FORBIDDEN_ROUTE, { reason: 'forbidden' })], blank('/'))
 const notPage = (server: ServerCtx, url: string) =>
   reply(server, [ev.err('invalid_param', 'url is not a page of this site', { field: 'url' })], blank('/'))
 
@@ -191,18 +195,25 @@ async function unknownAction(server: ServerCtx, cmd: Command, request: Request):
   }
 }
 
-// Only route-table paths of this site ever reach snapshot(): absolute URLs to other origins are refused.
-async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: string) {
+// Only route-table paths of this site ever reach snapshot(): absolute URLs to other origins are refused,
+// and settings.guards run here, before any snapshot or dispatch (same rules as HTTP).
+const FORBIDDEN = Symbol('forbidden')
+async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: string, sid: string | undefined): Promise<Request | undefined | typeof FORBIDDEN> {
   let u: URL
   try { u = new URL(url, 'http://tvine.local') } catch { return undefined }
   if (u.origin !== 'http://tvine.local') return undefined
   const route = opts.route(u.pathname)
-  return route === undefined ? undefined : buildRequest({ ...src, url: u.pathname + u.search, route }, server.settings)
+  if (route === undefined) return undefined
+  let path: string
+  try { path = decodeURIComponent(u.pathname) } catch { return undefined }
+  const request = await buildRequest({ ...src, url: u.pathname + u.search, route }, server.settings)
+  return (await guardCheck(server.settings)(path, request, server.sessions.peek({ sid }))) ? request : FORBIDDEN
 }
 
 async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<typeof readPage>): Promise<CallToolResult> {
-  const request = await requestFor(server, opts, src, a.url)
+  const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
+  if (request === FORBIDDEN) return forbidden(server)
   const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   try {

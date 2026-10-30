@@ -28,6 +28,7 @@ export interface ServerCtx {
   log: Log
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
+  close(): void                    // stops this ctx's session watcher
 }
 
 const errStr = (e: unknown) => (e instanceof Error ? e.stack ?? e.message : String(e))
@@ -41,7 +42,7 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   const channels = o.channels ?? new MemoryChannelLayer()
   const log: Log = o.log ?? (settings.logging === 'none' ? () => {} : (level, msg, data) => console[level](JSON.stringify({ level, msg, ...data })))
   const ctx: ServerCtx = {
-    ...o, channels, log,
+    ...o, channels, log, close: () => {},
     hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
     appMiddleware: o.appMiddleware ?? new Map(),
     sessions: o.sessions ?? new SessionStore(settings.session, { channels }),
@@ -50,12 +51,18 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   }
   const w = watching.get(ctx.sessions) ?? new WeakSet<Hooks>()
   watching.set(ctx.sessions, w)
-  if (!w.has(ctx.hooks)) { w.add(ctx.hooks); ctx.sessions.watch((sid, kind) => ctx.hooks.emit('session', { sid, kind })) }
+  let unwatch = () => {}
+  if (!w.has(ctx.hooks)) { w.add(ctx.hooks); unwatch = ctx.sessions.watch((sid, kind) => ctx.hooks.emit('session', { sid, kind })) }
+  ctx.close = () => { unwatch(); unwatch = () => {}; w.delete(ctx.hooks) }
   setOnCommitErrorHandler((e) => log('error', 'onCommit hook failed', { error: errStr(e) }))
   return ctx
 }
 
-export async function* dispatch(cmd: Command, server: ServerCtx, request: Request): AsyncIterable<Event> {
+// Requests whose caller discards snapshots (the human <Form>: formResult only reads ok/err/goto).
+const quiet = new WeakSet<Request>()
+
+export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: { snapshot?: boolean } = {}): AsyncIterable<Event> {
+  if (opts.snapshot === false) quiet.add(request)
   const t0 = performance.now()
   const { sid, events } = await run(cmd, server, request)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
@@ -207,6 +214,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
 }
 
 async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {
+  if (quiet.has(request)) return undefined
   try { return await server.snapshot(pageOf(request), sid) }
   catch (e) { server.log('error', 'snapshot render failed', { page: pageOf(request), error: errStr(e) }); return undefined }
 }
@@ -273,6 +281,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
+      if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
       const s = await snap(server, request, sid)
       return (committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))])
     }
@@ -295,14 +304,14 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     // ponytail: a middleware may get up to ~2x handlerMs around a handler; track its time exactly if that matters.
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<'timeout'>((r) => {
-      const arm = () => { timer = setTimeout(() => (busy ? arm() : r('timeout')), settings.limits.handlerMs) }
+      // dead is set in the callback itself: a next() fired by a timer in the same turn must already see it
+      const arm = () => { timer = setTimeout(() => { if (busy) arm(); else { dead = true; r('timeout') } }, settings.limits.handlerMs) }
       arm()
     })
     let events: Event[]
     try {
       const r = await Promise.race([drained, expired])
       if (r === 'timeout') {
-        dead = true
         server.log('error', 'middleware timeout', { action: def.id, handlerMs: settings.limits.handlerMs })
         if (!committed) return [ev.err('internal', 'middleware timeout')]
         events = committed
@@ -313,7 +322,10 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       server.log('error', 'middleware failed after commit', { action: def.id, error: errStr(e) })
       events = committed
     } finally { clearTimeout(timer) }
-    if (committed && !events.some((e) => e.kind === 'ok' || e.kind === 'goto')) {
+    // the caller stops at the first terminal event, so that one must carry the committed outcome
+    const end = events.findIndex(isTerminal)
+    const seen = end < 0 ? events : events.slice(0, end + 1)
+    if (committed && !seen.some((e) => e.kind === 'ok' || e.kind === 'goto')) {
       server.log('error', 'middleware dropped the committed result', { action: def.id })
       events = committed
     }

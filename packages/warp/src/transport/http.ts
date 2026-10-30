@@ -6,12 +6,13 @@ import { Readable } from 'node:stream'
 import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
-import type { Command, ErrCode, Event, Permission, Request, Session, Settings, UploadedFile } from '../core/types.js'
+import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, type UploadDef } from '../media/index.js'
-import { runPermissions } from '../security/permissions.js'
 import { bodyCap } from '../security/ratelimit.js'
 import { render, snapshotOf, type Ctx, type Format } from '../serialize/envelope.js'
 import type { RouteInfo } from './discovery.js'
+import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
+import { routeMatcher } from './routes.js'
 
 type Upload = { file?: UploadedFile; def?: UploadDef; keep?: boolean }
 const hideSid = (e: Event): Event =>
@@ -52,54 +53,19 @@ function tooDeep(v: unknown, max = 64): boolean {
   return false
 }
 
-// Glob → RegExp: `**` any depth (also the base itself: '/admin/**' guards '/admin'), `*` one segment.
-const globRe = (g: string) => new RegExp('^' + g.split('/**').map((p) =>
-  p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('(?:/.*)?') + '$')
-
-// Next pattern match: [x] one segment, [...x] one or more, [[...x]] zero or more.
-function matches(pattern: string, ps: string[]): boolean {
-  const rs = pattern.split('/').filter(Boolean)
-  for (let i = 0; i < rs.length; i++) {
-    const r = rs[i]!
-    if (/^\[\[\.\.\.\w+\]\]$/.test(r)) return true
-    if (/^\[\.\.\.\w+\]$/.test(r)) return ps.length > i
-    if (i >= ps.length || (/^\[\w+\]$/.test(r) ? ps[i] === '' : r !== ps[i])) return false
-  }
-  return ps.length === rs.length
-}
-
 export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings, sessions } = server
-  const guards = settings.guards.map((g) => ({ re: globRe(g.path), permissions: g.permissions }))
-  const statics = new Set(opts.routes.map((r) => r.path).filter((p) => !p.includes('[')))
-  const dynamics = opts.routes.map((r) => r.path).filter((p) => p.includes('['))
   const cookieName = settings.session.cookieName
+  const match = routeMatcher(opts.routes)
+  const allowed = guardCheck(settings)
 
   // Only canonical paths: the raw path must already be what URL parsing (and so request.path, the
-  // snapshot page) yields, with no //, trailing /, encoded / or \\, or dot segments. Matching uses the
-  // decoded form (%61dmin ≡ admin); dispatch and snapshot get the very same path.
-  function routeOf(raw: string, parsed: string): string {
-    const notFound = () => new Refuse(404, 'domain', 'not found')
-    if (raw !== parsed || raw.includes('//') || /%(2f|5c)/i.test(raw) || (raw.length > 1 && raw.endsWith('/'))) throw notFound()
-    let d: string
-    try { d = decodeURIComponent(raw) } catch { throw notFound() }
-    if (d.includes('\\') || d.split('/').some((s) => s === '.' || s === '..')) throw notFound()
-    return d
-  }
-  function matchRoute(key: string): string | undefined {
-    if (statics.has(key)) return key
-    const ps = key === '/' ? [] : key.split('/').slice(1)
-    return dynamics.find((p) => matches(p, ps))
-  }
-  const canonical = (raw: string, parsed: string) => { try { return matchRoute(routeOf(raw, parsed)) } catch { return undefined } }
+  // snapshot page) yields; routeMatcher refuses //, trailing /, encoded / or \\, and dot segments.
+  // Matching uses the decoded form (%61dmin ≡ admin); dispatch and snapshot get the very same path.
+  const canonical = (raw: string, parsed: string) => (raw === parsed ? match(raw) : undefined)
 
-  async function guard(key: string, request: Request, session: Session | undefined): Promise<void> {
-    const perms: Permission[] = guards.filter((g) => g.re.test(key)).flatMap((g) => g.permissions)
-    if (!perms.length) return
-    const s = session ?? { sid: '', rev: 0, data: new Map(), createdAt: 0, lastSeen: 0 }
-    try {
-      await runPermissions(perms, { sid: s.sid, session: s, route: request.route, user: request.user, agent: request.agent, ip: request.ip })
-    } catch { throw new Refuse(403, 'domain', 'forbidden: agents may not access this route') }
+  async function guard(raw: string, request: Request, session: Session | undefined): Promise<void> {
+    if (!(await allowed(decodeURIComponent(raw), request, session))) throw new Refuse(403, 'domain', FORBIDDEN_ROUTE)
   }
 
   const cookieOf = (req: IncomingMessage) => {
@@ -183,8 +149,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         status = 308
         return
       }
-      const key = routeOf(raw, u.pathname)
-      const route = matchRoute(key)
+      const route = canonical(raw, u.pathname)
       if (!route) throw new Refuse(404, 'domain', 'not found: this page has no agent view')
       const isGet = req.method === 'GET'
       if (isGet) {   // before auth and guards: a refused GET costs nothing
@@ -199,7 +164,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       const known = bySid ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
       if (bySid) reveal = true
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
-      await guard(key, request, known)
+      await guard(raw, request, known)
       if (isGet) {
         status = await agentGet(req, res, request, u, format, ctx, (c) => { ctx = c }, reply)
       } else {

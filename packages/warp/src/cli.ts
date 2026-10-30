@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseArgs } from 'node:util'
+import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { openConn } from './data/db.js'
 import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -13,13 +13,28 @@ export interface Io { out(s: string): void; err(s: string): void; exit(code: num
 const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c) }
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
-  start [--port 3000]           serve (SIGTERM/SIGINT: graceful close)
+  start [--port 3000]           serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s)
   check                         settings + actions + migrations gate (exit 1 on problems)
   routes                        print the action manifest
-  makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty]
-  migrate [--check]
+  makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
+  migrate [--check] [--plan] [--fake]
   sqlmigrate <app> <migration>
   showmigrations`
+
+type Opts = NonNullable<ParseArgsConfig['options']>
+const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
+// per command: its own flags and how many positionals it takes
+const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
+  start: { options: { port: str }, args: [0, 0] },
+  check: { options: {}, args: [0, 0] },
+  routes: { options: {}, args: [0, 0] },
+  makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
+  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
+  sqlmigrate: { options: {}, args: [2, 2] },
+  showmigrations: { options: {}, args: [0, 0] },
+}
+
+class Usage extends Error {}
 
 // .env.local beats .env; real environment variables beat both (loadEnvFile never overrides).
 function loadEnv() {
@@ -37,28 +52,36 @@ function table(rows: string[][]): string {
   return rows.map((r) => r.map((c, i) => c.padEnd(w[i]!)).join('  ').trimEnd()).join('\n')
 }
 
+// what migrate --check / check report when the database is not clean
+async function pending(url: string, apps: string): Promise<string> {
+  const open = (await showMigrations(url, apps)).filter((m) => !m.applied).map((m) => `${m.app}.${m.name}`)
+  return open.length ? `pending: ${open.join(', ')} (run tvine migrate)` : 'models.ts changed since the last migration (run tvine makemigrations)'
+}
+
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
-  let parsed
+  const [cmd, ...rest] = argv
+  const spec = cmd === undefined ? undefined : COMMANDS[cmd]
+  if (!spec) { io.err(USAGE); return 1 }
   try {
-    parsed = parseArgs({
-      args: argv, allowPositionals: true, options: {
-        apps: { type: 'string', default: 'apps' }, port: { type: 'string' }, name: { type: 'string' },
-        'allow-drop': { type: 'boolean' }, merge: { type: 'boolean' }, empty: { type: 'boolean' }, check: { type: 'boolean' },
-      },
-    })
-  } catch (e) { io.err(`${(e as Error).message}\n${USAGE}`); return 1 }
-  const { values: o, positionals: [cmd, ...args] } = parsed
-  const apps = resolve(o.apps)
-  loadEnv()
-  try {
+    let parsed
+    try { parsed = parseArgs({ args: rest, allowPositionals: true, strict: true, options: { apps: { type: 'string', default: 'apps' }, ...spec.options } }) }
+    catch (e) { const m = (e as Error).message.replace(/\. To specify a positional.*$/s, ''); throw new Usage(m[0]!.toLowerCase() + m.slice(1)) }
+    const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
+    const args = parsed.positionals
+    if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
+    if (args.length < spec.args[0]) throw new Usage(`usage: tvine ${cmd} <app> <migration>`)
+    const apps = resolve(o.apps)
+    loadEnv()
     switch (cmd) {
       case 'start': {
-        const port = Number(o.port ?? process.env.PORT ?? 3000)
+        const port = o.port === undefined ? Number(process.env.PORT ?? 3000) : Number(o.port)
+        if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.listen(port)
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
+          setTimeout(() => { io.err('tvine: close did not finish within 5 s; exiting'); io.exit(1) }, 5_000).unref()
           srv.close().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
         }
         process.once('SIGTERM', stop); process.once('SIGINT', stop)
@@ -67,10 +90,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'check': {
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.close()
-        if (hasModels(apps) && !(await migrateCheck(srv.ctx.settings.db.url, apps))) {
-          io.err('tvine check: migrations are pending or models.ts changed (run tvine makemigrations / migrate)')
-          return 1
-        }
+        const url = srv.ctx.settings.db.url
+        if (hasModels(apps) && !(await migrateCheck(url, apps))) { io.err(`tvine check: ${await pending(url, apps)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
         return 0
       }
@@ -88,27 +109,37 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       }
       case 'makemigrations': {
         const [app] = args
-        if (app !== undefined && !o.empty) throw new Error('per-app makemigrations is only supported with --empty')
-        if (o.empty && app === undefined) throw new Error('--empty needs an app: tvine makemigrations <app> --empty')
-        const r = await makeMigrations(apps, { name: o.name, allowDrop: o['allow-drop'], merge: o.merge, empty: app })
+        if (app !== undefined && !o.empty) throw new Usage('per-app makemigrations is only supported with --empty')
+        if (o.empty && app === undefined) throw new Usage('--empty needs an app: tvine makemigrations <app> --empty')
+        // Django: --check implies --dry-run and exits 1 when a migration is missing
+        const dryRun = !!(o.check || o['dry-run'])
+        const r = await makeMigrations(apps, { name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
+          .catch((e: Error) => { throw new Error(e.message.replace('pass allowDrop to confirm', 'pass --allow-drop to confirm')) })
         io.out(r.message)
-        return 0
+        return o.check && r.files.length ? 1 : 0
       }
       case 'migrate': {
+        if (args.length) throw new Error('rollback targets not supported — forward-only; see backlog (migrate <app> <target>)')
+        if ([o.check, o.plan, o.fake].filter(Boolean).length > 1) throw new Usage('--check, --plan and --fake are exclusive')
         const url = (await loadSettings()).db.url
-        if (o.check) return (await migrateCheck(url, apps)) ? 0 : 1
-        const { applied } = await migrate(url, apps)
-        io.out(applied.length ? applied.map((k) => `applied ${k}`).join('\n') : 'no migrations to apply')
+        if (o.check) {
+          if (await migrateCheck(url, apps)) return 0
+          io.err(`tvine migrate --check: ${await pending(url, apps)}`)
+          return 1
+        }
+        const { applied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake })
+        if (!applied.length) io.out('no migrations to apply')
+        else if (o.plan) io.out(['planned:', ...applied.map((k) => `  ${k}`)].join('\n'))
+        else io.out(applied.map((k) => `${o.fake ? 'faked' : 'applied'} ${k}`).join('\n'))
         return 0
       }
       case 'sqlmigrate': {
-        const [app, name] = args
-        if (!app || !name) throw new Error('usage: tvine sqlmigrate <app> <migration>')
+        const [app, name] = args as [string, string]
         const conn = openConn((await loadSettings()).db.url)   // the connected dialect, as Django does
         try { io.out(await sqlMigrate(apps, app, name, conn.dialect)) } finally { await conn.driver.close() }
         return 0
       }
-      case 'showmigrations': {
+      default: {   // showmigrations
         const rows = await showMigrations((await loadSettings()).db.url, apps)
         const lines: string[] = []
         for (const [i, r] of rows.entries()) {
@@ -118,12 +149,11 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         io.out(lines.join('\n') || '(no migrations)')
         return 0
       }
-      default:
-        io.err(USAGE)
-        return 1
     }
   } catch (e) {
-    io.err(`tvine ${cmd}: ${(e as Error).message}`)
+    const err = e as Error
+    io.err(`tvine ${cmd}: ${process.env.TVINE_DEBUG === '1' ? err.stack ?? err.message : err.message}`)
+    if (e instanceof Usage) io.err(`run 'tvine' for usage`)
     return 1
   }
 }

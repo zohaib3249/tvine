@@ -12,6 +12,7 @@ export interface McpSource {
   ip: string
   clientInfo?: { name?: string }
   isAgent?: boolean
+  via?: 'mcp' | 'human'                      // 'human': the <Form> server-action path
 }
 
 function readonlyHeaders(h: Record<string, string | string[] | undefined>): ReadonlyHeaders {
@@ -80,6 +81,7 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
     id: requestId(headers),
     agent: isHttp
       ? { is: src.isAgent, via: src.isAgent ? 'http' : 'human', client: headers.get('user-agent') ?? undefined }
+      : src.via === 'human' ? { is: false, via: 'human', client: headers.get('user-agent') ?? undefined }
       : { is: src.isAgent ?? true, via: 'mcp', client: src.clientInfo?.name },
     files: [],
     user: ANONYMOUS,

@@ -18,7 +18,12 @@ export type {
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
 export { allowAny, denyAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
-export { createAgentServer, formDispatcher, loadSettings, type AgentServer, type AgentServerOptions, type HeadersLike } from './server.js'
+export {
+  createAgentServer, formDispatcher, loadSettings, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,
+  type FormSource, type NextApp, type NextFactory,
+} from './server.js'
+export { discoverMiddleware, Hooks, type HookEvents, type HookName } from './core/middleware.js'
+export { guardCheck } from './transport/guards.js'
 export { dispatch, collect, serverCtx, formResult, renderCtx, type ServerCtx, type FormResult, type Log } from './core/dispatch.js'
 export { httpTransport, isAgent, type HttpOptions } from './transport/http.js'
 export { mcpHandler, mcpServer, mcpTools, type McpOptions } from './transport/mcp.js'

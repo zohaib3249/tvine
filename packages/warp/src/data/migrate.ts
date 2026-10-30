@@ -98,23 +98,27 @@ export interface MakeOpts extends LoadOpts {
   allowDrop?: boolean    // confirm removeField / deleteModel
   merge?: boolean        // write merge migrations for apps with conflicting leaves
   empty?: string         // write an empty migration for this app (for hand-written ops)
+  dryRun?: boolean       // compute and report the files, write nothing
 }
 
 export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Promise<{ files: string[]; message: string }> {
   if (opts.name !== undefined && !/^\w+$/.test(opts.name)) throw new Error(`invalid migration name "${opts.name}" (letters, digits and _ only)`)
   const graph = await MigrationGraph.load(appsDir, opts)
   const write = (app: string, name: string, m: Migration) => {
-    mkdirSync(join(appsDir, app, 'migrations'), { recursive: true })
-    writeFileSync(join(appsDir, app, 'migrations', `${name}.ts`), render(m))
+    if (!opts.dryRun) {
+      mkdirSync(join(appsDir, app, 'migrations'), { recursive: true })
+      writeFileSync(join(appsDir, app, 'migrations', `${name}.ts`), render(m))
+    }
     return `${app}/migrations/${name}.ts`
   }
+  const created = (files: string[]) => `${opts.dryRun ? 'would create' : 'created'} ${files.join(', ')}`
 
   if (opts.merge) {
     const conflicts = Object.entries(graph.conflicts())
     if (!conflicts.length) return { files: [], message: 'no conflicts to merge' }
     const files = conflicts.map(([app, leaves]) =>
       write(app, `${graph.nextNumber(app)}_${opts.name ?? 'merge'}`, { dependencies: leaves.map(l => [app, l]), operations: [] }))
-    return { files, message: `created ${files.join(', ')}` }
+    return { files, message: created(files) }
   }
   graph.assertNoConflicts()
 
@@ -123,7 +127,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
     if (!existsSync(join(appsDir, app))) throw new Error(`no app "${app}" under ${appsDir}`)
     const leaf = graph.leaf(app)
     const file = write(app, `${graph.nextNumber(app)}_${opts.name ?? 'auto'}`, { dependencies: leaf ? [[app, leaf]] : [], operations: [] })
-    return { files: [file], message: `created ${file}` }
+    return { files: [file], message: created([file]) }
   }
 
   const to = stateFromModels(await discoverModels(appsDir, opts))
@@ -165,7 +169,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   const files = apps.map(a => write(a, names.get(a)!, planned.get(a, names.get(a)!)!.migration))
   return {
     files,
-    message: drops.length ? `WARNING: ${files.join(', ')} is DESTRUCTIVE and drops ${drops.join(', ')}` : `created ${files.join(', ')}`,
+    message: drops.length ? `WARNING: ${files.join(', ')} is DESTRUCTIVE and drops ${drops.join(', ')}` : created(files),
   }
 }
 
@@ -268,12 +272,15 @@ async function withConn<R>(db: string | Connection, fn: (c: Connection) => Promi
   try { return await fn(conn) } finally { if (typeof db === 'string') await conn.driver.close() }
 }
 
-export async function migrate(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<{ applied: string[] }> {
+// plan: list what would apply, touch nothing. fake: journal as applied without running SQL (Django --fake).
+export interface MigrateOpts extends LoadOpts { plan?: boolean; fake?: boolean }
+
+export async function migrate(db: string | Connection, appsDir: string, opts: MigrateOpts = {}): Promise<{ applied: string[] }> {
   const graph = await MigrationGraph.load(appsDir, opts)
   graph.assertNoConflicts()
   const plan = graph.order()
   return withConn(db, async conn => {
-    const done = await readJournal(conn, true)
+    const done = await readJournal(conn, !opts.plan)
     for (const n of plan) {
       if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(`migration ${n.key} was edited after it was applied`)
       if (!done.has(n.key) && [...done].some(([k, sum]) => k.startsWith(`${n.key}#`) && sum !== checksum(n.migration))) {
@@ -283,10 +290,13 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Lo
     let state = emptyState()
     const applied: string[] = []
     for (const n of plan) {
-      const r = step(n, state, done.has(n.key) ? undefined : conn.dialect)
+      const run = !done.has(n.key) && !opts.plan && !opts.fake
+      const r = step(n, state, run ? conn.dialect : undefined)
       if (!done.has(n.key)) {
         const sum = checksum(n.migration)
-        if (conn.dialect.transactionalDDL) await apply(conn, n, r.ops.flat(), sum)
+        if (opts.plan) { /* listed only */ }
+        else if (opts.fake) await apply(conn, n, [], sum)
+        else if (conn.dialect.transactionalDDL) await apply(conn, n, r.ops.flat(), sum)
         else await applyStepwise(conn, n, r.ops, sum, done)
         applied.push(n.key)
       }

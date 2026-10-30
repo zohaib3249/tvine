@@ -93,7 +93,8 @@ export function merge(base: Record<string, unknown>, over: Record<string, unknow
 export function defineSettings(input: SettingsInput & { secret?: string | string[] }): Settings {
   const prod = process.env.NODE_ENV === 'production'
   const { secret: given, ...rest } = input
-  const secret = given ?? (prod ? undefined : randomBytes(32).toString('hex'))
+  // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below
+  const secret = given ?? process.env.TVINE_SECRET ?? (prod ? undefined : randomBytes(32).toString('hex'))
   const keys = secret === undefined ? [] : [secret].flat()
   if (!keys.length || keys.some((k) => k.length < 32)) {
     throw new Error(
