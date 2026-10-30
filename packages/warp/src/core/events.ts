@@ -4,10 +4,12 @@ import type { ActionId, Event, ErrCode, Rev, Sid, Snapshot } from './types.js'
 export const ev = {
   snapshot: (snapshot: Snapshot): Event => ({ kind: 'snapshot', snapshot }),
   ok: (action: ActionId, result?: unknown): Event => ({ kind: 'ok', action, result }),
-  err: (code: ErrCode, message: string, opts?: { field?: string; snapshot?: Snapshot }): Event => {
+  err: (code: ErrCode, message: string, opts?: { field?: string; snapshot?: Snapshot; reason?: string; retryAfterMs?: number }): Event => {
     const e: Extract<Event, { kind: 'err' }> = { kind: 'err', code, message }
     if (opts?.field !== undefined) e.field = opts.field
     if (opts?.snapshot !== undefined) e.snapshot = opts.snapshot
+    if (opts?.reason !== undefined) e.reason = opts.reason
+    if (opts?.retryAfterMs !== undefined) e.retryAfterMs = opts.retryAfterMs
     return e
   },
   goto: (url: string): Event => ({ kind: 'goto', url }),

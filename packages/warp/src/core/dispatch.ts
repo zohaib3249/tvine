@@ -100,7 +100,7 @@ function crossOrigin(r: Request, s: Settings): boolean {
 export const MAX_QUEUE = 16
 const chains = new Map<Sid, Promise<unknown>>()
 const depth = new Map<Sid, number>()
-const rateLimited = (ms: number) => ev.err('rate_limited', `rate limited: retry after ${ms}ms`)
+const rateLimited = (ms: number) => ev.err('rate_limited', `rate limited: retry after ${ms}ms`, { retryAfterMs: ms })
 function serial(sid: Sid, fn: () => Promise<Event[]>): Promise<Event[]> {
   const n = depth.get(sid) ?? 0
   if (n >= MAX_QUEUE) return Promise.resolve([rateLimited(1000)])
@@ -139,7 +139,14 @@ function redirectUrl(e: unknown): string | undefined {
 // ---- pipeline ------------------------------------------------------------------------------
 async function run(cmd: Command, server: ServerCtx, request: Request): Promise<Event[]> {
   const { settings, sessions } = server
-  if (crossOrigin(request, settings)) return [ev.err('domain', 'forbidden: cross-origin request')]
+  if (crossOrigin(request, settings)) return [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })]
+  // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
+  const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
+  const known = cmd.cmdId && sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) })
+  if (known) {
+    const r = server.idempotency.replay(known.sid, cmd.cmdId!, hash)
+    if (r.hit === true) return r.events
+  }
   // 3a. ip + default sid bucket first: abusive traffic never creates sessions or queues (3b, an action's own rate, runs later)
   const rl = server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
   if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
@@ -153,7 +160,6 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<E
   const hold: Hold = {}
   if (!cmd.cmdId) return serial(sid, () => pipeline(cmd, server, request, session, '', hold))
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
-  const hash = hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind })
   const key = `${sid}:${cmd.cmdId}`
   const running = inFlight.get(key)
   if (running) {
@@ -240,7 +246,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]
     if (e instanceof DomainError) {
       const code = e.code === 'invalid_param' || e.code === 'internal' ? e.code : 'domain'
-      return [ev.err(code, e.message, { field: e.field })]
+      return [ev.err(code, e.message, { field: e.field, reason: e.code })]
     }
     server.log('error', 'action failed', { action: def.id, error: errStr(e) })
     return [ev.err('internal', 'internal error')]
@@ -270,7 +276,9 @@ async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: 
       // outcome: a COMMIT already in flight may still succeed, and then the request DID commit.
       server.log('warn', 'handler timeout; transaction aborted', { action: def.id, handlerMs })
       ac.abort(new HandlerTimeout())
-      try { return await work } catch { throw new HandlerTimeout() }
+      // second, generous cap: a hung COMMIT must not hang the request (the block is already marked dead)
+      const capped = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new HandlerTimeout()), 3 * handlerMs) })
+      try { return await Promise.race([work, capped]) } catch { throw new HandlerTimeout() }
     }
     return await work
   } finally { clearTimeout(timer) }

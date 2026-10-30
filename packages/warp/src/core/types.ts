@@ -43,7 +43,9 @@ export interface Command {
 export type Event =
   | { kind: 'snapshot'; snapshot: Snapshot }
   | { kind: 'ok'; action: ActionId; result?: unknown }
-  | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot }
+  | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot
+      reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
+      retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
   | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' }   // v2 live
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
