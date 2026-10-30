@@ -4,7 +4,7 @@ import type { AgentSpec } from './types.js'
 
 // Default id = `${type}:${data.id ?? data.key}` (string|number); otherwise an explicit id is
 // required. No useId: in RSC it is a render-order counter, unstable across renders.
-function idFor(type: string, spec: AgentSpec): string {
+export function idFor(type: string, spec: Pick<AgentSpec, 'id' | 'data'>): string {
   if (spec.id) return spec.id
   const k = spec.data.id ?? spec.data.key
   if (typeof k === 'string' || typeof k === 'number') return `${type}:${k}`

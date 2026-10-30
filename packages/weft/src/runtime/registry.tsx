@@ -30,7 +30,7 @@ const TYPES: Record<string, string> = { ZodString: 'string', ZodNumber: 'number'
 
 // Same output as warp's ActionManifest.paramSpecs, duck-typed so weft does not depend on zod.
 // TODO(W1): import from @tvine/warp
-function paramSpecs(schema: unknown): ActionRef['params'] {
+export function paramSpecs(schema: unknown): ActionRef['params'] {
   const shape = (schema as { shape?: Record<string, ZodLike> } | null)?.shape
   if (!shape || typeof shape !== 'object') return []
   return Object.entries(shape).map(([name, f]) => {
@@ -40,7 +40,7 @@ function paramSpecs(schema: unknown): ActionRef['params'] {
   })
 }
 
-function bindFor(payload?: Record<string, unknown>): string {
+export function bindFor(payload?: Record<string, unknown>): string {
   if (!payload) return ''
   const sign = store[KEY]
   if (!sign) throw new Error('tvine: bindPayload given but no signer configured (setSigner)')

@@ -33,3 +33,14 @@ export interface TvineEvent {
   message?: string
   [k: string]: unknown
 }
+
+// TODO(W1): from @tvine/warp core/types.
+export interface Paginated<T> { items: T[]; total?: number; pageSize: number; nextCursor?: string }
+export interface Command {
+  action: string
+  params: Record<string, unknown>
+  sid?: string
+  bind?: string
+  cmdId?: string
+  rev?: number
+}
