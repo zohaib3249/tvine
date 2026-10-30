@@ -1,54 +1,34 @@
-// Field kinds for defineModel. One definition drives the column layout, the zod schema and the TS type.
-// Storage choices: datetime = integer ms (surfaces as Date); money = int cents + currency columns
-// (surfaces as {value,currency}); image = text key; fk = `<name>Id` int/text column.
+// Field DSL for defineModel. Each `field.x()` returns a Field instance (data/fields/*) that owns
+// its columns, per-DB types, value conversion and lookups; this file adds the TS-level row types.
 import { z } from 'zod'
+import {
+  BoolField, DatetimeField, EnumField, FkField, FloatField, IdField, ImageField, IntField, JsonField,
+  MoneyField, TextField, UuidField, type Field, type Fields, type Kind, type Money, type Opts,
+} from './fields/index.js'
 
-export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk'
-
-export interface Opts {
-  optional?: boolean
-  default?: unknown
-  unique?: boolean
-  searchable?: boolean
-  index?: boolean
-  auto?: boolean                        // datetime only: default now
-}
-
-export interface Money { value: number; currency: string }
-
-// V = row value type, O = optional (nullable), K = kind (fk renames the key to `<name>Id`).
-export interface Field<V = unknown, O extends boolean = boolean, K extends Kind = Kind, D extends boolean = boolean> {
-  readonly kind: K
-  readonly opts: Opts
-  readonly values?: readonly string[]            // enum
-  readonly target?: () => { name: string; fields: Fields }     // fk
-  readonly _v?: V
-  readonly _o?: O
-  readonly _d?: D
-}
-export type Fields = Record<string, Field<any, boolean, Kind, boolean>>
-export interface ModelDef { name: string; fields: Fields }
+export { keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts } from './fields/index.js'
 
 type OptOf<P extends Opts | undefined> = P extends { optional: true } ? true : false
 type DefOf<P extends Opts | undefined> = P extends { default: unknown } | { auto: true } ? true : false
-const mk = <V, K extends Kind>(kind: K) =>
-  <const P extends Opts | undefined = undefined>(opts?: P): Field<V, OptOf<P>, K, DefOf<P>> => ({ kind, opts: opts ?? {} })
+type Typed<V, K extends Kind, P extends Opts | undefined> = Field<V, OptOf<P>, K, DefOf<P>>
+const mk = <V, K extends Kind>(C: new (opts?: Opts) => Field<any, boolean, K, boolean>) =>
+  <const P extends Opts | undefined = undefined>(opts?: P) => new C(opts ?? {}) as unknown as Typed<V, K, P>
 
 export const field = {
-  id: () => ({ kind: 'id', opts: {} }) as Field<number, false, 'id', true>,
-  uuid: mk<string, 'uuid'>('uuid'),
-  text: mk<string, 'text'>('text'),
-  int: mk<number, 'int'>('int'),
-  float: mk<number, 'float'>('float'),
-  bool: mk<boolean, 'bool'>('bool'),
-  money: mk<Money, 'money'>('money'),
-  datetime: mk<Date, 'datetime'>('datetime'),
-  json: mk<unknown, 'json'>('json'),
-  image: mk<string, 'image'>('image'),
+  id: () => new IdField() as Field<number, false, 'id', true>,
+  uuid: mk<string, 'uuid'>(UuidField),
+  text: mk<string, 'text'>(TextField),
+  int: mk<number, 'int'>(IntField),
+  float: mk<number, 'float'>(FloatField),
+  bool: mk<boolean, 'bool'>(BoolField),
+  money: mk<Money, 'money'>(MoneyField),
+  datetime: mk<Date, 'datetime'>(DatetimeField),
+  json: mk<unknown, 'json'>(JsonField),
+  image: mk<string, 'image'>(ImageField),
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
-    ({ kind: 'enum', opts: opts ?? {}, values }) as Field<E[number], OptOf<P>, 'enum', DefOf<P>>,
+    new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>
-    ({ kind: 'fk', opts: opts ?? {}, target }) as Field<number | string, OptOf<P>, 'fk', DefOf<P>>,
+    new FkField(target, opts ?? {}) as unknown as Typed<number | string, 'fk', P>,
 }
 
 // ---- types -------------------------------------------------------------------------------------
@@ -62,35 +42,9 @@ export type Create<F extends Fields> =
   { [K in keyof F as Defaulted<F[K]> extends true ? Key<F, K> : never]?: Val<F[K]> }
 export type Infer<M> = M extends { schema: z.ZodType<infer T> } ? T : never
 
-// ---- derived helpers (shared by engine, model, migrate) --------------------------------------
-export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => (f.kind === 'fk' ? `${name}Id` : name)
-
-export function pkField(def: ModelDef): [string, Field<any, boolean, Kind, boolean>] {
-  const e = Object.entries(def.fields).find(([n, f]) => n === 'id' && (f.kind === 'id' || f.kind === 'uuid'))
-  if (!e) throw new Error(`model "${def.name}" needs an id field: id: field.id()`)
-  return e
-}
-
-export function fieldZod(f: Field<any, boolean, Kind, boolean>): z.ZodTypeAny {
-  let t: z.ZodTypeAny
-  switch (f.kind) {
-    case 'id': t = z.number().int(); break
-    case 'uuid': case 'text': case 'image': t = z.string(); break
-    case 'int': t = z.number().int(); break
-    case 'float': t = z.number(); break
-    case 'bool': t = z.boolean(); break
-    case 'money': t = z.object({ value: z.number().int(), currency: z.string().min(1) }); break
-    case 'enum': t = z.enum(f.values as [string, ...string[]]); break
-    case 'datetime': t = z.date(); break
-    case 'json': t = z.unknown(); break
-    case 'fk': t = z.union([z.number(), z.string()]); break
-  }
-  return f.opts.optional ? t.nullable() : t
-}
-
 // Row schema (what reads return). Keys use the stored property name (`vendorId` for fk).
-export function rowSchema(def: ModelDef): z.ZodObject<z.ZodRawShape> {
-  return z.object(Object.fromEntries(Object.entries(def.fields).map(([n, f]) => [keyOf(n, f), fieldZod(f)])))
+export function rowSchema(def: { fields: Fields }): z.ZodObject<z.ZodRawShape> {
+  return z.object(Object.fromEntries(Object.entries(def.fields).map(([n, f]) => [f.key(n), f.schema()])))
 }
 
 // Fields a caller may leave out on create.

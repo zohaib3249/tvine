@@ -1,5 +1,5 @@
 export { defineModel, modelRegistry, type Model } from './data/model.js'
 export { field, inc, dec, type Infer } from './data/fields.js'
-export { atomic } from './data/engine.js'
+export { atomic, onCommit } from './data/engine.js'
 export { configureDb, closeDb } from './data/db.js'
 export { makeMigrations, migrate, migrateCheck } from './data/migrate.js'

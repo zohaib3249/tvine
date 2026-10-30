@@ -6,9 +6,61 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { generateSQLiteDrizzleJson, generateSQLiteMigration } from 'drizzle-kit/api'
-import { tableFor } from './engine.js'
+// TODO(6e): removed with drizzle-kit — the only drizzle-orm import left in src (migration generation only)
+import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { keyOf, pkField, type ModelDef } from './fields.js'
 import { openConn } from './db.js'
 import type { Model } from './model.js'
+
+// TODO(6e): removed with drizzle-kit. Builds drizzle-kit's input (a drizzle table object) from our
+// fields, ONLY to feed generateSQLite*; the query path never sees it.
+const drizzleTables = new WeakMap<object, any>()
+function drizzleTable(def: ModelDef): any {
+  let t = drizzleTables.get(def.fields)
+  if (t) return t
+  const cols: Record<string, any> = {}
+  const idx: [string, string][] = []
+  for (const [name, f] of Object.entries(def.fields)) {
+    const o = f.opts
+    const fin = (c: any) => {
+      if (!o.optional && f.kind !== 'id') c = c.notNull()
+      if (o.unique) c = c.unique()
+      if (o.default !== undefined && f.kind !== 'money') c = c.default(o.default)
+      return c
+    }
+    switch (f.kind) {
+      case 'id': cols[name] = integer(name).primaryKey({ autoIncrement: true }); break
+      case 'uuid': cols[name] = name === 'id' ? text(name).primaryKey() : fin(text(name)); break
+      case 'text': case 'image': cols[name] = fin(text(name)); break
+      case 'int': cols[name] = fin(integer(name)); break
+      case 'float': cols[name] = fin(real(name)); break
+      case 'bool': cols[name] = fin(integer(name, { mode: 'boolean' })); break
+      case 'enum': cols[name] = fin(text(name, { enum: f.values as [string, ...string[]] })); break
+      case 'datetime': cols[name] = fin(integer(name, { mode: 'timestamp_ms' })); break
+      case 'json': cols[name] = fin(text(name, { mode: 'json' })); break
+      case 'money':
+        cols[name] = fin(integer(name))
+        cols[`${name}Currency`] = o.optional ? text(`${name}Currency`) : text(`${name}Currency`).notNull()
+        if (o.default !== undefined) {
+          const d = o.default as { value: number; currency: string }
+          cols[name] = cols[name].default(d.value); cols[`${name}Currency`] = cols[`${name}Currency`].default(d.currency)
+        }
+        break
+      case 'fk': {
+        const k = `${name}Id`
+        const target = f.target!()
+        const c = pkField(target)[1].kind === 'id' ? integer(k) : text(k)
+        cols[k] = fin(c).references(() => drizzleTable(target)[pkField(target)[0]], { onDelete: 'restrict' })
+        break
+      }
+    }
+    if (o.index) idx.push([name, keyOf(name, f)])
+  }
+  pkField(def)
+  t = sqliteTable(def.name, cols, tbl => idx.map(([n, k]) => index(`${def.name}_${n}_idx`).on(tbl[k])))
+  drizzleTables.set(def.fields, t)
+  return t
+}
 
 const SNAP = 'meta/snapshot.json'
 const BREAK = '--> statement-breakpoint'
@@ -29,7 +81,7 @@ export async function discoverModels(appsDir: string): Promise<Model<any, any>[]
 }
 
 async function snapshotOf(models: Model<any, any>[]) {
-  const tables = Object.fromEntries(models.map(m => [m.name, tableFor(m)]))
+  const tables = Object.fromEntries(models.map(m => [m.name, drizzleTable(m)]))
   return generateSQLiteDrizzleJson(tables)
 }
 
