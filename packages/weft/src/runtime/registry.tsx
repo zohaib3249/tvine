@@ -15,11 +15,14 @@ export interface RegisteredAction {
 
 export type RegisterInput = Omit<Node, 'actions'> & { actions?: RegisteredAction[]; personal?: boolean }
 
-let signer: Signer | undefined
+// On globalThis so every copy of this module (Next builds several module graphs) sees the
+// signer set once at boot.
+const KEY = Symbol.for('tvine.signer')
+const store = globalThis as { [KEY]?: Signer }
 
 // Server wiring calls this once at boot with `(p) => signBind(p, settings)`.
 export function setSigner(sign: Signer | undefined): void {
-  signer = sign
+  store[KEY] = sign
 }
 
 type ZodLike = { isOptional?: () => boolean; _def?: { typeName?: string; innerType?: ZodLike } }
@@ -39,8 +42,9 @@ function paramSpecs(schema: unknown): ActionRef['params'] {
 
 function bindFor(payload?: Record<string, unknown>): string {
   if (!payload) return ''
-  if (!signer) throw new Error('tvine: bindPayload given but no signer configured (setSigner)')
-  return signer(payload)
+  const sign = store[KEY]
+  if (!sign) throw new Error('tvine: bindPayload given but no signer configured (setSigner)')
+  return sign(payload)
 }
 
 // `<` → < so no data string can close the tag.
@@ -50,19 +54,20 @@ function fragment(body: Record<string, unknown>): ReactElement {
 }
 
 // Returns the fragment element; the caller renders it.
-export function register({ actions = [], personal, ...node }: RegisterInput): ReactElement {
-  const full: Node = {
-    ...node,
+export function register({ id, type, data, actions = [], personal }: RegisterInput): ReactElement {
+  const node: Node = {
+    id, type, data,
     actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema), bind: bindFor(a.bindPayload) })),
   }
-  return fragment({ k: 'node', node: full, ...(personal && { personal: true }) })
+  return fragment({ k: 'node', node, ...(personal && { personal: true }) })
 }
 
-export function registerLink(link: Link): ReactElement {
-  return fragment({ k: 'link', link })
+// personal: per-session content (e.g. "Cart (2)") — marks the snapshot uncacheable.
+export function registerLink(link: Link, opts: { personal?: boolean } = {}): ReactElement {
+  return fragment({ k: 'link', link, ...(opts.personal && { personal: true }) })
 }
 
 // For the future <Page> primitive.
-export function pageFragment({ page, title }: { page: string; title: string }): ReactElement {
-  return fragment({ k: 'page', page, title })
+export function pageFragment({ page, title, personal }: { page: string; title: string; personal?: boolean }): ReactElement {
+  return fragment({ k: 'page', page, title, ...(personal && { personal: true }) })
 }
