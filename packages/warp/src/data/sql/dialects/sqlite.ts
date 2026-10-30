@@ -49,6 +49,9 @@ export const sqlite: Dialect = {
   render: node => renderNode(node, sqlite),
   lowerFn: 'tv_lower',
   transactionalDDL: true,
+  likeEscape: "'\\'",
+  bool: ['0', '1'],
+  nullsSmallest: true,
   renderOperation(op, from, to) {
     switch (op.kind) {
       case 'removeField': return rebuild(op, from, to)

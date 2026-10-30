@@ -13,6 +13,9 @@ export interface Dialect {
   render(node: SqlNode): Statement
   lowerFn: string                              // Unicode-aware lower(): 'tv_lower' | 'lower'
   transactionalDDL: boolean
+  likeEscape: string                           // backslash as a string literal for LIKE … ESCAPE, as this DB reads it
+  bool: readonly [string, string]              // how Raw '0' / '1' (false / true) are spelled
+  nullsSmallest: boolean                       // false → ORDER BY spells NULLS FIRST/LAST so nulls sort smallest everywhere
   // A migration operation as this database runs it (from = state before the op, to = after).
   // sqlite rebuilds tables for what it cannot ALTER; others use the shared defaultRender.
   renderOperation(op: Operation, from: ProjectState, to: ProjectState): Statement[]
@@ -38,16 +41,17 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       case 'and': return `(${x.es.map(e).join(' AND ')})`
       case 'or': return `(${x.es.map(e).join(' OR ')})`
       case 'isNull': return `${e(x.e)} IS ${x.negated ? 'NOT ' : ''}NULL`
-      case 'in': return x.list.length ? `${e(x.e)} IN (${x.list.map(e).join(', ')})` : '0'
-      // TODO(Task 20): ESCAPE '\' must become dialect-rendered — mysql treats backslash as a string escape
-      case 'like': return `${x.ci ? `${checkIdent(d.lowerFn)}(${e(x.e)})` : e(x.e)} LIKE ${e(x.pattern)} ESCAPE '\\'`
+      case 'in': return x.list.length ? `${e(x.e)} IN (${x.list.map(e).join(', ')})` : d.bool[0]
+      case 'like': return `${x.ci ? `${checkIdent(d.lowerFn)}(${e(x.e)})` : e(x.e)} LIKE ${e(x.pattern)} ESCAPE ${d.likeEscape}`
+      case 'castText': return `CAST(${e(x.e)} AS TEXT)`
       case 'raw':
         if (!(RAW as readonly string[]).includes(x.sql)) throw new Error('Raw accepts compile-time constants only')
-        return x.sql
+        return x.sql === '0' ? d.bool[0] : x.sql === '1' ? d.bool[1] : x.sql
       case 'select': {
         let s = `SELECT ${x.cols?.length ? x.cols.map(e).join(', ') : '*'} FROM ${q(x.from)}`
         if (x.where) s += ` WHERE ${e(x.where)}`
-        if (x.order?.length) s += ` ORDER BY ${x.order.map(o => `${e(o.e)} ${o.dir === 'desc' ? 'DESC' : 'ASC'}`).join(', ')}`
+        const nulls = (dir: string) => (d.nullsSmallest ? '' : dir === 'desc' ? ' NULLS LAST' : ' NULLS FIRST')
+        if (x.order?.length) s += ` ORDER BY ${x.order.map(o => `${e(o.e)} ${o.dir === 'desc' ? 'DESC' : 'ASC'}${nulls(o.dir)}`).join(', ')}`
         if (x.limit !== undefined) s += ` LIMIT ${e({ t: 'param', value: x.limit })}`
         return s
       }
@@ -63,6 +67,9 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
         if (x.dropColumn) return `ALTER TABLE ${q(x.name)} DROP COLUMN ${q(x.dropColumn)}`
         if (x.renameTo) return `ALTER TABLE ${q(x.name)} RENAME TO ${q(x.renameTo)}`
         if (x.renameColumn) return `ALTER TABLE ${q(x.name)} RENAME COLUMN ${q(x.renameColumn.from)} TO ${q(x.renameColumn.to)}`
+        if (x.alterColumn) return `ALTER TABLE ${q(x.name)} ALTER COLUMN ${q(x.alterColumn.name)} ${x.alterColumn.action}`
+        if (x.addUnique) return `ALTER TABLE ${q(x.name)} ADD CONSTRAINT ${q(x.addUnique.constraint)} UNIQUE (${q(x.addUnique.col)})`
+        if (x.dropConstraint) return `ALTER TABLE ${q(x.name)} DROP CONSTRAINT ${q(x.dropConstraint)}`
         throw new Error('alterTable needs an action')
       case 'dropTable': return `DROP TABLE ${q(x.name)}`
       case 'createIndex': return `CREATE ${x.unique ? 'UNIQUE ' : ''}INDEX ${q(x.name)} ON ${q(x.table)} (${x.cols.map(q).join(', ')})`

@@ -16,7 +16,8 @@
   },
   "scripts": {
     "build": "tsc -p .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:pg": "./scripts/test-pg.sh"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
@@ -25,7 +26,17 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/pg": "^8",
+    "pg": "^8.13.0",
     "react": "^19",
     "react-dom": "^19"
+  },
+  "peerDependencies": {
+    "pg": "^8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
   }
 }

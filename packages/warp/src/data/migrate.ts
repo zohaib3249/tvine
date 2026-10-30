@@ -188,25 +188,26 @@ async function readJournal({ driver, dialect: d }: Connection, create: boolean):
     const rows = await driver.query(s.sql, s.params)
     return new Map(rows.map(r => [`${r.app}.${r.name}`, String(r.checksum)]))
   } catch (e) {
-    // ponytail: sqlite error texts; pg/mysql variants land with their dialects (Task 20)
-    const msg = String((e as Error).message)
-    if (/no such column/i.test(msg)) throw new Error(`the migration journal ${JOURNAL} is from an older Tvine build (pre-release format); migrate a fresh database or drop that table`)
-    if (!create && /no such table/i.test(msg)) return new Map()
+    // sqlite texts / postgres SQLSTATE (42703 undefined column, 42P01 undefined table)
+    const msg = String((e as Error).message), code = (e as { code?: string }).code
+    if (/no such column/i.test(msg) || code === '42703') throw new Error(`the migration journal ${JOURNAL} is from an older Tvine build (pre-release format); migrate a fresh database or drop that table`)
+    if (!create && (/no such table/i.test(msg) || code === '42P01')) return new Map()
     throw e
   }
 }
 
 async function apply({ driver, dialect: d }: Connection, n: MigrationNode, stmts: Statement[], sum: string): Promise<void> {
-  // ponytail: the FK-off wrapper is sqlite's (rebuilds need it; the pragma is a no-op inside a
-  // transaction). pg/mysql (non-transactional DDL on mysql) land with their dialects in Task 20.
+  // The whole migration (+ its journal row) is ONE transaction: sqlite and postgres have
+  // transactional DDL. The FK-off wrapper is sqlite's (rebuilds need it; the pragma is a no-op
+  // inside a transaction); postgres ALTERs in place, so its fks stay on. mysql: Task 20b.
   const lite = d.name === 'sqlite'
   if (lite) await driver.exec('PRAGMA foreign_keys = OFF', [])
   try {
-    await driver.transaction(async () => {
-      for (const s of stmts) await driver.exec(s.sql, s.params)
-      if (lite && (await driver.query('PRAGMA foreign_key_check', [])).length) throw new Error(`migration ${n.key} would leave rows pointing at missing records`)
+    await driver.transaction(async tx => {
+      for (const s of stmts) await tx.exec(s.sql, s.params)
+      if (lite && (await tx.query('PRAGMA foreign_key_check', [])).length) throw new Error(`migration ${n.key} would leave rows pointing at missing records`)
       const ins = d.render({ t: 'insert', into: JOURNAL, cols: ['app', 'name', 'checksum', 'applied_at'], values: [n.app, n.name, sum, Date.now()].map(param) })
-      await driver.exec(ins.sql, ins.params)
+      await tx.exec(ins.sql, ins.params)
     })
   } finally {
     if (lite) await driver.exec('PRAGMA foreign_keys = ON', [])
@@ -215,7 +216,7 @@ async function apply({ driver, dialect: d }: Connection, n: MigrationNode, stmts
 
 async function withConn<R>(db: string | Connection, fn: (c: Connection) => Promise<R>): Promise<R> {
   const conn = typeof db === 'string' ? openConn(db) : db
-  try { return await fn(conn) } finally { if (typeof db === 'string') conn.driver.close() }
+  try { return await fn(conn) } finally { if (typeof db === 'string') await conn.driver.close() }
 }
 
 export async function migrate(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<{ applied: string[] }> {

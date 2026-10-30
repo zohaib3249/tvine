@@ -13,6 +13,14 @@ function wrapErr(def: ModelDef, e: unknown): never {
   const c = (e as { cause?: unknown }).cause ?? e
   const code = (c as { code?: string }).code ?? ''
   const msg = String((c as Error).message ?? '')
+  // postgres SQLSTATE: 23505 unique, 23503 foreign key, 23502 not null (detail: "Key (name)=(…) already exists.")
+  if (code === '23503') throw new DomainError('domain', `${def.name} is still referenced by other records, or points at a record that does not exist`)
+  if (code === '23505' || code === '23502') {
+    const pg = c as { detail?: string; column?: string }
+    const field = (pg.column ?? /Key \("?(\w+)"?\)/.exec(pg.detail ?? '')?.[1])?.replace(/Id$/, '')
+    if (code === '23505') throw new DomainError('domain', `${def.name}.${field} must be unique`, field)
+    throw new DomainError('invalid_param', `${def.name}.${field} is required`, field)
+  }
   if (code.startsWith('SQLITE_CONSTRAINT')) {
     const field = msg.split(':').pop()?.trim().split('.').pop()?.replace(/Id$/, '')
     if (msg.startsWith('FOREIGN KEY')) throw new DomainError('domain', `${def.name} is still referenced by other records, or points at a record that does not exist`)
@@ -23,11 +31,12 @@ function wrapErr(def: ModelDef, e: unknown): never {
 }
 
 // ---- atomic ----------------------------------------------------------------------------------
-// One serial queue per process: EVERY operation (atomic or not) waits its turn, and whether it sits
+// sqlite: one serial queue per process: EVERY operation (atomic or not) waits its turn, and whether it sits
 // inside a transaction is decided when it runs, never when it was called. Inside atomic() the
 // connection is bound in AsyncLocalStorage: operations from the callback skip the queue (they
 // already own the connection), nested atomic reuses it. Once the block ends (commit, rollback or
 // abort) the binding is closed, so a late query from the callback throws instead of escaping.
+// postgres (pooled): no queue; atomic() holds ONE pool client for the whole block (tx.conn.driver).
 class TxError extends Error {}
 type Closed = 'committed' | 'rolled back' | 'aborted'
 interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[] }
@@ -42,6 +51,10 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
       return fn(tx.conn)
     })
   }
+  // a pooled driver acquires per statement: plain queries run in parallel, never behind an open atomic()
+  let pooled = false
+  try { pooled = !!connections.get().driver.pooled } catch { /* reported when the op runs */ }
+  if (pooled) return Promise.resolve().then(() => fn(connections.get()))
   const run = tail.then(() => fn(connections.get()))
   tail = run.catch(() => undefined)
   return run
@@ -69,8 +82,11 @@ export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } =
       signal?.addEventListener('abort', onAbort, { once: true })
     })
     aborted.catch(() => undefined)
-    return conn.driver.transaction(() => Promise.race([bound.run(tx, fn), aborted]))
-      .then(r => { tx.closed ??= 'committed'; return r }, e => { tx.closed ??= 'rolled back'; throw e })
+    return conn.driver.transaction(txd => {
+      tx.conn = { ...conn, driver: txd }
+      return Promise.race([bound.run(tx, fn), aborted])
+    }, { signal })
+      .then(r => { tx.closed = 'committed'; return r }, e => { tx.closed ??= 'rolled back'; throw e })   // COMMIT resolved = committed, even if an abort landed mid-commit
       .finally(() => signal?.removeEventListener('abort', onAbort))
   })
   // commit hooks run after the outermost COMMIT, outside the block, ALL of them, in registration order
