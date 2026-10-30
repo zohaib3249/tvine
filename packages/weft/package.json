@@ -41,7 +41,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "@tvine/warp": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19",
