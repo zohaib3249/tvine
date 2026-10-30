@@ -22,8 +22,17 @@ function matchWhere(row: Row, w: Where): boolean {
   return w.not ? !ok : ok
 }
 
+// Total order: nullish first, Dates by time. Anything else that is not comparable stays 0.
+// ponytail: no per-type collation; strings compare by UTF-16 code unit.
 function cmp(a: unknown, b: unknown): number {
-  return (a as number) < (b as number) ? -1 : (a as number) > (b as number) ? 1 : 0
+  const x = a instanceof Date ? a.getTime() : a
+  const y = b instanceof Date ? b.getTime() : b
+  const xn = x == null
+  const yn = y == null
+  if (xn || yn) return xn === yn ? 0 : xn ? -1 : 1
+  const p = x as number | bigint | string
+  const q = y as number | bigint | string
+  return p < q ? -1 : p > q ? 1 : 0
 }
 
 function cmpKeys(av: unknown[], bv: unknown[], order: Order[]): number {

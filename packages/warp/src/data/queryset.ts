@@ -25,16 +25,29 @@ export interface Paginated<T> {
 const DEFAULT_PAGE = 25
 const MAX_PAGE = 100
 
+// JSON turns Date into a string and throws on bigint, so both are tagged on the wire.
+function toWire(v: unknown): unknown {
+  if (v instanceof Date) return { $date: v.getTime() }
+  if (typeof v === 'bigint') return { $bigint: v.toString() }
+  return v
+}
+
+function fromWire(v: unknown): unknown {
+  if (v && typeof v === 'object' && '$date' in v) return new Date((v as { $date: number }).$date)
+  if (v && typeof v === 'object' && '$bigint' in v) return BigInt((v as { $bigint: string }).$bigint)
+  return v
+}
+
 // Cursor codec, shared with adapters. Values of the order keys (id is always last).
 export function encodeCursor(order: Order[], item: object): string {
   const row = item as Record<string, unknown>
-  return Buffer.from(JSON.stringify(order.map(o => row[o.field]))).toString('base64url')
+  return Buffer.from(JSON.stringify(order.map(o => toWire(row[o.field])))).toString('base64url')
 }
 
 export function decodeCursor(cursor: string): unknown[] {
   try {
     const v: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
-    if (Array.isArray(v)) return v
+    if (Array.isArray(v)) return v.map(fromWire)
   } catch { /* fall through */ }
   throw new Error('invalid cursor')
 }
@@ -65,8 +78,11 @@ export class QuerySet<T extends object> {
     return this.with({ where: [...this.state.where, ...toWhere(where)] })
   }
 
+  // One condition per call: NOT(a) AND NOT(b) differs from Django's NOT(a AND b). Chain instead.
   exclude(where: Partial<Record<keyof T & string, unknown>> | Where[]): QuerySet<T> {
-    return this.with({ where: [...this.state.where, ...toWhere(where).map(w => ({ ...w, not: true }))] })
+    const ws = toWhere(where)
+    if (ws.length > 1) throw new Error('exclude() takes one condition; use chained .exclude() calls')
+    return this.with({ where: [...this.state.where, ...ws.map(w => ({ ...w, not: true }))] })
   }
 
   // Replaces the previous order (Django order_by). 'field' asc, '-field' desc.
