@@ -113,6 +113,7 @@ export function makeSnapshotter(opts: {
   fetch?: typeof globalThis.fetch
   cookieName?: string
   timeoutMs?: number
+  asSession?: (sid: Sid) => Record<string, string>   // extra headers naming the agent's session to the page (server.ts)
 }): (route: string, sid: Sid) => Promise<Snapshot> {
   const { origin, sessions, cache, cookieName = 'tvine_s', timeoutMs = 10_000 } = opts
   const doFetch = opts.fetch ?? globalThis.fetch
@@ -132,7 +133,7 @@ export function makeSnapshotter(opts: {
     let res: Response
     try {
       res = await doFetch(url.href, {
-        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${sessions.cookieFor(sid)}` },
+        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${sessions.cookieFor(sid)}`, ...opts.asSession?.(sid) },
         redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
