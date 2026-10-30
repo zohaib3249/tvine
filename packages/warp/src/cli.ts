@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
-import { existsSync, readdirSync, realpathSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -8,6 +9,8 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
 import { openConn } from './data/db.js'
 import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { boundaryCheck, boundaryReport } from './cli/boundary.js'
+import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import { mcpEnabled } from './transport/mcp.js'
 
@@ -15,11 +18,13 @@ export interface Io { out(s: string): void; err(s: string): void; exit(code: num
 const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c) }
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
-  start [--port 3000]           serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s)
+  start [--port 3000] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
+                                --api-only: no frontend (Next runs separately with TVINE_API_URL)
   dev [--port 3000]             runserver: in-process next dev (needs next installed)
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
-  check                         settings + actions + migrations gate (exit 1 on problems)
+  check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
+  generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
   migrate [--check] [--plan] [--fake]
   sqlmigrate <app> <migration>
@@ -29,11 +34,12 @@ type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
-  start: { options: { port: str }, args: [0, 0] },
+  start: { options: { port: str, 'api-only': bool }, args: [0, 0] },
   dev: { options: { port: str }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
+  generate: { options: { check: bool }, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
   migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
   sqlmigrate: { options: {}, args: [2, 2] },
@@ -64,6 +70,25 @@ async function pending(url: string, apps: string): Promise<string> {
   return open.length ? `pending: ${open.join(', ')} (run tvine migrate)` : 'models.ts changed since the last migration (run tvine makemigrations)'
 }
 
+// tvine dev: on change, regenerate tvine-api.d.ts (apps/*/{views,serializers}; a child process, because
+// this one's ESM cache keeps the old modules) and re-run the FE/DB boundary check (esbuild reads from disk).
+// ponytail: fs.watch recursive (Node >= 20); the Next error overlay / withTvine build gate are not wired yet
+function devWatch(apps: string, io: Io): { close(): void } {
+  const root = dirname(apps)
+  const timers: Record<string, ReturnType<typeof setTimeout> | undefined> = {}
+  const later = (k: string, fn: () => void) => { clearTimeout(timers[k]); timers[k] = setTimeout(fn, 200) }
+  const regen = () => spawn(process.execPath, [...process.execArgv, process.argv[1]!, 'generate', '--apps', apps], { stdio: ['ignore', 'ignore', 'pipe'] })
+    .stderr.on('data', (b: Buffer) => io.err(b.toString().trimEnd()))
+  const check = () => void boundaryCheck(root).then((v) => { if (v.length) io.err(boundaryReport(v)) }, (e: unknown) => io.err(`tvine: boundary check failed: ${String(e)}`))
+  const w = watch(root, { recursive: true }, (_e, f) => {
+    const p = String(f ?? '')
+    if (!p || /(^|[\\/])(node_modules|\.next|\.git|dist)([\\/]|$)/.test(p) || !/\.(m?[jt]sx?)$/.test(p)) return
+    if (join(root, p).startsWith(apps) && /(^|[\\/])(views|serializers)\.(m?[jt]s)$/.test(p)) later('gen', regen)
+    later('check', check)
+  })
+  return { close: () => { for (const t of Object.values(timers)) clearTimeout(t); w.close() } }
+}
+
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
   const [cmd, ...rest] = argv
   const spec = cmd === undefined ? undefined : COMMANDS[cmd]
@@ -87,11 +112,13 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
         if (!dev) process.env.NODE_ENV ||= 'production'   // empty (NODE_ENV=) counts as unset
         if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
-        const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
+        const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
+        const regen = dev ? devWatch(apps, io) : undefined
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
+          regen?.close()
           setTimeout(() => { io.err('tvine: close did not finish within 5 s; exiting'); io.exit(1) }, 5_000).unref()
           srv.close().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
         }
@@ -119,11 +146,26 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         return undefined
       }
       case 'check': {
+        const bad = await boundaryCheck(dirname(apps))
+        if (bad.length) { io.err(boundaryReport(bad)); io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM`); return 1 }
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.close()
         const url = srv.ctx.settings.db.url
         if (hasModels(apps) && !(await migrateCheck(url, apps))) { io.err(`tvine check: ${await pending(url, apps)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
+        return 0
+      }
+      case 'generate': {
+        const root = dirname(apps), file = join(root, API_DTS)
+        const text = await generateApiTypes(root, apps)
+        const old = existsSync(file) ? readFileSync(file, 'utf8') : undefined
+        if (o.check) {
+          if (old === text) return 0
+          io.err(`tvine generate --check: ${API_DTS} is ${old === undefined ? 'missing' : 'stale'} (run tvine generate)`)
+          return 1
+        }
+        if (old !== text) writeFileSync(file, text)
+        io.out(`${old === text ? 'unchanged' : 'wrote'} ${API_DTS}`)
         return 0
       }
       case 'routes': {

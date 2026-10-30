@@ -27,6 +27,7 @@ export { discoverMiddleware, Hooks, type HookEvents, type HookName } from './cor
 export { guardCheck } from './transport/guards.js'
 export { dispatch, collect, serverCtx, formResult, renderCtx, type ServerCtx, type FormResult, type Log } from './core/dispatch.js'
 export { httpTransport, isAgent, type HttpOptions } from './transport/http.js'
+export { apiTransport, invoke, signForward, verifyForward, toApiResult, API_PREFIX, FORWARD, type ApiResult, type ApiCall, type Forward } from './transport/api.js'
 export { mcpHandler, mcpServer, mcpTools, type McpOptions } from './transport/mcp.js'
 export { discoveryTransport, buildSiteManifest, loadNextRoutes, type RouteInfo, type SiteManifest } from './transport/discovery.js'
 export { channelTransport, type ChannelDeps } from './transport/channel.js'

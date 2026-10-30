@@ -91,6 +91,9 @@ importers:
 
   packages/weft:
     dependencies:
+      '@tvine/warp':
+        specifier: workspace:*
+        version: link:../warp
       server-only:
         specifier: ^0.0.1
         version: 0.0.1

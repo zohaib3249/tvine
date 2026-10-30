@@ -16,6 +16,7 @@ export class SessionStore {
   private channels: ChannelLayer
   private onEvict?: (sid: Sid) => void
   private watchers: ((sid: Sid, kind: 'created' | 'expired') => void)[] = []
+  private once = new Map<Sid, Session>()   // ephemeral(): outside the flood cap, cookies and session hooks
 
   constructor(private settings: Settings['session'], opts: SessionStoreOptions = {}) {
     this.channels = opts.channels ?? new MemoryChannelLayer()
@@ -32,9 +33,21 @@ export class SessionStore {
     return s
   }
 
+  // A session for one call only (an anonymous api read, an agent-render read): resolvable by sid until
+  // dropEphemeral(), never stored by cookie, never counted against the flood cap, no session hooks.
+  ephemeral(data: Map<string, unknown> = new Map()): Session {
+    const now = Date.now()
+    const s: Session = { sid: `ephemeral:${nanoid()}`, rev: 0, data, createdAt: now, lastSeen: now }
+    this.once.set(s.sid, s)
+    return s
+  }
+  dropEphemeral(sid: Sid): void { this.once.delete(sid) }
+
   resolve(key: { sid?: Sid; cookie?: string }): Session | undefined {
     const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
     if (sid === undefined) return undefined
+    const e = this.once.get(sid)
+    if (e) return e
     const s = this.byId.get(sid)
     if (!s) return undefined
     if (!this.alive(s)) {
@@ -49,7 +62,7 @@ export class SessionStore {
   // Like resolve() but read-only: TTL-checked, never refreshes lastSeen or evicts (liveness polling).
   peek(key: { sid?: Sid; cookie?: string }): Session | undefined {
     const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
-    const s = sid === undefined ? undefined : this.byId.get(sid)
+    const s = sid === undefined ? undefined : this.once.get(sid) ?? this.byId.get(sid)
     return s && this.alive(s) ? s : undefined
   }
 
