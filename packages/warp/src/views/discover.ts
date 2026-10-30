@@ -39,7 +39,7 @@ export async function discover(appsDir: string, defaults: { rate?: Rate } = {}):
       } catch (e) {
         throw new Error(`${views} export ${exp}: ${(e as Error).message}`)
       }
-      if (view) bindRegistered(view, d, m.get(d.id)!)   // the merged-rules def the page helper must use
+      if (view) bindRegistered(view, d, m.get(d.id)!, m.views)   // the merged-rules def the page helpers must use
     }
   }
   return m

@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
-import { appModule } from './core/actions.js'
+import { appModule, liveManifest, setLiveManifest } from './core/actions.js'
 import { discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
@@ -178,10 +178,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     headers: opts.headers ?? (async () => (await fromApp<{ headers(): Promise<HeadersLike> }>('next/headers')).headers()),
     cookies: opts.cookies ?? (async () => (await fromApp<{ cookies(): Promise<CookieJar> }>('next/headers')).cookies()),
   })
-  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER] }
+  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest() }
   if (prev.dispatcher) say('WARNING: another tvine server already registered the <Form> dispatcher; this one replaces it until close()', 'warn')
   g[SIGNER] = signer
   g[DISPATCHER] = dispatcher
+  setLiveManifest(actions)   // page bundles' copies of apps/ resolve ids and view defs through it
 
   // 5. session sweep; 6. server hygiene (SSE sets its own socket timeout to 0)
   const sweep = setInterval(() => ctx.sessions.sweep(), settings.session.ttlMs / 4)
@@ -213,6 +214,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       ctx.close()
       if (g[SIGNER] === signer) g[SIGNER] = prev.signer
       if (g[DISPATCHER] === dispatcher) g[DISPATCHER] = prev.dispatcher
+      if (liveManifest() === actions) setLiveManifest(prev.actions)
       for (const r of sse) r.end()
       if (server.listening) {
         await new Promise<void>((ok) => {

@@ -69,7 +69,9 @@ class ConnectionHandler {
     await Promise.all(all.map(c => c.driver.close()))
   }
 }
-export const connections = new ConnectionHandler()
+// One per process, on globalThis: a page bundle's copy of warp must use the server's configured pool.
+const CONNECTIONS = Symbol.for('tvine.connections')
+export const connections: ConnectionHandler = ((globalThis as { [CONNECTIONS]?: ConnectionHandler })[CONNECTIONS] ??= new ConnectionHandler())
 
 // Older entry points, kept: configureDb(url) / closeDb() / getConn().
 export function configureDb(url?: string): void {

@@ -3,6 +3,7 @@
 // its hooks / @action method on a fresh `Object.create(view)`, so `this.x = …` never leaks between
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
+import { liveManifest } from '../core/actions.js'
 import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
@@ -175,7 +176,7 @@ export abstract class GenericView<T extends object = any> extends View {
     searchParams: URLSearchParams | Record<string, string | string[] | undefined>,
     ctx?: ActionCtx,
   ): Promise<Paginated<Out>> {
-    const list = registeredList.get(this)
+    const list = registeredDef(this, 'list')
     if (!list) throw new Error(`${this.name}.queryset(): no registered list action; export the view from apps/<app>/views.ts and run discover() at boot`)
     const known = (list.schema as z.AnyZodObject).shape
     const query = searchParams instanceof URLSearchParams ? searchParams : new URLSearchParams()
@@ -195,11 +196,40 @@ export abstract class GenericView<T extends object = any> extends View {
   }
 }
 
-// discovery → page helper: the manifest's merged-rules copy of each view's list def
-const generatedName = new WeakMap<ActionDef, GeneratedAction>()
-const registeredList = new WeakMap<Function, ActionDef>()
-export function bindRegistered(V: Function, original: ActionDef, registered: ActionDef): void {
-  if (generatedName.get(original) === 'list') registeredList.set(V, registered)
+// discovery → page helpers: the manifest's merged-rules def of each view action, by its name ('list',
+// 'addToCart'). The class discovery saw maps directly; a page bundle's copy of the class finds the
+// live manifest's entry by fingerprint (minifiers rename classes, so not by class name).
+const actionName = new WeakMap<ActionDef, string>()
+const registered = new WeakMap<Function, Map<string, ActionDef>>()
+export function bindRegistered(V: Function, original: ActionDef, def: ActionDef, views: Map<string, Map<string, ActionDef>[]>): void {
+  const name = actionName.get(original)!
+  let byName = registered.get(V)
+  if (!byName) registered.set(V, (byName = new Map()))
+  byName.set(name, def)
+  const key = viewKey(V), same = views.get(key) ?? []
+  if (!same.includes(byName)) views.set(key, [...same, byName])
+}
+
+function registeredDef(V: Function, name: string): ActionDef | undefined {
+  const own = registered.get(V)
+  if (own) return own.get(name)
+  const hits = liveManifest()?.views.get(viewKey(V)) ?? []
+  if (hits.length > 1) throw new Error(`${V.name}: several discovered views look identical to this one; give each its own model or config`)
+  return hits[0]?.get(name)
+}
+
+// What survives bundling and minifying: the model's name, generated actions, own method names, plain config.
+const keys = new WeakMap<Function, string>()
+function viewKey(V: Function): string {
+  let k = keys.get(V)
+  if (k !== undefined) return k
+  const v = new (V as new () => GenericView)() as unknown as Record<string, unknown>
+  const methods: string[] = []
+  for (let p = V.prototype; p && !BASES.has(p.constructor); p = Object.getPrototypeOf(p)) methods.push(...Object.getOwnPropertyNames(p))
+  const plain = Object.entries(v).filter(([, x]) => typeof x !== 'object' || (Array.isArray(x) && x.every((y) => typeof y === 'string')))
+  k = JSON.stringify([(v.model as { name?: string } | undefined)?.name, (V as unknown as typeof GenericView).actions, methods.sort(), plain.sort()])
+  keys.set(V, k)
+  return k
 }
 
 // Concrete views: DRF generics names. Each is GenericView + which actions it generates.
@@ -387,7 +417,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
           return bodies[a](self, raw, vctx)
         },
       }
-      generatedName.set(def, a)
+      actionName.set(def, a)
       defs.push(def)
     }
   }
@@ -411,6 +441,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
           return (fn as (p: unknown, c: ViewCtx) => Promise<unknown>).call(self, vctx.params, vctx)
         },
       }
+      actionName.set(def, key)
       defs.push(def)
     }
   }
