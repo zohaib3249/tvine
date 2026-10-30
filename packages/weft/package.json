@@ -7,7 +7,14 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "react-server": "./dist/server.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
     }
   },
   "scripts": {
@@ -15,6 +22,17 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@tvine/warp": "workspace:*"
+    "server-only": "^0.0.1"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^3.25.76"
   }
 }
