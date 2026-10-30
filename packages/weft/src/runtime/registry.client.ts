@@ -23,8 +23,8 @@ export function shallowChanged(a: Json | undefined, b: Json | undefined): boolea
 }
 
 export class Registry {
-  rev = 0                                  // uiRev: bumps when any entry's state shallow-changes
-  rootHooks: WidgetHooks | undefined       // <WeftRoot hooks>
+  rev = 0                                  // uiRev: bumps on mount, unmount, and any state shallow-change
+  readonly roots = new Set<{ hooks?: WidgetHooks }>()   // mounted <WeftRoot>s, innermost first (mount order)
   private live = new Map<string, Entry>()
   private dups = new Map<string, Entry[]>()   // same id mounted later: not addressable until the winner leaves
   private subs = new Set<() => void>()
@@ -37,12 +37,24 @@ export class Registry {
     if (!cur) this.live.set(e.id, e)
     else {
       this.dups.set(e.id, [...(this.dups.get(e.id) ?? []), e])
+      // Same entity in two places (grid + "recently viewed") is normal dedupe, not a clash.
+      if (e.spec.entity === e.id && cur.spec.entity === cur.id) return this.mounted(e)
       const msg = `tvine: duplicate widget id "${e.id}": ${cur.kind} "${cur.spec.label}" (mount #${cur.order}) and ${e.kind} "${e.spec.label}" (mount #${e.order}). The first stays addressable; give one a distinct name.`
       if (dev()) console.error(msg)
       else if (!this.warned.has(e.id)) { this.warned.add(e.id); console.warn(msg) }
     }
+    return this.mounted(e)
+  }
+
+  private mounted(e: Entry): () => void {
+    this.rev++
     this.changed()
     return () => this.unregister(e.id, e.token)
+  }
+
+  addRoot(root: { hooks?: WidgetHooks }): () => void {
+    this.roots.add(root)
+    return () => { this.roots.delete(root) }
   }
 
   private unregister(id: string, token: symbol): void {
@@ -57,6 +69,7 @@ export class Registry {
       q!.splice(i, 1)
     }
     if (!this.dups.get(id)?.length) this.dups.delete(id)
+    this.rev++
     this.changed()
   }
 

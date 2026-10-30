@@ -1,4 +1,5 @@
 import { getRegistry, type Entry, type Registry } from '../runtime/registry.client.js'
+import { agentState } from '../runtime/fragment.js'
 import { joinId } from './ids.js'
 import type { AgentActionEvent, Control, ControlCtx, ErrCode, Json, Override, Presence, UiStepResult, WidgetHooks, WidgetHandle } from './types.js'
 import { listed } from './vocabulary.js'
@@ -23,7 +24,13 @@ export function applyOverrides(base: Controls, over?: Record<string, Override | 
     if (o === false) delete out[k]
     else if (typeof o === 'function') {
       if (!b) throw new Error(`tvine: override "${k}" wraps a control this widget does not have`)
-      out[k] = { ...b, run: (args, ctx) => o(args, ctx, async (a = args) => b.run(a, ctx)) }
+      out[k] = { ...b, run: (args, ctx) => {
+        let calls = 0
+        return o(args, ctx, async (a = args) => {
+          if (++calls === 2 && process.env.NODE_ENV !== 'production') console.warn(`tvine: override "${k}" called next() more than once; the control ran twice`)
+          return b.run(a, ctx)
+        })
+      } }
     } else if (b) out[k] = { ...b, ...o }
     else if (o.kind && o.run) out[k] = o as Control<any, any>
     else throw new Error(`tvine: override "${k}" is not a control of this widget; a new control needs kind and run`)
@@ -49,7 +56,7 @@ const NO_PRESENCE: Presence = { point: async () => {}, type: async () => {}, say
 function chain(reg: Registry, e: Entry): WidgetHooks[] {
   const out: WidgetHooks[] = []
   for (let cur: Entry | undefined = e, n = 0; cur && n < 256; cur = reg.get(cur.parent), n++) if (cur.spec.hooks) out.push(cur.spec.hooks)
-  if (reg.rootHooks) out.push(reg.rootHooks)
+  for (const r of reg.roots) if (r.hooks) out.push(r.hooks)
   return out
 }
 
@@ -58,41 +65,43 @@ function isUnder(reg: Registry, e: Entry, ancestor: string): boolean {
   return false
 }
 
-// One agent call on one widget: lookup → onAgentAction (target → root) → run → afterAgentAction.
-// Missing target, missing control and disabled control all answer unknown_action alike.
+// One agent call on one widget: lookup → onAgentAction (target → root) → re-lookup → run →
+// afterAgentAction (always, with the outcome, veto included). Missing target, missing control and
+// disabled control all answer unknown_action alike — also when that becomes true during an async hook.
 // ponytail: no ParamSpec validation here; the executor (W4) checks args → invalid_param before calling.
 export async function callControl(target: string, control: string, args: Record<string, unknown> = {}, o: CallOptions): Promise<Json | void> {
   const reg = getRegistry()
+  const unknown = () => new WeftError('unknown_action', `unknown control ${control} on ${target}`)
+  const find = (e: Entry | undefined) => e && listed(e.spec).find(([n]) => n === control)?.[1]
   const e = reg.get(target)
-  const c = e && listed(e.spec).find(([n]) => n === control)?.[1]
-  if (!e || !c) throw new WeftError('unknown_action', `unknown control ${control} on ${target}`)
+  const first = find(e)
+  if (!e || !first) throw unknown()
 
-  const bound = c.headless && 'params' in c.headless ? c.headless.params : undefined
-  const ev: AgentActionEvent = {
-    target, control, args: Object.freeze({ ...args }), via: o.via, cmdId: o.cmdId,
-    ...(bound?.danger && { danger: true as const }), ...(bound?.attention && { attention: bound.attention }), ...(o.agent && { agent: o.agent }),
-  }
+  const frozen = Object.freeze({ ...args })
+  const ev: AgentActionEvent = { target, control, args: frozen, via: o.via, cmdId: o.cmdId, ...meta(first.headless), ...(o.agent && { agent: o.agent }) }
   const hooks = chain(reg, e)
-  for (const h of hooks) {
-    let r: void | false | string
-    try { r = await h.onAgentAction?.(ev) } catch { throw veto('internal hook error') }
-    if (r === false) throw veto('vetoed by the page')
-    if (typeof r === 'string') throw veto(r)
-  }
-
-  const ctx: ControlCtx = {
-    source: o.source ?? 'agent', via: o.via, cmdId: o.cmdId,
-    signal: o.signal ?? new AbortController().signal,
-    el: e.el, presence: o.presence ?? NO_PRESENCE,
-    run: o.run ?? (() => Promise.reject(new Error('tvine: ctx.run is not wired (no executor)'))),
-    navigate: o.navigate ?? (async (href) => { location.assign(href) }),
-    child: (id) => childHandle(reg, e, id, o),
-    veto: (reason) => { throw veto(reason) },
-  }
   const i = o.step ?? 0
   let outcome: UiStepResult | undefined
   try {
-    const result = await c.run(args, ctx)
+    await before(hooks, ev)
+    // The page may have changed while hooks awaited: same mount, control still listed, latest el.
+    const c = reg.get(target)?.token === e.token ? find(e) : undefined
+    if (!c) throw unknown()
+    const ctx: ControlCtx = {
+      source: o.source ?? 'agent', via: o.via, cmdId: o.cmdId,
+      signal: o.signal ?? new AbortController().signal,
+      el: e.el, presence: o.presence ?? NO_PRESENCE,
+      // A bound server action goes through the same hooks with its own danger/attention before it is submitted.
+      run: async (handle, params = {}) => {
+        await before(hooks, { ...ev, args: Object.freeze({ ...params }), ...meta({ params: handle }) })
+        if (!o.run) throw new Error('tvine: ctx.run is not wired (no executor)')
+        return o.run(handle, params)
+      },
+      navigate: o.navigate ?? (async (href) => { location.assign(href) }),
+      child: (id) => childHandle(reg, e, id, o),
+      veto: (reason) => { throw veto(reason) },
+    }
+    const result = await c.run(frozen, ctx)
     outcome = { i, target, ok: true, ...(result !== undefined && { result }) }
     return result
   } catch (err) {
@@ -104,13 +113,27 @@ export async function callControl(target: string, control: string, args: Record<
   }
 }
 
+const meta = (h: Control['headless']): Pick<AgentActionEvent, 'danger' | 'attention'> => {
+  const a = h && 'params' in h ? h.params : undefined
+  return { ...(a?.danger && { danger: true as const }), ...(a?.attention && { attention: a.attention }) }
+}
+
+async function before(hooks: WidgetHooks[], ev: AgentActionEvent): Promise<void> {
+  for (const h of hooks) {
+    let r: void | false | string
+    try { r = await h.onAgentAction?.(ev) } catch { throw veto('internal hook error') }
+    if (r === false) throw veto('vetoed by the page')
+    if (typeof r === 'string') throw veto(r)
+  }
+}
+
 // Parent → descendant control. Local segment first (`radio:color`), else a full id; only descendants.
 function childHandle(reg: Registry, parent: Entry, id: string, o: CallOptions): WidgetHandle | undefined {
   const c = reg.get(joinId(parent.id, id)) ?? reg.get(id)
   if (!c || !isUnder(reg, c, parent.id)) return undefined
   return {
     id: c.id, kind: c.kind,
-    get state() { return reg.get(c.id)?.spec.state ?? null },
+    get state() { const x = reg.get(c.id); return (x && agentState(x.spec)) ?? null },
     call: (control, args) => callControl(c.id, control, args as Record<string, unknown>, o),
   }
 }

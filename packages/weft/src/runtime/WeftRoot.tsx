@@ -1,16 +1,14 @@
 'use client'
-import { useLayoutEffect, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, type ReactNode } from 'react'
 import type { WidgetHooks } from '../widget/types.js'
 import { getRegistry } from './registry.client.js'
 
-// Root layout wrapper: owns the tab's registry and the page-level hooks (custom-logic.md §Global).
-// Survives client navigation because it lives in the root layout. Socket/WebMCP/presence/nav
-// wiring join here in W4/W7/W8.
+// Root layout wrapper: owns the page-level hooks (custom-logic.md §Global). Hooks are functions,
+// so a server layout passes them through an app-owned 'use client' wrapper. Nested roots stack:
+// every mounted root's hooks run, innermost first. Socket/WebMCP/presence/nav join in W4/W7/W8.
 export function WeftRoot({ hooks, children }: { hooks?: WidgetHooks; children?: ReactNode }) {
-  useLayoutEffect(() => {
-    const reg = getRegistry()
-    reg.rootHooks = hooks
-    return () => { if (reg.rootHooks === hooks) reg.rootHooks = undefined }
-  }, [hooks])
+  const holder = useRef<{ hooks?: WidgetHooks }>({})
+  useLayoutEffect(() => { holder.current.hooks = hooks })
+  useLayoutEffect(() => getRegistry().addRoot(holder.current), [])
   return <>{children}</>
 }
