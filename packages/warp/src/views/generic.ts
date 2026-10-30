@@ -180,7 +180,7 @@ export abstract class GenericView<T extends object = any> extends View {
   // first, app shapers apply). Unknown URL keys (utm_*, …) are dropped here; the action stays strict.
   // Without a ctx the hooks see ANONYMOUS and request.query only.
   static async queryset<V extends GenericView>(
-    this: (new () => V) & typeof GenericView,
+    this: abstract new () => V,   // not `typeof GenericView`: its generic construct signature rejects a concrete model
     searchParams: URLSearchParams | Record<string, string | string[] | undefined>,
     ctx?: ActionCtx,
   ): Promise<Paginated<Out>> {
