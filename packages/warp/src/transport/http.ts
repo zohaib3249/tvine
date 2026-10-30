@@ -7,7 +7,7 @@ import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.j
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
-import { receiveUpload, type UploadDef } from '../media/index.js'
+import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
 import { render, snapshotOf, type Ctx, type Format } from '../serialize/envelope.js'
 import type { RouteInfo } from './discovery.js'
@@ -39,10 +39,11 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
   constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
+  get reason() { return this.status === 403 ? 'forbidden' : undefined }
 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
-const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
+export const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
 
 // JSON.parse accepts any depth; recursive consumers (hash, clone, zod) then blow the stack.
 function tooDeep(v: unknown, max = 64): boolean {
@@ -128,7 +129,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       const f = upload.file
       if (!f || upload.keep) return
       upload.file = undefined
-      await upload.def!.upload.storage.delete(f.key)
+      await storageOf(upload.def!, settings.media).delete(f.key)
         .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
     }
     const reply = (status: number, events: Event[], headers: Record<string, string> = {}) => {
@@ -188,7 +189,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (res.headersSent) { res.destroy(); status = 500 }
       else if (e instanceof Refuse) {
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
-        const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }) }
+        const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
         status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
@@ -202,6 +203,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
     setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
+    const t0 = performance.now()
     const session = (ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined) ?? sessions.create()
     const q = new URLSearchParams(u.searchParams)
     q.delete('sid'); q.delete('format')
@@ -209,6 +211,9 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     setCtx({ sid: session.sid, rev: session.rev, page })
     const snap = await server.snapshot(page, session.sid)
     const etag = `"${createHash('sha1').update(format).update(JSON.stringify(snap)).digest('base64url')}"`
+    // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
+    const ms = Math.round(performance.now() - t0)
+    if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms }))
     res.setHeader('etag', etag)
     const inm = req.headers['if-none-match']
     if (inm && inm.split(',').some((t) => t.trim() === etag)) {
@@ -315,7 +320,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!d || !('upload' in d)) throw new Refuse(400, 'invalid_param', 'the action field must come before the file and name an upload action', 'action')
       def = d as UploadDef
       cap = textCap + def.upload.maxBytes
-      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file' }); upload.def = def }
+      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file', media: settings.media }); upload.def = def }
       catch (e) {
         const c = (e as { code?: unknown }).code
         if (c === 'too_large') throw new Refuse(413, 'invalid_param', (e as Error).message, 'file')

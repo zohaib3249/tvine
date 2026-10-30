@@ -17,9 +17,15 @@ export interface ChannelDeps {
   settings: Settings
   isDev: boolean
   clock?: Clock
+  watchInspector?: () => () => void   // called per open inspector stream; returns its release (the feed refcount)
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1'])
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+// DNS rebinding: a foreign page resolving its own name to 127.0.0.1 still sends its own Host.
+const localHost = (h: string | undefined) => {
+  try { return h !== undefined && LOCAL_HOSTS.has(new URL(`http://${h}`).hostname) } catch { return false }
+}
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
   for (const part of (header ?? '').split(';')) {
@@ -47,9 +53,10 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const ip = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
 
     const inspector = url.searchParams.get('group') === 'inspector'
-    // Prod: socket loopback AND no proxy header (a local reverse proxy makes every client look like 127.0.0.1).
+    // Inspector feed: dev only, AND socket loopback (never X-Forwarded-For), AND no proxy header (a local
+    // reverse proxy makes every client look like 127.0.0.1), AND a loopback Host. `listen(port)` binds every interface.
     const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
-    if (inspector && !isDev && (proxied || !LOOPBACK.has(clientIp(null, remote, 0)))) return json(403, ev.err('domain', 'forbidden'))
+    if (inspector && (!isDev || proxied || !LOOPBACK.has(clientIp(null, remote, 0)) || !localHost(hdr('host')))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)
@@ -76,11 +83,12 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     // Own errors stay ours: a failed write drops this stream only, never the layer's fan-out.
     const safe = (fn: () => void) => { try { fn() } catch { close() } }
     let unsub = () => {}
+    let release = () => {}
     let timer: unknown
     const close = (graceful = false) => {
       if (closed) return
       closed = true
-      unsub(); clock.clearInterval(timer)
+      unsub(); release(); clock.clearInterval(timer)
       open.set(ip, (open.get(ip) ?? 1) - 1)
       if (!open.get(ip)) open.delete(ip)
       // Forced close destroys the socket: end() would wait for a non-reading client to drain its buffer.
@@ -101,6 +109,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
 
     // send() pushes to the ring before fan-out, so head() is this event's cursor.
     unsub = group.add((e) => { if (!closed) safe(() => frame(e, channels.head())) })
+    if (inspector && deps.watchInspector && !closed) release = deps.watchInspector()
 
     timer = clock.setInterval(() => {
       if (closed) return

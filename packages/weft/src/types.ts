@@ -15,13 +15,14 @@ export interface Node {
 export interface Link { id: string; href: string; label: string; params?: string[] }
 
 // Only what the registry reads; any real warp ActionDef is assignable.
-export interface ActionDef { id: string; schema: unknown }
+export interface ActionDef { id: string; schema: unknown; rules?: { bind?: readonly string[] } }
 
 export interface AgentSpec {
   id?: string
   data: Record<string, unknown>
   actions?: { def: ActionDef; bind?: Record<string, unknown> }[]
   personal?: boolean
+  live?: boolean
 }
 
 // Channel frame payload (warp serialize/json.ts, one flat object per SSE `data:`).

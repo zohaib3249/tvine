@@ -1,6 +1,6 @@
 // createAgentServer — the composition root (docs/design/server/server-index.md). The only file allowed
 // to import across layers. Modes: standalone (listen), embedded (handler), API-only (no frontend).
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
@@ -9,11 +9,13 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
-import { discoverMiddleware } from './core/middleware.js'
+import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
+import { discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
-import type { ActionRef, Command, Node, Settings, Snapshot } from './core/types.js'
+import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
+import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { signBind } from './security/sign.js'
 import { defineSettings, merge, type SettingsInput } from './settings.js'
@@ -22,6 +24,7 @@ import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
+import { inspectorFeed } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 
@@ -57,24 +60,43 @@ export interface AgentServer {
 }
 
 // weft stores these on globalThis (Next builds several module graphs); warp never imports weft.
-const SIGNER = Symbol.for('tvine.signer'), DISPATCHER = Symbol.for('tvine.dispatcher')
+const SIGNER = Symbol.for('tvine.signer'), DISPATCHER = Symbol.for('tvine.dispatcher'), PAGES = Symbol.for('tvine.pages')
 const g = globalThis as Record<symbol, unknown>
 const API_ROUTES: RouteInfo[] = [{ path: '/' }]
 const pathOf = (req: IncomingMessage) => (req.url ?? '/').split('?')[0]!
 const STAMP = 'x-tvine-ip'   // `<boot nonce>:<https 0|1>:<socket ip per trustProxy>`, set by our handler only
+const URL_STAMP = 'x-tvine-url'   // the request url, set by our handler only (trusted with a valid STAMP)
+const AS_SESSION = 'x-tvine-session'   // `<boot nonce>:<render token>:<sid>`: an agent's snapshot render runs as that agent's session
 
-// A module of the APP (warp does not depend on next), imported dynamically from cwd.
+// Server components: the session / request of the page being rendered (the cookie via next/headers, or
+// the agent's session during its snapshot render). On globalThis: pages run in Next's bundled copy of warp.
+export interface PageAccess { session(): Promise<Session | undefined>; request(): Promise<Request> }
+function pageAccess(): PageAccess {
+  const a = g[PAGES] as PageAccess | undefined
+  if (!a) throw new Error('currentSession()/currentRequest(): no tvine server in this process (run the app with tvine start or tvine dev), or this page is being prerendered at build: make it dynamic (await connection())')
+  return a
+}
+// The request's Session, or undefined when it has none (a page view never creates one: pages cannot set cookies).
+export const currentSession = async (): Promise<Session | undefined> => pageAccess().session()
+export const currentRequest = async (): Promise<Request> => pageAccess().request()
+
+// How a module of the APP is found (warp does not depend on next). Replaceable: under pnpm, NODE_PATH can
+// make a hoisted `next` resolvable from anywhere, so tests inject "not installed" instead of relying on it.
+export const appResolver = { resolve: (spec: string): string => createRequire(join(process.cwd(), 'package.json')).resolve(spec) }
+
 async function fromApp<T>(spec: string): Promise<T> {
   let url: string
-  try { url = pathToFileURL(createRequire(join(process.cwd(), 'package.json')).resolve(spec)).href }
+  try { url = pathToFileURL(appResolver.resolve(spec)).href }
   catch { throw new Error(`"${spec}" cannot be found from ${process.cwd()}: install next (pnpm add next)`) }
   return (await import(url)) as T
 }
 
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
-  const file = ['settings.ts', 'settings.js'].map((f) => resolve(f)).find(existsSync)
-  const base = file ? ((await import(pathToFileURL(file).href)) as { default: Settings }).default : {}
-  return defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
+  const file = appModule(process.cwd(), 'settings')
+  const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
+  const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
+  void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
+  return settings
 }
 
 export async function createAgentServer(opts: AgentServerOptions = {}): Promise<AgentServer> {
@@ -95,18 +117,33 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
   const actions = await discover(appsDir, { rate: settings.limits.rate })
   const appMiddleware = await discoverMiddleware(appsDir)
+  const appHooks = await discoverHooks(appsDir)
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
+  if (!actions.all().length && process.env.NODE_ENV === 'production') {
+    say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
+  }
 
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
   const ctx = serverCtx({ actions, settings, appMiddleware, snapshot: (route, sid) => snapshot(route, sid) })
-  const cache = new SnapshotCache()
-  const renderer = (origin: string) => makeSnapshotter({ origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName })
+  for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
+  const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
+  const nonce = randomBytes(16).toString('hex')
+  // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
+  // its fragments say: the page marks its per-render token in `touched`, the snapshotter checks it after extract.
+  const touched = new Set<string>()
+  const renderer = (origin: string) => makeSnapshotter({
+    origin, sessions: ctx.sessions, cache, cookieName: settings.session.cookieName,
+    asSession: (sid) => {
+      const token = randomBytes(12).toString('hex')
+      return { headers: { [AS_SESSION]: `${nonce}:${token}:${sid}` }, readSession: () => touched.delete(token) }
+    },
+  })
   if (!fe) snapshot = manifestSnapshot(ctx)
   else if (fe.origin) snapshot = renderer(fe.origin)
   else snapshot = async () => { throw new Error('no frontend origin yet: call listen() or pass frontend.origin') }
@@ -116,7 +153,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
-  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev: process.env.NODE_ENV !== 'production' })
+  const isDev = process.env.NODE_ENV !== 'production'
+  const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
+  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch })
   const mcp = mcpHandler(ctx, { route })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
   const fail = (res: ServerResponse) => (e: unknown) => {
@@ -146,11 +185,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ? (req, res) => { void startNext().then((n) => n.handle(req, res)).catch(fail(res)) }
     : (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found') }
 
-  const nonce = randomBytes(16).toString('hex')
   const handler: AgentServer['handler'] = (req, res, done) => {
-    // for the human Form path: only OUR stamp is trusted (a client-sent one is replaced)
-    const xff = (req.headers['x-forwarded-for'] as string | undefined) ?? null
-    req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
     let i = 0
     const step = () => {
       const h = chain[i++]
@@ -158,20 +193,32 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       else if (done) done()
       else frontend(req, res)
     }
-    try { step() } catch (e) { fail(res)(e) }
+    // nothing a client sends may throw out of here (a throw in a 'request' listener kills the process)
+    try {
+      // for the human Form path: only OUR stamp is trusted (a client-sent one is replaced)
+      const xff = (req.headers['x-forwarded-for'] as string | undefined) ?? null
+      req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
+      req.headers[URL_STAMP] = req.url ?? '/'
+      if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      step()
+    } catch (e) { fail(res)(e) }
   }
 
   // human <Form> path + bind signer, for weft's server-side primitives; the previous ones come back on close
   const signer = (p: Record<string, unknown>) => signBind(p, settings)
-  const dispatcher = formDispatcher(ctx, route, {
+  const src: FormSource = {
     nonce,
     headers: opts.headers ?? (async () => (await fromApp<{ headers(): Promise<HeadersLike> }>('next/headers')).headers()),
     cookies: opts.cookies ?? (async () => (await fromApp<{ cookies(): Promise<CookieJar> }>('next/headers')).cookies()),
-  })
-  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER] }
+  }
+  const dispatcher = formDispatcher(ctx, route, src)
+  const pages = pagesFor(ctx, route, src, touched)
+  const prev = { signer: g[SIGNER], dispatcher: g[DISPATCHER], actions: liveManifest(), pages: g[PAGES] }
   if (prev.dispatcher) say('WARNING: another tvine server already registered the <Form> dispatcher; this one replaces it until close()', 'warn')
   g[SIGNER] = signer
   g[DISPATCHER] = dispatcher
+  setLiveManifest(actions)   // page bundles' copies of apps/ resolve ids and view defs through it
+  g[PAGES] = pages
 
   // 5. session sweep; 6. server hygiene (SSE sets its own socket timeout to 0)
   const sweep = setInterval(() => ctx.sessions.sweep(), settings.session.ttlMs / 4)
@@ -199,9 +246,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     // stop accepting, drain SSE, clear intervals; in-flight requests get ≤ 4 s before sockets are cut
     async close() {
       clearInterval(sweep)
+      feed?.close()
       ctx.close()
       if (g[SIGNER] === signer) g[SIGNER] = prev.signer
       if (g[DISPATCHER] === dispatcher) g[DISPATCHER] = prev.dispatcher
+      if (liveManifest() === actions) setLiveManifest(prev.actions)
+      if (g[PAGES] === pages) g[PAGES] = prev.pages
       for (const r of sse) r.end()
       if (server.listening) {
         await new Promise<void>((ok) => {
@@ -259,15 +309,11 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     try { path = new URL(h.referer).pathname } catch { /* refused below */ }
     const pattern = path === undefined ? undefined : route(path)
     if (path === undefined || pattern === undefined) return { ok: false, message: 'forbidden: the referer is not a page of this site' }
-    // ip + https: our handler's stamp; without it, trusted X-Forwarded-* hops; else one shared key (warned once)
-    const stamp = /^([^:]*):([01]):(.*)$/.exec(h[STAMP] ?? '')
-    const own = stamp !== null && src.nonce !== undefined && stamp[1] === src.nonce
-    let ip = own ? stamp[3]! : settings.trustProxy > 0 ? clientIp(h['x-forwarded-for'] ?? null, '', settings.trustProxy) : ''
+    let { ip, secure } = stampOf(h, settings, src.nonce)
     if (!ip) {
       ip = 'unknown'
       if (!warned) { warned = true; server.log('warn', '<Form> request did not pass through the tvine handler and trustProxy is 0: all such submits share one rate-limit key') }
     }
-    const secure = own ? stamp[2] === '1' : xfpHttps(h['x-forwarded-proto'], settings.trustProxy)
     const jar = await src.cookies()
     let cookie = jar.get(name)?.value
     const request = await buildRequest({ url: path, route: pattern, headers: h, ip, via: 'human' }, settings)
@@ -287,5 +333,53 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
       request.headers = { get: (n) => (n.toLowerCase() === 'cookie' ? header : base.get(n)) }
     }
     return formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
+  }
+}
+
+// ip + https: our handler's stamp; without it, trusted X-Forwarded-* hops ('' = unknown ip)
+function stampOf(h: Record<string, string>, settings: Settings, nonce: string | undefined): { ip: string; secure: boolean; own: boolean } {
+  const stamp = /^([^:]*):([01]):(.*)$/.exec(h[STAMP] ?? '')
+  const own = stamp !== null && nonce !== undefined && sameNonce(stamp[1]!, nonce)
+  if (own) return { ip: stamp[3]!, secure: stamp[2] === '1', own }
+  return { ip: settings.trustProxy > 0 ? clientIp(h['x-forwarded-for'] ?? null, '', settings.trustProxy) : '', secure: xfpHttps(h['x-forwarded-proto'], settings.trustProxy), own }
+}
+// Byte lengths, not string lengths: a latin1 header char is 2 utf8 bytes and timingSafeEqual throws on a mismatch.
+const sameNonce = (a: string, b: string) => {
+  const x = Buffer.from(a), y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+// `<nonce>:<token>:<sid>` from our snapshotter, else undefined
+function internalOf(v: string | string[] | undefined, nonce: string | undefined): { token: string; sid: string } | undefined {
+  const m = typeof v === 'string' ? /^([^:]+):([^:]+):(.+)$/.exec(v) : null
+  return m && nonce !== undefined && sameNonce(m[1]!, nonce) ? { token: m[2]!, sid: m[3]! } : undefined
+}
+
+// currentSession() / currentRequest() for the page Next is rendering right now.
+function pagesFor(server: ServerCtx, route: (path: string) => string | undefined, src: FormSource, touched: Set<string>): PageAccess {
+  const { settings, sessions } = server
+  const read = async () => {
+    const h: Record<string, string> = Object.fromEntries(await src.headers())
+    const own = internalOf(h[AS_SESSION], src.nonce)
+    if (own) touched.add(own.token)   // this agent render depends on its session: never cache it
+    return { h, sid: own?.sid }
+  }
+  return {
+    async session() {
+      const { sid } = await read()
+      if (sid !== undefined) return sessions.resolve({ sid })
+      const cookie = (await src.cookies()).get(settings.session.cookieName)?.value
+      return cookie === undefined ? undefined : sessions.resolve({ cookie })
+    },
+    async request() {
+      const { h, sid } = await read()
+      const st = stampOf(h, settings, src.nonce)
+      const url = st.own ? h[URL_STAMP] ?? '/' : '/'
+      const path = new URL(url, 'http://tvine.local').pathname
+      const shown = Object.fromEntries(Object.entries(h).filter(([k]) => !k.toLowerCase().startsWith('x-tvine-')))   // no stamps / nonce material
+      const request = await buildRequest({ url, route: route(path) ?? path, headers: shown, ip: st.ip || 'unknown', via: 'human' }, settings)
+      // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
+      if (sid !== undefined) request.agent = { is: true, via: 'http' }
+      return request
+    },
   }
 }

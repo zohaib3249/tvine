@@ -217,7 +217,11 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<ty
   const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   try {
-    return reply(server, [ev.snapshot(await server.snapshot(ctx.page, session.sid))], ctx)
+    const t0 = performance.now()
+    const snap = await server.snapshot(ctx.page, session.sid)
+    const ms = Math.round(performance.now() - t0)
+    if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms }))
+    return reply(server, [ev.snapshot(snap)], ctx)
   } catch (e) {
     server.log('error', 'snapshot render failed', { page: ctx.page, error: e instanceof Error ? e.message : String(e) })
     return reply(server, [ev.err(e instanceof RegistryError ? e.code : 'internal', 'page could not be rendered')], ctx)

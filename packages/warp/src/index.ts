@@ -17,9 +17,10 @@ export type {
   Middleware, ActionDef, ActionRules, Settings, Paginated,
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
+export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
 export { allowAny, denyAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
 export {
-  createAgentServer, formDispatcher, loadSettings, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,
+  createAgentServer, currentRequest, currentSession, formDispatcher, loadSettings, type PageAccess, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,
   type FormSource, type NextApp, type NextFactory,
 } from './server.js'
 export { discoverMiddleware, Hooks, type HookEvents, type HookName } from './core/middleware.js'

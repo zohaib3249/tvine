@@ -5,6 +5,8 @@ dist
 .superpowers/
 /media/
 *.db
+*.db-wal
+*.db-shm
 .env*
 
 # Claude Code personal settings

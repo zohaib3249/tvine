@@ -170,6 +170,22 @@ export function onCommit(fn: () => unknown): void | Promise<void> {
   return Promise.resolve(fn()).then(() => undefined)
 }
 
+// ---- data version ----------------------------------------------------------------------------
+// Bumped by every committed write (after the outermost COMMIT; never for a rollback). Snapshot caches key
+// on it. On globalThis: a page bundle's copy of warp writes through the same counter.
+const VERSION = Symbol.for('tvine.dataVersion')
+const gv = globalThis as { [VERSION]?: number }
+export const dataVersion = (): number => gv[VERSION] ?? 0
+// ponytail: one counter for the whole process and every table, so a write-heavy app rarely hits the snapshot
+// cache; per-table versions (pages would declare what they read) if that cost shows up.
+const bump = () => { gv[VERSION] = dataVersion() + 1 }
+function wrote<R>(r: R): R {
+  const tx = bound.getStore()
+  if (tx && !tx.closed) { if (!tx.hooks.includes(bump)) tx.hooks.unshift(bump) }   // first: before app hooks read
+  else bump()
+  return r
+}
+
 // ---- DataSource ------------------------------------------------------------------------------
 // The connection is resolved when an operation RUNS (connections.get() inside exec), never at
 // definition time: defining or importing a model needs no database.
@@ -192,18 +208,18 @@ export function engineSource(def: ModelDef): DataSource<any> {
     }),
     update: (ws, patch) => run(async ({ driver, dialect }) => {
       const s = t.update(ws, patch, dialect)
-      return s ? (await driver.exec(s.sql, s.params)).changes : 0
+      return s ? wrote((await driver.exec(s.sql, s.params)).changes) : 0
     }),
     delete: ws => run(async ({ driver, dialect }) => {
       const s = t.delete(ws, dialect)
-      return (await driver.exec(s.sql, s.params)).changes
+      return wrote((await driver.exec(s.sql, s.params)).changes)
     }),
   }
 }
 
 export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise<any> {
   const t = Table.of(def)
-  return exec(async ({ driver, dialect }) => {
+  return exec(async ({ driver, dialect }) => wrote(await (async () => {
     try {
       const s = t.insert(data, dialect)
       if (dialect.insertReturning) return t.hydrate((await driver.query(s.sql, s.params))[0], dialect)
@@ -215,5 +231,5 @@ export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise
       if (!row) throw new ReadBackError(`${def.name}: the inserted row could not be read back (pk ${String(data[f.key(pk)] ?? lastId)})`)
       return t.hydrate(row, dialect)
     } catch (e) { return wrapErr(def, e) }
-  })
+  })()))
 }

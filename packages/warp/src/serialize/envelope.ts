@@ -1,5 +1,5 @@
 import type { Event, Rev, Settings, Sid, Snapshot } from '../core/types.js'
-import { recovery } from '../core/errors.js'
+import { recoveryOf } from '../core/errors.js'
 import { toJson } from './json.js'
 import { toNotation, bare, cell, quote } from './notation.js'
 
@@ -8,7 +8,7 @@ export type Shapers = Record<string /* node type */, (data: Record<string, unkno
 export interface Ctx { sid: Sid; rev: Rev; page: string }
 export interface RenderOpts { ctx: Ctx; shapers?: Shapers }
 
-const HINT = '#hint @type cols=schema, rows=values in order, "-"=null | ! act name(p:type) -> POST {action,params,sid}'
+const HINT = '#hint @type @id=node id then cols, rows=values in order, "-"=null | ! act name(p:type) bind=<b> -> POST {action,params,sid,bind}'
 
 // json → the `"#tvine":"..."` first member; notation → line 1 (+ hint line for snapshots).
 export function head(s: { sid: Sid; rev: Rev; page: string; format: Format; hint?: boolean }): string {
@@ -21,7 +21,7 @@ type ErrEvent = Extract<Event, { kind: 'err' }>
 
 // message + static recovery hint + what only this Event knows (field, valid actions).
 export function errText(e: ErrEvent): string {
-  let t = `${e.message} — ${recovery[e.code]}`
+  let t = `${e.message} — ${recoveryOf(e)}`
   if (e.field) t += ` (field ${e.field})`
   if (e.code === 'unknown_action' && e.snapshot) {
     const ids = [...new Set(e.snapshot.nodes.flatMap(n => n.actions.map(a => a.id)))]

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
+import { appModule } from './core/actions.js'
 import { openConn } from './data/db.js'
 import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -15,6 +17,7 @@ const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), ex
 const USAGE = `usage: tvine <command> [--apps ./apps]
   start [--port 3000]           serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s)
   dev [--port 3000]             runserver: in-process next dev (needs next installed)
+  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
   check                         settings + actions + migrations gate (exit 1 on problems)
   routes                        print the action manifest
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
@@ -28,6 +31,7 @@ const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
   start: { options: { port: str }, args: [0, 0] },
   dev: { options: { port: str }, args: [0, 0] },
+  inspect: { options: { port: str }, args: [0, 1] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
@@ -47,7 +51,7 @@ function loadEnv() {
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
 const hasModels = (apps: string) =>
-  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && ['models.ts', 'models.js'].some((f) => existsSync(join(apps, d.name, f))))
+  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && appModule(join(apps, d.name), 'models') !== undefined)
 
 function table(rows: string[][]): string {
   const w = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))
@@ -80,6 +84,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const port = o.port === undefined ? Number(process.env.PORT ?? 3000) : Number(o.port)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const dev = cmd === 'dev'
+        // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
+        if (!dev) process.env.NODE_ENV ||= 'production'   // empty (NODE_ENV=) counts as unset
         if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
@@ -88,6 +94,26 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
           setTimeout(() => { io.err('tvine: close did not finish within 5 s; exiting'); io.exit(1) }, 5_000).unref()
           srv.close().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
+        }
+        process.once('SIGTERM', stop); process.once('SIGINT', stop)
+        return undefined
+      }
+      case 'inspect': {
+        const port = o.port === undefined ? 7357 : Number(o.port)
+        if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
+        // the app's dev dependency: node_modules walking up from cwd (not NODE_PATH, which pnpm shims point at
+        // a hoisted store). warp never depends on @tvine/inspect.
+        let dir = process.cwd()
+        while (!existsSync(join(dir, 'node_modules/@tvine/inspect')) && dirname(dir) !== dir) dir = dirname(dir)
+        if (!existsSync(join(dir, 'node_modules/@tvine/inspect'))) throw new Error('@tvine/inspect is not installed in this app: pnpm add -D @tvine/inspect')
+        const url = pathToFileURL(createRequire(join(dir, 'package.json')).resolve('@tvine/inspect')).href
+        const { startInspector } = (await import(url)) as { startInspector(o: { target: string; port: number }): Promise<{ url: string; close(): Promise<void> }> }
+        const target = args[0] ?? `http://localhost:${process.env.PORT ?? 3000}`
+        const ins = await startInspector({ target, port })
+        io.out(`inspector on ${ins.url} -> ${target}`)
+        const stop = () => {
+          process.off('SIGTERM', stop); process.off('SIGINT', stop)
+          ins.close().then(() => io.exit(0), () => io.exit(1))
         }
         process.once('SIGTERM', stop); process.once('SIGINT', stop)
         return undefined

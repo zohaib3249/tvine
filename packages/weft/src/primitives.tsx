@@ -69,11 +69,11 @@ function scan(node: ReactNode, f: (el: ReactElement<Record<string, unknown>>) =>
 }
 
 // --- Data -------------------------------------------------------------------------------
-export function Data({ type, value, agentId, personal, children, scope }: Scoped & {
-  type: string; value: Record<string, unknown>; agentId?: string; personal?: boolean; children?: ReactNode
+export function Data({ type, value, agentId, personal, live, children, scope }: Scoped & {
+  type: string; value: Record<string, unknown>; agentId?: string; personal?: boolean; live?: boolean; children?: ReactNode
 }) {
   const s = scope ?? {}
-  return <>{quiet(s, register({ id: pid(s, idFor(type, { id: agentId, data: value })), type, data: value, personal }))}{walk(children, s)}</>
+  return <>{quiet(s, register({ id: pid(s, idFor(type, { id: agentId, data: value })), type, data: value, personal, live }))}{walk(children, s)}</>
 }
 
 // --- Section ----------------------------------------------------------------------------
@@ -92,20 +92,20 @@ export function Section({ name, as: As = 'section', className, children, scope }
 // Detects nesting the walk can see (literal nesting). A Page in a layout plus one in the
 // page segment is separate trees: not detected here, but the warp extractor warns (dev) on a
 // second page fragment.
-export function Page({ name, title, personal, children, scope }: Scoped & {
-  name: string; title?: string; personal?: boolean; children: Kids
+export function Page({ name, title, personal, live, children, scope }: Scoped & {
+  name: string; title?: string; personal?: boolean; live?: boolean; children: Kids
 }) {
   if (scope?.page && dev()) throw new Error(`tvine: nested <Page name="${name}"> — a route has exactly one Page`)
   const inner = { ...scope, page: true }
-  return <>{pageFragment({ page: name, title: title ?? name, personal })}{typeof children === 'function' ? children(inner) : walk(children, inner)}</>
+  return <>{pageFragment({ page: name, title: title ?? name, personal, live })}{typeof children === 'function' ? children(inner) : walk(children, inner)}</>
 }
 
 // --- Link -------------------------------------------------------------------------------
 // No dependency on next: pass `as={NextLink}` to get client navigation. `id` is the DOM id;
 // `agentId` overrides the agent link id (default `link:<href>`).
 const UNSAFE = /^(javascript|data|vbscript):/i
-export function Link({ href, label, params, personal, agentId, as: As = 'a', children, scope, ...rest }: Scoped & {
-  href: string; label?: string; params?: string[]; personal?: boolean; agentId?: string; as?: ElementType; children?: ReactNode
+export function Link({ href, label, params, personal, live, agentId, as: As = 'a', children, scope, ...rest }: Scoped & {
+  href: string; label?: string; params?: string[]; personal?: boolean; live?: boolean; agentId?: string; as?: ElementType; children?: ReactNode
   [k: string]: unknown
 }) {
   const parts = Children.toArray(children)
@@ -118,7 +118,7 @@ export function Link({ href, label, params, personal, agentId, as: As = 'a', chi
   const unsafe = UNSAFE.test(href.replace(/[\u0000- \u007F]/g, ''))
   if (unsafe && dev()) console.warn(`tvine: <Link href="${href}"> has an unsafe scheme; not exposed to agents`)
   const link = { id: pid(scope, agentId ?? `link:${href}`), href, label: text, ...(params && { params }) }
-  return <>{!unsafe && quiet(scope, registerLink(link, { personal }))}<As href={href} {...rest}>{children}</As></>
+  return <>{!unsafe && quiet(scope, registerLink(link, { personal, live }))}<As href={href} {...rest}>{children}</As></>
 }
 
 // --- List -------------------------------------------------------------------------------

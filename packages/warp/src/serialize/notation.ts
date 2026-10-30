@@ -1,5 +1,5 @@
 import type { ActionRef, ErrCode, Event, Link, Node, Snapshot } from '../core/types.js'
-import { recovery } from '../core/errors.js'
+import { RECOVERIES } from '../core/errors.js'
 import { snapshotOf, status } from './envelope.js'
 
 const NUM = /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i
@@ -42,7 +42,7 @@ function body(s: Snapshot): string[] {
     while (j < s.nodes.length && s.nodes[j].type === type) j++
     const run = s.nodes.slice(i, j)
     const cols = [...new Set(run.flatMap(n => Object.keys(n.data)))]
-    const hdr = `@${str(type)} id${cols.map(c => ' ' + str(c)).join('')}`
+    const hdr = `@${str(type)} @id${cols.map(c => ' ' + str(c)).join('')}`   // @id: the node id (a data `id` col stays `id`)
     run.forEach((n, r) => {
       if (r % 25 === 0) out.push(hdr)   // header repeat: positional recall degrades with distance
       out.push([str(n.id), ...cols.map(c => cell(n.data[c]))].join(' '))
@@ -155,7 +155,7 @@ export function parseCommandResult(text: string): Event[] {
         case 'err': {
           const code = String(t[1]) as ErrCode
           const full = String(t[t.length - 1])
-          const cut = full.lastIndexOf(` \u2014 ${recovery[code]}`)
+          const cut = Math.max(...RECOVERIES.map(r => full.lastIndexOf(` \u2014 ${r}`)))
           const e: Extract<Event, { kind: 'err' }> = { kind: 'err', code, message: cut >= 0 ? full.slice(0, cut) : full }
           if (t.length === 4) e.field = String(t[2])
           events.push(e); break

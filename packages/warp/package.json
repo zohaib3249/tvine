@@ -4,7 +4,8 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": { "tvine": "dist/cli.js" },
+  "bin": { "tvine": "bin/tvine.js" },
+  "engines": { "node": ">=22.15" },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -28,6 +29,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "better-sqlite3": "^13.0.3",
+    "esbuild": "0.28.2",
     "nanoid": "^5",
     "zod": "^3.25.76"
   },

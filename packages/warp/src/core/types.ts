@@ -135,6 +135,7 @@ export type Middleware = (cmd: Command, ctx: ActionCtx,
 
 export interface ActionDef<S extends z.ZodType = z.ZodType> {
   id: ActionId
+  name?: string                     // defineAction's name, before discovery qualifies the id
   schema: S
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
@@ -170,6 +171,7 @@ export interface Settings {
   middleware: Middleware[]
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string }
+  snapshotCache: { ttlMs: number }      // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
     url: string
