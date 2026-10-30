@@ -121,6 +121,7 @@ export interface PermissionCtx {
   action?: ActionId                  // absent on route guards
   route: string
   user: TvineUser                   // from request.user (always present)
+  agent?: Request['agent']           // request.agent; denyAgents reads agent.is
   auth?: unknown                     // RESERVED v2 (claims from Command.auth)
   ip: string
 }
