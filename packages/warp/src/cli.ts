@@ -85,7 +85,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const dev = cmd === 'dev'
         // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
-        if (!dev) process.env.NODE_ENV ??= 'production'
+        if (!dev) process.env.NODE_ENV ||= 'production'   // empty (NODE_ENV=) counts as unset
         if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
