@@ -219,21 +219,23 @@ export abstract class GenericView<T extends object = any> extends View {
     return list.run(params, c) as Promise<Paginated<Out>>
   }
 
-  // Page-component helper for one object (Django get_object): `await ProductDetail.object(params.id)` → the
-  // same serialized object as `<app>.get` (permissions, getObject hooks, serializer, app shapers), or
-  // undefined when it does not exist or the id is not valid for the lookup (the page calls notFound()).
-  // A permission denial still throws. Without a ctx the hooks see ANONYMOUS.
-  static async object<V extends GenericView>(this: abstract new () => V, id: string | number, ctx?: ActionCtx): Promise<Out | undefined> {
+  // Page-component helper for one object (Django get_object_or_404): `await ProductDetail.object(params.id,
+  // { request: await currentRequest() })` → the same serialized object as `<app>.get` (permissions,
+  // getObject / checkObjectPermissions, serializer, app shapers), or undefined when it does not exist or this
+  // user may not see it (the page calls notFound()). Any other error (an invalid id) throws.
+  // Without a request the hooks see ANONYMOUS.
+  static async object<V extends GenericView>(this: abstract new () => V, id: string | number, ctx?: Partial<ActionCtx>): Promise<Out | undefined> {
     const get = registeredDef(this, 'get')
     if (!get) throw new Error(`${this.name}.object(): no registered get action; export the view from apps/<app>/views.ts and boot the server`)
-    const c = ctx ?? ({ request: { query: new URLSearchParams(), user: ANONYMOUS } } as unknown as ActionCtx)
-    await runPermissions(get.rules?.permissions ?? [], permissionCtx(c, get.id))
+    const c = { ...ctx, request: ctx?.request ?? { query: new URLSearchParams(), user: ANONYMOUS } } as unknown as ActionCtx
     const param = Object.keys((get.schema as z.AnyZodObject).shape)[0]!
-    try { return await get.run({ [param]: id }, c) as Out }
-    catch (e) {
+    try {
+      await runPermissions(get.rules?.permissions ?? [], permissionCtx(c, get.id))
+      return await get.run({ [param]: id }, c) as Out
+    } catch (e) {
       // by name, not instanceof: from a page bundle the def (and its DomainError class) is the server's copy
       const x = e as { name?: string; code?: string }
-      if (x?.name === 'DomainError' && (x.code === 'not_found' || x.code === 'invalid_param')) return undefined
+      if (x?.name === 'DomainError' && (x.code === 'not_found' || x.code === 'forbidden')) return undefined
       throw e
     }
   }
