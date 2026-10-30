@@ -5,7 +5,8 @@ import type { ActionHandle, ControlCtx, HeadlessMap } from '../widget/types.js'
 
 // styling.md: shared slot helpers for the built-in widgets (W9a owns this file; W9b–e reuse it).
 // Built-ins own their parts: inner natives sit under AutoOff so the JSX runtime never registers them twice.
-export { AutoOff } from '../jsx/AutoEl.js'
+import { AutoOff } from '../jsx/AutoEl.js'
+export { AutoOff }
 
 export type SlotProps<S> = {
   className?: string | ((s: S) => string)
@@ -42,7 +43,7 @@ export function part<S>(Tag: string, own: Record<string, any>, slot: SlotProps<S
     if (props.ref || (cp as { ref?: Ref<unknown> }).ref) merged.ref = mergeRefs(props.ref, (cp as { ref?: Ref<unknown> }).ref)
     if (cp.children === undefined && children !== undefined) merged.children = children
     else delete merged.children
-    return cloneElement(child, merged)
+    return <AutoOff>{cloneElement(child, merged)}</AutoOff>
   }
   return createElement(Tag, props, children)
 }
@@ -56,9 +57,14 @@ export function useControllable<T>(value: T | undefined, def: T): [T, (v: T) => 
 // `''` attribute when on, absent when off.
 export const flag = (on: unknown): '' | undefined => (on ? '' : undefined)
 
-// headless-parity.md: `url` (filters) wins over the form action's params.
-export function headlessOf(p: { url?: string; action?: ActionHandle; name?: string }): HeadlessMap | undefined {
-  return p.url ? { url: p.url, values: 'enum' } : p.action ? { params: p.action, ...(p.name && { field: p.name }) } : undefined
+// headless-parity.md: `url` (filters) wins over the form action's params. `url` is a query PARAM NAME
+// (warp core/ui.ts sets ?<url>=<value> on the current page), so only a plain name is published;
+// anything else (https://evil, javascript:, a path) is dropped with a dev warning.
+const PARAM = /^[A-Za-z_][\w.\-\[\]]{0,63}$/
+export function headlessOf(p: { url?: string; action?: ActionHandle; name?: string }, values: 'enum' | 'any' = 'enum'): HeadlessMap | undefined {
+  if (p.url && PARAM.test(p.url)) return { url: p.url, values }
+  if (p.url && process.env.NODE_ENV !== 'production') console.warn(`tvine: widget ${p.name ?? ''} url="${p.url}" is not a query param name; headless url map dropped`)
+  return p.action ? { params: p.action, ...(p.name && { field: p.name }) } : undefined
 }
 
 export const invalid = (field: string, message: string) => new WeftError('invalid_param', message, undefined, field)

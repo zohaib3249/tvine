@@ -19,7 +19,8 @@ export type InputProps = Base & {
 }
 export type InputState = { value: string | number | null; invalid?: string }
 
-const isSensitive = (p: InputProps) => p.sensitive ?? (p.type === 'password' || /password|(^|\s)cc-/i.test(String(p.autoComplete ?? '')))
+// Password is always sensitive: sensitive={false} never unmasks it.
+const isSensitive = (p: InputProps) => !!p.sensitive || p.type === 'password' || /password|(^|\s)cc-/i.test(String(p.autoComplete ?? ''))
 
 const useInput = defineWidget<InputProps, InputState, Record<string, Control<any, any>>>({
   kind: 'input',
@@ -47,7 +48,7 @@ const useInput = defineWidget<InputProps, InputState, Record<string, Control<any
       clear: { kind: 'clear', run: async (_a, ctx) => { await typeText(ctx, field(ctx), '') } },
     }
   },
-  headless: (p) => { const h = headlessOf(p); return h ? { input: h, clear: h } : {} },
+  headless: (p) => { const h = headlessOf(p, p.type === 'number' ? 'enum' : 'any'); return h ? { input: h, clear: h } : {} },
   describe: (p) => ({ label: p.label ?? p.name }),
   spec: (p) => ({ name: p.name, sensitive: isSensitive(p), changesContent: true }),
 })

@@ -22,8 +22,10 @@ const useCheckbox = defineWidget<CheckboxProps, { checked: Checked }, C>({
   controls: ({ props: p, el }) => ({
     toggle: { kind: 'toggle', params: { on: { type: 'boolean', optional: true } }, run: async (a: { on?: boolean }, ctx) => {
       const f = inner<HTMLInputElement>(ctx, el(), 'input')
-      // on:true on checked = no-op ok; indeterminate → checked.
-      if (a.on === undefined || a.on !== (p.checked === true)) f.click()
+      // on:true on checked = no-op ok; indeterminate → checked; on:false on indeterminate → unchecked (via checked).
+      if (a.on === undefined) f.click()
+      else if (p.checked === 'indeterminate') { f.click(); if (!a.on) f.click() }
+      else if (a.on !== p.checked) f.click()
     } },
   }),
   headless: (p) => { const h = headlessOf(p); return h ? { toggle: h } : {} },
