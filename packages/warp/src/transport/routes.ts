@@ -1,4 +1,6 @@
-import type { RouteInfo } from './discovery.js'
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
+import { loadNextRoutes, type RouteInfo } from './discovery.js'
 
 // Next pattern match: [x] one segment, [...x] one or more, [[...x]] zero or more.
 function matches(pattern: string, ps: string[]): boolean {
@@ -27,5 +29,18 @@ export function routeMatcher(routes: RouteInfo[]): (path: string) => string | un
     if (statics.has(d)) return d
     const ps = d === '/' ? [] : d.split('/').slice(1)
     return dynamics.find((p) => matches(p, ps))
+  }
+}
+
+// Dev: `next dev` rewrites the route manifest as pages compile. One stat per lookup; the table is rebuilt
+// only when the file's mtime or size changed, so a new page is routable without a restart.
+export function liveRouteMatcher(nextDir: string): (path: string) => string | undefined {
+  const file = join(nextDir, 'app-path-routes-manifest.json')
+  let seen = '', match = routeMatcher([])
+  return (path) => {
+    const st = statSync(file, { throwIfNoEntry: false })
+    const key = st ? `${st.mtimeMs}:${st.size}` : ''
+    if (key !== seen) { seen = key; match = routeMatcher(loadNextRoutes(nextDir)) }
+    return match(path)
   }
 }

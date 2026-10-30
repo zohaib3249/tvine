@@ -22,7 +22,7 @@ import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
-import { routeMatcher } from './transport/routes.js'
+import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 
 type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
@@ -78,6 +78,8 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
 }
 
 export async function createAgentServer(opts: AgentServerOptions = {}): Promise<AgentServer> {
+  // next dev in production = unoptimized builds, HMR and dev error overlays served to real users
+  if (opts.dev && process.env.NODE_ENV === 'production') throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
   // 1. settings (zod; missing TVINE_SECRET in prod throws). Boot lines go to stderr (stdout stays CLI output).
   const settings = await loadSettings(opts.settings)
   const say = (msg: string, level: 'info' | 'warn' = 'info') => {
@@ -95,12 +97,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const appMiddleware = await discoverMiddleware(appsDir)
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
-  if (fe && !routes.length) {
-    const msg = `no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')}`
-    // ponytail: dev reads the route table once at boot; restart after adding a page
-    if (opts.dev) say(`WARNING: ${msg} yet; agent paths 404 until a restart after the first compile`, 'warn')
-    else throw new Error(`${msg} (run next build)`)
-  }
+  // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
+  if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
 
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
@@ -112,7 +110,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (!fe) snapshot = manifestSnapshot(ctx)
   else if (fe.origin) snapshot = renderer(fe.origin)
   else snapshot = async () => { throw new Error('no frontend origin yet: call listen() or pass frontend.origin') }
-  const route = routeMatcher(routes)
+  // ponytail: in dev, discovery (/tvine/manifest, llms.txt) still lists the boot-time routes; agent paths and MCP are live
+  const route = fe && opts.dev ? liveRouteMatcher(fe.nextDir) : routeMatcher(routes)
   say('runtime ready')
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
@@ -134,7 +133,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     },
     (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
-    httpTransport(ctx, { routes }),
+    httpTransport(ctx, { routes, match: route }),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
   const startNext = () => (next ??= (async () => {
@@ -254,8 +253,10 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
   let warned = false
   return async (cmd) => {
     const h: Record<string, string> = Object.fromEntries(await src.headers())
+    // Referrer-Policy: no-referrer hides the page: fail safe, but say why
+    if (!h.referer) return { ok: false, message: 'Form submit needs a Referer header — check Referrer-Policy' }
     let path: string | undefined
-    try { path = h.referer ? new URL(h.referer).pathname : undefined } catch { /* refused below */ }
+    try { path = new URL(h.referer).pathname } catch { /* refused below */ }
     const pattern = path === undefined ? undefined : route(path)
     if (path === undefined || pattern === undefined) return { ok: false, message: 'forbidden: the referer is not a page of this site' }
     // ip + https: our handler's stamp; without it, trusted X-Forwarded-* hops; else one shared key (warned once)
