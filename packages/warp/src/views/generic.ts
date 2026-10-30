@@ -199,16 +199,19 @@ export abstract class GenericView<T extends object = any> extends View {
   ): Promise<Paginated<Out>> {
     const list = registeredDef(this, 'list')
     if (!list) throw new Error(`${this.name}.queryset(): no registered list action; export the view from apps/<app>/views.ts and run discover() at boot`)
-    const known = (list.schema as z.AnyZodObject).shape
+    const known = (list.schema as z.AnyZodObject).shape as Record<string, z.ZodTypeAny>
     const query = searchParams instanceof URLSearchParams ? searchParams : new URLSearchParams()
     const params: Record<string, string> = {}
+    // an invalid value (not a choice, not a number, a bad cursor, a sort not allowed) is dropped like an
+    // unknown key: a hand-edited URL must not 500 the page (the action itself stays strict)
+    const keep = (k: string, v: string) => { if (Object.hasOwn(known, k) && known[k]!.safeParse(v === '' ? undefined : v).success) params[k] = v }
     if (searchParams instanceof URLSearchParams) {
-      for (const k of new Set(query.keys())) if (Object.hasOwn(known, k)) params[k] = query.getAll(k).join(',')
+      for (const k of new Set(query.keys())) keep(k, query.getAll(k).join(','))
     } else {
       for (const [k, v] of Object.entries(searchParams)) {
-        if (v === undefined || !Object.hasOwn(known, k)) continue
-        params[k] = Array.isArray(v) ? v.join(',') : v
-        query.set(k, params[k])
+        if (v === undefined) continue
+        keep(k, Array.isArray(v) ? v.join(',') : v)
+        if (k in params) query.set(k, params[k]!)
       }
     }
     const c = ctx ?? ({ request: { query, user: ANONYMOUS } } as unknown as ActionCtx)
