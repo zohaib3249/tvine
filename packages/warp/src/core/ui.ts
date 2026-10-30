@@ -4,11 +4,12 @@
 // session → dispatch the built-in `weft.uiState`. Every server write goes through dispatch(), so
 // permissions, binds, rules.bind, rate limits, idempotency and atomic commits are the same as `do`.
 import { z } from 'zod'
-import { defineAction } from './actions.js'
+import { builtins, defineAction } from './actions.js'
 import { DomainError } from './errors.js'
 import { collect, dispatch, type ServerCtx } from './dispatch.js'
 import { ev } from './events.js'
 import type { ActionDef, ErrCode, Event, Request, Session, Sid, Snapshot } from './types.js'
+import { hashParams } from '../security/idempotency.js'
 import { signBind } from '../security/sign.js'
 import { expand, toTree, type CtlFrag, type ParamSpec } from '../shape/disclose.js'
 
@@ -26,8 +27,9 @@ const uiState = defineAction(UI_STATE,
     return { [key]: value }
   },
   { bind: ['key', 'enum'], mcp: false, readOnly: false })
+builtins.add(uiState)
 
-// ponytail: registered on first use (the manifest is app-built); an app named `weft` would collide.
+// Registered on first use (the manifest is app-built); the app name `weft` is reserved (actions.ts).
 export function ensureBuiltins(server: ServerCtx): ActionDef {
   return server.actions.get(UI_STATE) ?? (server.actions.register('weft', uiState), server.actions.get(UI_STATE)!)
 }
@@ -75,52 +77,79 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
   if (cmd.rev !== undefined && cmd.rev !== session.rev) {
     return { page, events: [ev.err('stale_rev', `rev ${cmd.rev} is stale (current ${session.rev})`, { snapshot: await snapNow() })] }
   }
-  const done: StepResult[] = []
-  const fail = async (i: number, s: Step, code: ErrCode, message: string, o: { reason?: string; field?: string } = {}) => {
-    const ran = done.length ? ` (steps 0-${i - 1} ran)` : ''
-    return { page, events: [ev.err(code, `step ${i} ${s.target}.${s.control}: ${message}${ran}`, { ...o, snapshot: await snapNow() })] }
+  // idempotency for the whole command: a retry with the same cmdId returns the stored result before any step
+  // runs (sub-actions' own binds are re-signed per run, so their hashes alone would conflict)
+  const key = cmd.cmdId === undefined ? undefined : `ui:${cmd.cmdId}`
+  const hash = key ? hashParams({ steps, rev: cmd.rev ?? null }) : ''
+  if (key) {
+    const r = server.idempotency.replay(sid, key, hash)
+    if (r.hit === 'conflict') return { page, events: [ev.err('conflict', 'cmdId was already used with different steps; send a new cmdId')] }
+    if (r.hit) return { page: pageOfEvents(r.events) ?? page, events: r.events }
   }
-  for (const [i, s] of steps.entries()) {
-    const snap = await snapNow()
-    const w = snap.widgets?.find((x) => x.id === s.target)
-    const c: CtlFrag | undefined = w?.ctl && Object.hasOwn(w.ctl, s.control) ? w.ctl[s.control] : undefined
-    // missing, disabled and agent-denied controls answer alike (can't be probed)
-    const handle = (c?.h as { params?: { id?: unknown; bind?: unknown; agent?: unknown } } | undefined)?.params
-    if (!c || c.enabled === false || handle?.agent === false) return fail(i, s, 'unknown_action', 'no such control on this page; re-read the page for widget ids and controls')
-    const h = c.h as Record<string, unknown> | undefined
-    if (!h) return fail(i, s, 'unknown_action', 'this control changes the page only in a browser tab (no headless path)', { reason: 'in_tab_only' })
-    const bad = checkArgs(c.in, s.args)
-    if (bad) return fail(i, s, 'invalid_param', bad.message, { field: bad.field })
-    const value = s.args.value ?? Object.values(s.args)[0]
-
-    if (typeof h.url === 'string') {
-      if (value === undefined || (typeof value === 'object' && value !== null)) return fail(i, s, 'invalid_param', 'needs a value', { field: 'value' })
-      const u = new URL(page, 'http://tvine.local')
-      u.searchParams.set(h.url, String(value))
-      const next = u.pathname + u.search
-      if (!(await env.request(next))) return fail(i, s, 'domain', 'that page is not reachable', { reason: 'forbidden' })
-      page = next
-      done.push({ i, target: s.target, ok: true, result: { goto: page } })
-    } else if (h.rendered === true) {
-      done.push({ i, target: s.target, ok: true })   // content is already in the snapshot: expand(target) shows it
-    } else if (handle && typeof handle.id === 'string') {
-      if (typeof h.field === 'string') return fail(i, s, 'unknown_action', `set ${h.field} in the args of the form's submit control instead`, { reason: 'in_tab_only' })
-      const r = await act(server, env, page, { action: handle.id, params: s.args, bind: typeof handle.bind === 'string' && handle.bind ? handle.bind : undefined   /* '' = unbound (v1 ActionRef) */ }, sid, cmd.cmdId, i)
-      if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
-      if (r.goto) { if (!(await env.request(r.goto))) return { page, events: [ev.ok('ui', { steps: [...done, { i, target: s.target, ok: true }], page }), ev.goto(r.goto)] }; page = r.goto }
-      done.push({ i, target: s.target, ok: true, ...(r.result !== undefined && { result: r.result }) })
-    } else if (typeof h.session === 'string') {
-      ensureBuiltins(server)
-      const allowed = Array.isArray(h.enum) ? h.enum.map(String) : null
-      const bind = signBind({ $action: UI_STATE, key: h.session, enum: allowed }, server.settings)
-      const r = await act(server, env, page, { action: UI_STATE, params: { value: value === undefined ? '' : String(value) }, bind }, sid, cmd.cmdId, i)
-      if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
-      done.push({ i, target: s.target, ok: true, result: r.result })
-    } else {
-      return fail(i, s, 'unknown_action', 'this control has no headless path', { reason: 'in_tab_only' })
+  const exec = async (): Promise<{ page: string; events: Event[] }> => {
+    const done: StepResult[] = []
+    const fail = async (i: number, s: Step, code: ErrCode, message: string, o: { reason?: string; field?: string } = {}) => {
+      const ran = done.length ? ` (steps 0-${i - 1} ran)` : ''
+      return { page, events: [ev.err(code, `step ${i} ${s.target}.${s.control}: ${message}${ran}`, { ...o, snapshot: await snapNow() })] }
     }
+    for (const [i, s] of steps.entries()) {
+      const snap = await snapNow()
+      const w = snap.widgets?.find((x) => x.id === s.target)
+      const c: CtlFrag | undefined = w?.ctl && Object.hasOwn(w.ctl, s.control) ? w.ctl[s.control] : undefined
+      // missing, disabled and agent-denied controls answer alike (can't be probed)
+      const handle = (c?.h as { params?: { id?: unknown; bind?: unknown; agent?: unknown } } | undefined)?.params
+      if (!c || c.enabled === false || handle?.agent === false) return fail(i, s, 'unknown_action', 'no such control on this page; re-read the page for widget ids and controls')
+      const h = c.h as Record<string, unknown> | undefined
+      if (!h) return fail(i, s, 'unknown_action', 'this control changes the page only in a browser tab (no headless path)', { reason: 'in_tab_only' })
+      const bad = checkArgs(c.in, s.args)
+      if (bad) return fail(i, s, 'invalid_param', bad.message, { field: bad.field })
+      const value = s.args.value ?? Object.values(s.args)[0]
+
+      if (typeof h.url === 'string') {
+        if (value === undefined || (typeof value === 'object' && value !== null)) return fail(i, s, 'invalid_param', 'needs a value', { field: 'value' })
+        const u = new URL(page, 'http://tvine.local')
+        u.searchParams.set(h.url, String(value))
+        const next = u.pathname + u.search
+        if (!(await env.request(next))) return fail(i, s, 'domain', 'that page is not reachable', { reason: 'forbidden' })
+        page = next
+        done.push({ i, target: s.target, ok: true, result: { goto: page } })
+      } else if (h.rendered === true) {
+        done.push({ i, target: s.target, ok: true })   // content is already in the snapshot: expand(target) shows it
+      } else if (handle && typeof handle.id === 'string') {
+        if (typeof h.field === 'string') return fail(i, s, 'unknown_action', `set ${h.field} in the args of the form's submit control instead`, { reason: 'in_tab_only' })
+        const r = await act(server, env, page, { action: handle.id, params: s.args, bind: typeof handle.bind === 'string' && handle.bind ? handle.bind : undefined   /* '' = unbound (v1 ActionRef) */ }, sid, cmd.cmdId, i)
+        if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
+        if (r.goto && !(await env.request(r.goto))) {
+          // the action navigated somewhere these steps can't follow: last step → ok + goto; else say exactly what ran
+          const ran = [...done, { i, target: s.target, ok: true as const }]
+          if (i === steps.length - 1) return { page, events: [ev.ok('ui', { steps: ran, page }), ev.goto(r.goto)] }
+          return { page, events: [ev.err('domain', `step ${i} ${s.target}.${s.control} navigated to ${r.goto.slice(0, 200)}; steps 0-${i} ran, steps ${i + 1}-${steps.length - 1} did not. Re-read that page and continue there`, { reason: 'navigated' })] }
+        }
+        if (r.goto) page = r.goto
+        done.push({ i, target: s.target, ok: true, ...(r.result !== undefined && { result: r.result }) })
+      } else if (typeof h.session === 'string') {
+        ensureBuiltins(server)
+        const allowed = Array.isArray(h.enum) ? h.enum.map(String) : null
+        const bind = signBind({ $action: UI_STATE, key: h.session, enum: allowed }, server.settings)
+        const r = await act(server, env, page, { action: UI_STATE, params: { value: value === undefined ? '' : String(value) }, bind }, sid, cmd.cmdId, i)
+        if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
+        done.push({ i, target: s.target, ok: true, result: r.result })
+      } else {
+        return fail(i, s, 'unknown_action', 'this control has no headless path', { reason: 'in_tab_only' })
+      }
+    }
+    return { page, events: [ev.ok('ui', { steps: done, page }), ev.snapshot(await snapNow())] }
   }
-  return { page, events: [ev.ok('ui', { steps: done, page }), ev.snapshot(await snapNow())] }
+  const out = await exec()
+  if (key) server.idempotency.remember(sid, key, hash, out.events)
+  return out
+}
+
+const pageOfEvents = (events: Event[]): string | undefined => {
+  for (const e of events) {
+    if (e.kind === 'snapshot') return e.snapshot.page
+    if (e.kind === 'err' && e.snapshot) return e.snapshot.page
+  }
 }
 
 type ErrEv = Extract<Event, { kind: 'err' }>

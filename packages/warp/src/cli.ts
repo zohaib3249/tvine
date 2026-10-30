@@ -146,10 +146,15 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         return undefined
       }
       case 'check': {
-        const bad = await boundaryCheck(dirname(apps))
-        if (bad.length) { io.err(boundaryReport(bad)); io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM`); return 1 }
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.close()
+        const bad = await boundaryCheck(dirname(apps))
+        const level = srv.ctx.settings.frontend.boundary   // 'warn': report, don't fail
+        if (bad.length) {
+          io.err(boundaryReport(bad, level))
+          io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM${level === 'warn' ? ' (settings.frontend.boundary = warn)' : ''}`)
+          if (level === 'error') return 1
+        }
         const url = srv.ctx.settings.db.url
         if (hasModels(apps) && !(await migrateCheck(url, apps))) { io.err(`tvine check: ${await pending(url, apps)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)

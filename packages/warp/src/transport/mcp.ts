@@ -265,8 +265,12 @@ async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<type
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
-  const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
+  const known = a.sid === undefined ? undefined : server.sessions.resolve({ sid: a.sid })
+  const session = known ?? server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
+  if (a.sid !== undefined && !known) {   // like dispatch: a dead sid never runs steps; a fresh sid + snapshot to restart
+    return rendering(server, ctx, async () => reply(server, [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await server.snapshot(ctx.page, session.sid) })], ctx))
+  }
   const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
   if (!rl.ok) return reply(server, [rateLimited(rl.retryAfterMs)], ctx)
   return rendering(server, ctx, async () => {

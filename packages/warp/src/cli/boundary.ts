@@ -87,6 +87,7 @@ export async function boundaryCheck(root: string): Promise<Violation[]> {
   return out
 }
 
-export const boundaryReport = (v: Violation[]) => v.map((x) => x.chain.length
-  ? `error  ${x.chain.join(' → ')}${x.chain.at(-1) === x.what ? '' : ` → ${x.what}`}\n       frontend code must not use models/the ORM. Fix: add a view (e.g. a ListView with readOnly rules) in apps/<app>/views.ts and call it: \`must(await api.<app>.<name>(params))\` from '@tvine/weft/api'.`
-  : `error  ${x.file}: ${x.what}`).join('\n')
+// level = settings.frontend.boundary: 'warn' prints the same report with `warn` lines (and check does not fail)
+export const boundaryReport = (v: Violation[], level: 'error' | 'warn' = 'error') => v.map((x) => x.chain.length
+  ? `${level.padEnd(5)}  ${x.chain.join(' → ')}${x.chain.at(-1) === x.what ? '' : ` → ${x.what}`}\n       frontend code must not use models/the ORM. Fix: add a view (e.g. a ListView with readOnly rules) in apps/<app>/views.ts and call it: \`must(await api.<app>.<name>(params))\` from '@tvine/weft/api'.`
+  : `${level.padEnd(5)}  ${x.file}: ${x.what}`).join('\n')

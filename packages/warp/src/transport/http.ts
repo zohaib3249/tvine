@@ -243,8 +243,12 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       throw new Refuse(400, 'invalid_param', i ? `ui.${i.path.join('.')}: ${i.message}` : 'ui needs target + control, or steps', 'ui')
     }
     const sidKey = body.sid ?? p.data.sid
-    const session = sessions.resolve({ sid: sidKey, cookie: sidKey === undefined ? cookie : undefined }) ?? sessions.create()
+    const known = sessions.resolve({ sid: sidKey, cookie: sidKey === undefined ? cookie : undefined })
+    const session = known ?? sessions.create()
     const ctx = { sid: session.sid, rev: session.rev, page: page0 }
+    if (sidKey !== undefined && !known) {   // like dispatch: a dead sid never runs steps
+      return { ctx, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await server.snapshot(page0, session.sid) })] }
+    }
     const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
     if (!rl.ok) return { ctx, events: [rateLimited(rl.retryAfterMs)] }
     const at = async (pg: string) => {

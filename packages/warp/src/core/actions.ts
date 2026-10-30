@@ -108,6 +108,8 @@ export function paramSpecs(def: Pick<ActionDef, 'schema' | 'rules'>): ActionRef[
 }
 
 const qualified = new WeakMap<ActionDef, ActionId>()
+// Framework built-ins (core/ui.ts weft.uiState): the only defs allowed under the reserved app name `weft`.
+export const builtins = new WeakSet<ActionDef>()
 
 export class ActionManifest {
   private defs = new Map<ActionId, ActionDef>()
@@ -123,6 +125,7 @@ export class ActionManifest {
   // Permissions are cumulative (app then action; first deny wins per permissions.md).
   register(app: string, def: ActionDef, appRules: Partial<ActionRules> = {}): void {
     if (!APP_RE.test(app)) throw new Error(`app name "${app}" must match ${APP_RE}`)
+    if (app === 'weft' && !builtins.has(def)) throw new Error('app name "weft" is reserved for framework built-ins')
     // W1: the final id is written onto the caller's def object, so `import { addToCart }` sees
     // 'cart.addToCart'. A def keeps one id for life (re-registering under the same id is fine).
     const prev = qualified.get(def)
