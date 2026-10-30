@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
+import { DomainError } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
@@ -192,6 +193,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
         const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
         status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
+      } else if (e instanceof DomainError) {   // e.g. not_found: the page Next rendered called notFound()
+        status = reply(DOMAIN_STATUS[e.code] ?? 400, [ev.err('domain', e.message, { reason: e.code })])
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
         status = reply(500, [ev.err('internal', 'internal error')])

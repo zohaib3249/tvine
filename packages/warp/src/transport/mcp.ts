@@ -8,6 +8,7 @@ import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-sc
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type { ActionManifest } from '../core/actions.js'
 import { collect, dispatch, renderCtx, type Log, type ServerCtx } from '../core/dispatch.js'
+import { DomainError } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
@@ -223,6 +224,7 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<ty
     if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms }))
     return reply(server, [ev.snapshot(snap)], ctx)
   } catch (e) {
+    if (e instanceof DomainError) return reply(server, [ev.err('domain', e.message, { reason: e.code })], ctx)   // e.g. not_found
     server.log('error', 'snapshot render failed', { page: ctx.page, error: e instanceof Error ? e.message : String(e) })
     return reply(server, [ev.err(e instanceof RegistryError ? e.code : 'internal', 'page could not be rendered')], ctx)
   }

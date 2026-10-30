@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
+import { DomainError } from './errors.js'
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
 export class RegistryError extends Error {
@@ -152,6 +153,7 @@ export function makeSnapshotter(opts: {
     }
     let html: string, readSession: boolean
     try { html = await res.text() } finally { readSession = as?.readSession() ?? false }
+    if (res.status === 404) throw new DomainError('not_found', `not found: ${route}`)   // the page called notFound()
     if (res.status !== 200) throw new RegistryError('internal', `render failed (${res.status}) for ${route}`)
     const { personal, live, ...body } = extract(html, route)
     if (!personal && !live && !readSession) cache.set(route, body, ver)
