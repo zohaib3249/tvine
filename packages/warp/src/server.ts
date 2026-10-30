@@ -94,7 +94,9 @@ async function fromApp<T>(spec: string): Promise<T> {
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
   const file = appModule(process.cwd(), 'settings')
   const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
-  return defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
+  const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
+  void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
+  return settings
 }
 
 export async function createAgentServer(opts: AgentServerOptions = {}): Promise<AgentServer> {

@@ -98,13 +98,16 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below
   const secret = given ?? process.env.TVINE_SECRET ?? (prod ? undefined : randomBytes(32).toString('hex'))
   const keys = secret === undefined ? [] : [secret].flat()
-  if (!keys.length || keys.some((k) => k.length < 32)) {
-    throw new Error(
-      'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))',
-    )
-  }
+  const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
+  if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
-  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, secret, logging: prod ? 'json' : 'pretty' }
-  const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
-  return schema.parse(merged)
+  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const settings = schema.parse(merge(base as Record<string, unknown>, rest as Record<string, unknown>))
+  // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
+  // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
+  // merging these settings again (loadSettings) re-resolves the secret instead of tripping here.
+  if (!ok) Object.defineProperty(settings, 'secret', { enumerable: false, get: () => { throw new Error(SECRET_HELP) } })
+  return settings
 }
+
+const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
