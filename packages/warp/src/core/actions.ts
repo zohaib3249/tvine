@@ -35,8 +35,12 @@ function paramType(t: z.ZodTypeAny): string {
 function deriveSpec(schema: z.ZodTypeAny): ActionRef['params'] {
   if (!(schema instanceof z.ZodObject)) return []
   return Object.entries(schema.shape as Record<string, z.ZodTypeAny>).map(([name, f]) => {
-    const required = !(f instanceof z.ZodOptional || f instanceof z.ZodDefault)
-    const inner = f instanceof z.ZodOptional ? f.unwrap() : f instanceof z.ZodDefault ? f.removeDefault() : f
+    let inner = f
+    let required = true
+    while (inner instanceof z.ZodOptional || inner instanceof z.ZodDefault) {
+      required = false
+      inner = inner instanceof z.ZodOptional ? inner.unwrap() : inner.removeDefault()
+    }
     return { name, type: paramType(inner), required }
   })
 }
