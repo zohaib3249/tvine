@@ -42,13 +42,16 @@ const stopped = (): UiError => ({ code: 'domain', reason: 'stopped', message: 't
 // ---- Idempotency: a repeated cmdId returns the stored result (last 32); a concurrent repeat joins.
 type Out = { result: UiResult; error?: UiError }
 const seen = new Map<string, Promise<Out>>()
+let tail: Promise<void> = Promise.resolve()
 export function resetExecutor(): void { seen.clear(); setStopped(false) }
 
 export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   const cmdId = typeof cmd.cmdId === 'string' && cmd.cmdId ? cmd.cmdId.slice(0, 128) : newCmdId()
   const hit = seen.get(cmdId)
   if (hit) return hit
-  const p = execute(cmd, cmdId, o)
+  // One command at a time per tab: steps of two commands never interleave.
+  const p = tail.then(() => execute(cmd, cmdId, o))
+  tail = p.then(() => {}, () => {})
   seen.set(cmdId, p)
   // Blocked before anything ran (Stop): not a result worth replaying after Resume.
   p.then((r) => { if (r.error?.reason === 'stopped' && !r.result.steps.some((x) => x.ok)) seen.delete(cmdId) })
@@ -98,6 +101,8 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions): Promise<O
     const act = { verb: c.kind, label: c.label ?? e.spec.label, control, danger: !!handle?.danger, options: e.spec.presence as false | PresenceOptions | undefined }
     const presence = overlay.presenceFor(act, signal)
     e.agent?.({ active: true, verb: c.kind })
+    // Styling hook only: destructive actions are never refused by the framework (apps veto via hooks).
+    if (act.danger) e.el?.setAttribute('data-agent-danger', '')
     const end = overlay.begin(e.el, act)
     touched.set(e.id, e)
     try {
@@ -117,6 +122,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions): Promise<O
       return fail({ code: 'internal', message: err instanceof Error ? err.message : String(err) })
     } finally {
       end()
+      e.el?.removeAttribute('data-agent-danger')
       e.agent?.({ active: false })
     }
   }

@@ -170,7 +170,9 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
         const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
           outcome(await post({ action: h.id, params, bind: h.bind, cmdId }))
         const { result, error } = await runUi(cmd, { via: 'webmcp', run })
-        return reply(error ? { kind: 'err', ...error, result } : { kind: 'ok', action: 'ui', result })
+        // stale_rev carries a fresh L0 map so the agent can re-plan without another call.
+        const map = error?.code === 'stale_rev' ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
+        return reply(error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result })
       }),
     },
     {

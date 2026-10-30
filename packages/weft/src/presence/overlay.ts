@@ -7,6 +7,7 @@ import { typeInto } from './typing.js'
 // All text goes through textContent and is composed here from verb + declared label: never page/agent HTML.
 
 // Theme = the CSS custom properties below (they inherit into the shadow root; nothing else does).
+// The pill's text/button colors are fixed and its theme color sits on an opaque base: a theme can't make Stop invisible.
 const CSS = `
 :host{all:initial!important;display:block!important;position:fixed!important;inset:0!important;width:auto!important;height:auto!important;
   margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;
@@ -22,8 +23,9 @@ const CSS = `
 .cursor svg{width:100%;height:100%;fill:var(--c);stroke:var(--fg);stroke-width:1.5}
 .reduced *{transition:none!important}
 .pill{position:fixed;right:16px;bottom:16px;display:flex!important;align-items:center;gap:8px;min-width:160px;min-height:32px;padding:6px 8px 6px 12px;
-  border-radius:999px;background:var(--c);color:var(--fg);opacity:1!important;visibility:visible!important;pointer-events:auto!important;box-shadow:0 2px 8px #0004}
-.pill button{all:unset;cursor:pointer;padding:4px 10px;border-radius:999px;background:var(--fg);color:var(--c);font-weight:600}
+  border-radius:999px;background:linear-gradient(var(--c),var(--c)),#7c3aed;color:#fff;text-shadow:0 0 2px #000;outline:2px solid #fff;
+  opacity:1!important;visibility:visible!important;pointer-events:auto!important;box-shadow:0 2px 8px #0008}
+.pill button{all:unset;cursor:pointer;padding:4px 10px;border-radius:999px;background:#fff;color:#111;text-shadow:none;font-weight:600}
 `
 const CURSOR = '<svg viewBox="0 0 20 20"><path d="M2 2l6 16 2.5-6.5L17 9z"/></svg>'   // static, runtime-owned
 
