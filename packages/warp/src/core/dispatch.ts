@@ -124,7 +124,7 @@ function cookieOf(r: Request, s: Settings): string | undefined {
 
 // Next's server-action check, kept for every path into dispatch: a browser Origin must match the host.
 // No Origin (curl, SDKs, MCP clients) passes. ponytail: no allowedOrigins list yet; add with settings when needed.
-function crossOrigin(r: Request, s: Settings): boolean {
+export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
   const host = ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase()
@@ -136,7 +136,7 @@ function crossOrigin(r: Request, s: Settings): boolean {
 export const MAX_QUEUE = 16
 const chains = new Map<Sid, Promise<unknown>>()
 const depth = new Map<Sid, number>()
-const rateLimited = (ms: number) => ev.err('rate_limited', `rate limited: retry after ${ms}ms`, { retryAfterMs: ms })
+export const rateLimited = (ms: number) => ev.err('rate_limited', `rate limited: retry after ${ms}ms`, { retryAfterMs: ms })
 function serial(sid: Sid, fn: () => Promise<Event[]>): Promise<Event[]> {
   const n = depth.get(sid) ?? 0
   if (n >= MAX_QUEUE) return Promise.resolve([rateLimited(1000)])

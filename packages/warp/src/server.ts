@@ -7,7 +7,8 @@ import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { collect, dispatch, formResult, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
+import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
+import { ev } from './core/events.js'
 import { discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
@@ -271,6 +272,11 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     const request = await buildRequest({ url: path, route: pattern, headers: h, ip, via: 'human' }, settings)
     if (!(await guardCheck(settings)(decodeURIComponent(path), request, sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
     if (!sessions.peek({ cookie })) {
+      // a refused request creates no session and sets no cookie: dispatch's own origin + ip checks, run first.
+      // ponytail: dispatch charges the ip bucket again, so a session's first submit costs 2 tokens
+      if (crossOrigin(request, settings)) return formResult([ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })])
+      const rl = server.limiter.check({ ip: request.ip })
+      if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
       cookie = sessions.cookieFor(sessions.create().sid)
       // the same attributes as transport/http.ts sets on its session cookie
       jar.set(name, cookie, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
