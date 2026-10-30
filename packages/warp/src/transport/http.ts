@@ -40,7 +40,7 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
   constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
-  get reason() { return this.status === 403 ? 'forbidden' : undefined }
+  get reason() { return this.status === 403 ? 'forbidden' : this.status === 413 ? 'too_large' : undefined }
 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
@@ -283,17 +283,20 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const delim = Buffer.from(`\r\n--${boundary}`)
     const CRLF2 = Buffer.from('\r\n\r\n')
     const textCap = settings.limits.bodyBytes
-    let buf = Buffer.from('\r\n'), total = 0, cap = textCap
+    // The text cap counts bytes the text parts CONSUMED (a read chunk may already hold file bytes); the
+    // file is capped by receiveUpload's maxBytes alone, so an oversized file always gets its own 413.
+    let buf = Buffer.from('\r\n'), total = 0, cap = textCap, taken = 0
     const more = async () => {
       const r = await it.next()
       if (r.done) throw new Refuse(400, 'invalid_param', 'multipart body is truncated')
       total += r.value.length
-      if (bodyCap(total, cap).ok === false) throw new Refuse(413, 'invalid_param', 'request body too large')
       buf = Buffer.concat([buf, r.value])
     }
+    const textTooBig = (n: number) => { if (bodyCap(n, textCap).ok === false) throw new Refuse(413, 'invalid_param', 'request body too large') }
     const until = async (sep: Buffer) => {
       let i: number
-      while ((i = buf.indexOf(sep)) < 0) await more()
+      while ((i = buf.indexOf(sep)) < 0) { textTooBig(taken + buf.length); await more() }
+      textTooBig((taken += i + sep.length))
       const out = buf.subarray(0, i)
       buf = buf.subarray(i + sep.length)
       return out
@@ -330,7 +333,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!d || !('upload' in d)) throw new Refuse(400, 'invalid_param', 'the action field must come before the file and name an upload action', 'action')
       def = d as UploadDef
       cap = textCap + def.upload.maxBytes
-      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file', media: settings.media }); upload.def = def }
+      try { file = upload.file = await receiveUpload(Readable.from(body(), { highWaterMark: 1 }), def, { field: 'file', media: settings.media }); upload.def = def }
       catch (e) {
         const c = (e as { code?: unknown }).code
         if (c === 'too_large') throw new Refuse(413, 'invalid_param', (e as Error).message, 'file')
