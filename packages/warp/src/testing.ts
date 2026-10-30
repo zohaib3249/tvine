@@ -72,7 +72,7 @@ function decode(raw: string): { sid: Sid; events: Event[] } {
   const [, sid = '', rev = '0'] = /sid=(\S*) rev=(\d+)/.exec(String(o['#tvine'])) ?? []
   const snapshot: Snapshot | undefined = 'page' in o ? {
     page: o.page, title: o.title ?? '', sid, rev: Number(rev),
-    nodes: (o.nodes ?? []).map((n: any) => ({ id: n.id, type: n.type, data: n.data ?? {}, actions: n.actions ?? [] })),
+    nodes: (o.nodes ?? []).map((n: any) => ({ id: n.id, type: n.type ?? n.kind, data: n.data ?? {}, actions: n.actions ?? [] })),
     links: o.links ?? [],
   } : undefined
   const events: Event[] = []
