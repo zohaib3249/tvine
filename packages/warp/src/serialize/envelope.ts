@@ -5,7 +5,8 @@ import { toNotation, bare, cell, quote } from './notation.js'
 
 export type Format = 'json' | 'notation'
 export type Shapers = Record<string /* node type */, (data: Record<string, unknown>) => Record<string, unknown>>
-export interface Ctx { sid: Sid; rev: Rev; page?: string }
+export interface Ctx { sid: Sid; rev: Rev; page: string }
+export interface RenderOpts { ctx: Ctx; shapers?: Shapers }
 
 const HINT = '#hint @type cols=schema, rows=values in order, "-"=null | ! act name(p:type) -> POST {action,params,sid}'
 
@@ -36,18 +37,18 @@ export function isEmpty(v: unknown): boolean {
 // Notation status line. (json builds the same facts as fields in json.ts)
 export function status(e: Event): string {
   switch (e.kind) {
-    case 'ok': return `ok ${cell(e.action)}` + (isEmpty(e.result) ? '' : ` ${cell(e.result)}`)
+    case 'ok': return `ok ${cell(e.action)}` + (isEmpty(clean(e.result)) ? '' : ` ${cell(clean(e.result))}`)
     case 'err': return `err ${e.code}${e.field ? ` ${cell(e.field)}` : ''} ${quote(errText(e))}`
     case 'goto': return `goto ${cell(e.url)}`
     case 'update': return `update ${e.source}`
-    case 'patch': return `patch ${cell(e.changes)}`
+    case 'patch': return `patch ${cell(clean(e.changes))}`
     default: throw new Error('status: not a status event')
   }
 }
 
 // Drop null/undefined/[] recursively (omit-empty).
 export function clean(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(clean)
+  if (Array.isArray(v)) return v.filter(x => !isEmpty(x)).map(clean)
   if (v && typeof v === 'object') {
     const o: Record<string, unknown> = {}
     for (const [k, x] of Object.entries(v)) if (!isEmpty(x)) o[k] = clean(x)
@@ -71,9 +72,10 @@ export function snapshotOf(e: Event): Snapshot | undefined {
   return e.kind === 'snapshot' ? e.snapshot : e.kind === 'err' ? e.snapshot : undefined
 }
 
+// ctx is REQUIRED (sid/rev/page): ok/goto/err events carry none; snapshot values win over it.
 // head + status? + body. sid/rev come from the first snapshot/update in `events`; `ctx` fills the
 // gaps (ok/goto/err carry no sid themselves).
-export function render(events: Event[], format: Format, _settings: Settings, shapers?: Shapers, ctx?: Ctx): string {
+export function render(events: Event[], format: Format, _settings: Settings, { ctx, shapers }: RenderOpts): string {
   const evs: Event[] = events.map(e => {
     if (e.kind === 'snapshot') return { kind: 'snapshot', snapshot: shape(e.snapshot, shapers) }
     if (e.kind === 'err' && e.snapshot) return { ...e, snapshot: shape(e.snapshot, shapers) }
@@ -85,6 +87,6 @@ export function render(events: Event[], format: Format, _settings: Settings, sha
   const sid = snap?.sid ?? upd?.sid ?? ctx?.sid
   const rev = snap?.rev ?? upd?.rev ?? patch?.rev ?? ctx?.rev
   if (sid === undefined || rev === undefined) throw new Error('render: no sid/rev in events or ctx')
-  const h = head({ sid, rev, page: snap?.page ?? ctx?.page ?? '', format, hint: format === 'notation' && !!snap })
+  const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint: format === 'notation' && !!snap })
   return format === 'json' ? toJson(evs, h) : toNotation(evs, h)
 }

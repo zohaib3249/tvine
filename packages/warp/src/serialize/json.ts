@@ -1,15 +1,15 @@
 import type { Event } from '../core/types.js'
-import { errText, isEmpty, snapshotOf } from './envelope.js'
+import { clean, errText, isEmpty, snapshotOf } from './envelope.js'
 
 // Events arrive already shaped + cleaned (envelope.render). One flat object: head, status, snapshot.
 export function toJson(events: Event[], head: string): string {
   const o: Record<string, unknown> = {}
   for (const e of events) {
-    if (e.kind === 'ok') { o.status = 'ok'; o.action = e.action; if (!isEmpty(e.result)) o.result = e.result }
+    if (e.kind === 'ok') { o.status = 'ok'; o.action = e.action; const r = clean(e.result); if (!isEmpty(r)) o.result = r }
     else if (e.kind === 'err') { o.status = 'err'; o.code = e.code; if (e.field) o.field = e.field; o.message = errText(e) }
     else if (e.kind === 'goto') { o.status = 'goto'; o.url = e.url }
     else if (e.kind === 'update') { o.status = 'update'; o.source = e.source }
-    else if (e.kind === 'patch') { o.status = 'patch'; o.changes = e.changes }
+    else if (e.kind === 'patch') { o.status = 'patch'; o.changes = clean(e.changes) }
   }
   const s = events.map(snapshotOf).find(Boolean)
   if (s) {

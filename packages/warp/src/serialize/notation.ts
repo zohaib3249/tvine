@@ -12,6 +12,8 @@ const needsQuote = (s: string) =>
   s === '' || s === '-' || s === 'true' || s === 'false' || NUM.test(s) || MONEY.test(s) || /[\s"\\#=@!>{[]|[^\x21-\x7e]/.test(s)
 const str = (s: string) => (needsQuote(s) ? quote(s) : s)
 // Looser rule for head page / bind (opaque tails): `=` and sigils are fine there.
+// Action id / param name / param type: also quote the action-line delimiters.
+const part = (s: string) => (s === '' || /[\s"\\(),:?]|[^\x21-\x7e]/.test(s) ? quote(s) : s)
 export const bare = (s: string) => (s === '' || /[\s"\\]|[^\x21-\x7e]/.test(s) ? quote(s) : s)
 
 const isMoney = (v: object): v is { value: number; currency: string } => {
@@ -45,7 +47,7 @@ function body(s: Snapshot): string[] {
       if (r % 25 === 0) out.push(hdr)   // header repeat: positional recall degrades with distance
       out.push([str(n.id), ...cols.map(c => cell(n.data[c]))].join(' '))
       for (const a of n.actions) {
-        out.push(`! ${a.id}(${a.params.map(p => `${p.name}${p.required ? '' : '?'}:${p.type}`).join(',')}) bind=${bare(a.bind)}`)
+        out.push(`! ${part(a.id)}(${a.params.map(p => `${part(p.name)}${p.required ? '' : '?'}:${part(p.type)}`).join(',')}) bind=${bare(a.bind)}`)
       }
     })
     i = j
@@ -104,6 +106,34 @@ function scan(line: string): unknown[] {
   return out
 }
 
+const TOK = /"(?:[^"\\]|\\.)*"|[^\s"(),:?]+/y
+function parseAction(line: string): ActionRef {
+  let p = 2
+  const bad = () => new Error('parse: bad action line: ' + line)
+  const next = () => {
+    TOK.lastIndex = p
+    const m = TOK.exec(line)
+    if (!m) throw bad()
+    p = TOK.lastIndex
+    return m[0][0] === '"' ? (JSON.parse(m[0]) as string) : m[0]
+  }
+  const eat = (c: string) => { if (line[p] !== c) throw bad(); p++ }
+  const id = next()
+  eat('(')
+  const params: ActionRef['params'] = []
+  while (line[p] !== ')') {
+    if (params.length) eat(',')
+    const name = next()
+    const required = line[p] !== '?'
+    if (!required) p++
+    eat(':')
+    params.push({ name, type: next(), required })
+  }
+  p++
+  if (!line.startsWith(' bind=', p)) throw bad()
+  return { id, params, bind: tail(line.slice(p + 6)) }
+}
+
 const tail = (s: string) => (s.startsWith('"') ? (JSON.parse(s) as string) : s)
 
 export function parseCommandResult(text: string): Event[] {
@@ -143,16 +173,7 @@ export function parseCommandResult(text: string): Event[] {
       const t = scan(line.slice(1)).map(String)
       type = t[0]; cols = t.slice(2)
     } else if (line[0] === '!') {
-      const m = /^! ([^\s(]+)\(([^)]*)\) bind=(.*)$/.exec(line)
-      if (!m) throw new Error('parse: bad action line: ' + line)
-      const a: ActionRef = {
-        id: m[1], bind: tail(m[3]),
-        params: m[2] ? m[2].split(',').map(p => {
-          const k = p.indexOf(':')
-          const name = p.slice(0, k), ty = p.slice(k + 1)
-          return name.endsWith('?') ? { name: name.slice(0, -1), type: ty, required: false } : { name, type: ty, required: true }
-        }) : [],
-      }
+      const a = parseAction(line)
       snap.nodes[snap.nodes.length - 1].actions.push(a)
     } else if (line[0] === '>') {
       const t = scan(line.slice(1))
