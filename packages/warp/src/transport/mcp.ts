@@ -11,7 +11,7 @@ import { collect, dispatch, renderCtx, type Log, type ServerCtx } from '../core/
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
-import type { ActionDef, ActionId, Command, Event, Settings } from '../core/types.js'
+import type { ActionDef, ActionId, Command, Event, Settings, Snapshot } from '../core/types.js'
 import { render, type Ctx } from '../serialize/envelope.js'
 
 export interface McpOptions {
@@ -42,10 +42,20 @@ function jsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   return js
 }
 
-// Boot-time tool list. Disable levels, first match wins: action rules.mcp > app rules.ts mcp (both
-// already merged into def.rules by ActionManifest.register) > settings.mcp.exclude > settings.mcp.tools.
+// Disable levels, first match wins: action rules.mcp > app rules.ts mcp (both already merged into
+// def.rules by ActionManifest.register) > settings.mcp.exclude. A disabled action is not callable over
+// MCP at all (no typed tool, refused by `do`, hidden from snapshots). Global = settings.mcp.tools.
+export function mcpEnabled(def: ActionDef, settings: Settings): boolean {
+  const own = def.rules?.mcp
+  return own !== undefined ? own : !settings.mcp.exclude.some((p) => glob(p).test(def.id))
+}
+
+// Boot-time tool list. maxTools only HIDES typed tools (still callable via `do`).
 export function mcpTools(actions: ActionManifest, settings: Settings, log: Log): McpTool[] {
   const { tools: mode, exclude, maxTools } = settings.mcp
+  for (const p of exclude) {
+    if (!actions.all().some((d) => glob(p).test(d.id))) log('warn', `mcp: settings.mcp.exclude pattern ${p} matches no action`, { pattern: p })
+  }
   const generic: McpTool[] = mode === 'typed' ? [] : [
     { name: 'read_page', description: GENERIC.read_page, inputSchema: jsonSchema(readPage) as Tool['inputSchema'],
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
@@ -53,11 +63,10 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
   ]
   if (mode === 'generic') return generic
-  const excluded = exclude.map(glob)
   const taken = new Set(['read_page', 'do'])
   let typed: (McpTool & { def: ActionDef })[] = []
   for (const def of actions.all()) {
-    if (def.rules?.mcp === false || excluded.some((re) => re.test(def.id))) continue
+    if (!mcpEnabled(def, settings)) continue
     const name = toolName(def.id)
     const props = jsonSchema(def.schema)
     const own = (props.properties ?? {}) as Record<string, unknown>
@@ -74,7 +83,10 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
       annotations: { readOnlyHint: ro, destructiveHint: destructive, openWorldHint: false },
     })
   }
-  if (generic.length + typed.length > maxTools) {
+  // typed-only mode has no `do` to reach trimmed actions, so it never trims
+  if (mode === 'typed' && typed.length > maxTools) {
+    log('warn', `mcp: ${typed.length} typed tools exceed settings.mcp.maxTools (${maxTools}); not trimmed because tools='typed' has no do`, { maxTools })
+  } else if (generic.length + typed.length > maxTools) {
     const kept = typed.filter((t) => t.def.rules?.priority).slice(0, Math.max(0, maxTools - generic.length))
     log('warn', 'mcp: tool list over settings.mcp.maxTools; typed tools trimmed to priority actions (rest reachable via do)', {
       maxTools, trimmed: typed.filter((t) => !kept.includes(t)).map((t) => t.def.id),
@@ -85,7 +97,13 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
 }
 
 // settings.mcp.exclude globs on action ids: `*` = one dotted segment, `**` = any depth.
+const globs = new Map<string, RegExp>()   // ponytail: keyed by pattern text; patterns come from settings, so bounded
 function glob(p: string): RegExp {
+  let re = globs.get(p)
+  if (!re) globs.set(p, (re = toRegExp(p)))
+  return re
+}
+function toRegExp(p: string): RegExp {
   const esc = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(`^${p.split('**').map((s) => s.split('*').map(esc).join('[^.]*')).join('.*')}$`)
 }
@@ -97,9 +115,18 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
   const list = tools.map(({ action: _, ...t }) => t)
   srv.setRequestHandler(ListToolsRequestSchema, () => ({ tools: list }))
   srv.setRequestHandler(CallToolRequestSchema, async ({ params: { name, arguments: args = {} } }): Promise<CallToolResult> => {
+    try { return await call(name, args) } catch (e) {
+      // never let a throw become an SDK JSON-RPC error carrying its message to the client
+      server.log('error', 'mcp tool call failed', { tool: name.slice(0, 100), error: e instanceof Error ? e.stack ?? e.message : String(e) })
+      return reply(server, [ev.err('internal', 'internal error')], blank('/'))
+    }
+  })
+  const call = async (name: string, args: Record<string, unknown>): Promise<CallToolResult> => {
     const tool = byName.get(name)
     if (!tool) return reply(server, [ev.err('unknown_action', `unknown tool ${name.slice(0, 100)}`)], blank('/'))
-    const src = { ...caller, headers: caller.headers ?? {}, clientInfo: srv.getClientVersion() }
+    // no cookie: MCP is sid-only, a browser cookie must never pick the session
+    const headers = Object.fromEntries(Object.entries(caller.headers ?? {}).filter(([k]) => k.toLowerCase() !== 'cookie'))
+    const src = { ...caller, headers, clientInfo: srv.getClientVersion() }
     if (name === 'read_page') {
       const p = readPage.safeParse(args)
       return p.success ? page(server, opts, src, p.data) : bad(server, p.error)
@@ -110,10 +137,13 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const cmd: Command = tool.action
       ? { action: tool.action, params: rest, sid, cmdId, bind }
       : { action: p.data.action as string, params: p.data.params as Record<string, unknown>, sid, cmdId, bind }
+    const def = server.actions.get(cmd.action)
+    // missing and disabled answer alike (dispatch's wording), so disabled ids can't be probed
+    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`)], blank(url))
     const request = await requestFor(server, opts, src, url)
     if (!request) return notPage(server, url)
     return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
-  })
+  }
   return srv
 }
 
@@ -121,7 +151,15 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
 type Src = Omit<McpSource, 'url' | 'route'>
 const blank = (page: string): Ctx => ({ sid: '', rev: 0, page })
 
+// Every snapshot an MCP client sees drops actions disabled for MCP.
+function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
+  const off = (id: ActionId) => { const d = server.actions.get(id); return !!d && !mcpEnabled(d, server.settings) }
+  return { ...s, nodes: s.nodes.map((n) => ({ ...n, actions: n.actions.filter((a) => !off(a.id)) })) }
+}
+
 function reply(server: ServerCtx, events: Event[], ctx: Ctx): CallToolResult {
+  events = events.map((e) => e.kind === 'snapshot' ? ev.snapshot(filterSnapshot(server, e.snapshot))
+    : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterSnapshot(server, e.snapshot) } : e)
   const text = render(events, server.settings.formats.default, server.settings, { ctx })
   return { content: [{ type: 'text', text }], ...(events.some((e) => e.kind === 'err') && { isError: true }) }
 }
