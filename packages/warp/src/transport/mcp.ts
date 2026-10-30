@@ -76,10 +76,17 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
     if (skip) { log('warn', `mcp: no typed tool for ${def.id} (${skip}); reachable via do`, { action: def.id }); continue }
     taken.add(name)
     const ro = def.rules?.readOnly === true, destructive = !ro && def.rules?.destructive === true
+    // rules.bind keys come ONLY from the signed bind (dispatch refuses them in params): not inputs here
+    const bound = def.rules?.bind ?? []
+    const { required: _r, ...propsNoReq } = props
+    const required = [...((props.required ?? []) as string[]).filter((k) => !bound.includes(k)), ...(bound.length ? ['bind'] : [])]
     typed.push({
       def, action: def.id, name,
-      description: `${def.id}${ro ? ' (read-only)' : destructive ? ' (destructive)' : ''}. Same as do with action "${def.id}". Pass the sid from read_page and url = the page it acts on; send a new cmdId on changes; copy bind from the page's action ref.`,
-      inputSchema: { ...props, properties: { ...own, ...jsonSchema(envelope).properties as object } } as Tool['inputSchema'],
+      description: `${def.id}${ro ? ' (read-only)' : destructive ? ' (destructive)' : ''}. Same as do with action "${def.id}". Pass the sid from read_page and url = the page it acts on; send a new cmdId on changes; ${bound.length ? 'requires the signed bind from read_page (its action ref)' : "copy bind from the page's action ref"}.`,
+      inputSchema: {
+        ...propsNoReq, properties: { ...Object.fromEntries(Object.entries(own).filter(([k]) => !bound.includes(k))), ...jsonSchema(envelope).properties as object },
+        ...(required.length && { required }),
+      } as Tool['inputSchema'],
       annotations: { readOnlyHint: ro, destructiveHint: destructive, openWorldHint: false },
     })
   }
