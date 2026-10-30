@@ -7,6 +7,7 @@ import { render } from '../serialize/envelope.js'
 
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
 const HEARTBEAT_MS = 25_000
+const MAX_BUF = 1_048_576 // close streams whose client stopped reading
 const RING = 64 // must match MemoryChannelLayer's ring size
 
 export interface Clock { setInterval(fn: () => void, ms: number): unknown; clearInterval(h: unknown): void }
@@ -46,12 +47,15 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const ip = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
 
     const inspector = url.searchParams.get('group') === 'inspector'
-    if (inspector && !isDev && !LOOPBACK.has(clientIp(null, remote, 0))) return json(403, ev.err('domain', 'inspector feed is dev/localhost only'))
+    // Prod: socket loopback AND no proxy header (a local reverse proxy makes every client look like 127.0.0.1).
+    const proxied = !!(hdr('x-forwarded-for') || hdr('forwarded') || hdr('x-real-ip'))
+    if (inspector && !isDev && (proxied || !LOOPBACK.has(clientIp(null, remote, 0)))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)
     const sidKey = hdr('x-tvine-sid') ?? url.searchParams.get('sid') ?? undefined
-    const resolve = () => (cookie !== undefined && sessions.resolve({ cookie })) || (sidKey ? sessions.resolve({ sid: sidKey }) : undefined)
+    const lookup = (f: SessionStore['resolve']) => (cookie !== undefined && f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
+    const resolve = () => lookup(sessions.resolve)
     const session = inspector ? undefined : resolve()
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
     const sid = session?.sid ?? ''
@@ -60,14 +64,15 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), sid)
 
     const group = channels.group(inspector ? 'inspector' : `sid:${sid}`)
-    open.set(ip, (open.get(ip) ?? 0) + 1)
     req.socket.setTimeout(0) // SSE is exempt from request timeouts
+    req.socket.setKeepAlive(true, 30_000) // reap half-open sockets
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
     res.write(': ok\n\n')
 
     let closed = false
     const frame = (e: Event, id?: number) => {
       res.write(`${id !== undefined ? `id: ${id}\n` : ''}event: ${e.kind}\ndata: ${render([e], 'json', settings, { ctx: ctx() }).replace(/\n/g, '')}\n\n`)
+      if (res.writableLength > MAX_BUF) close()
     }
     // Own errors stay ours: a failed write drops this stream only, never the layer's fan-out.
     const safe = (fn: () => void) => { try { fn() } catch { close() } }
@@ -83,6 +88,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     }
     req.on('close', close)
     res.on('error', close)
+    open.set(ip, (open.get(ip) ?? 0) + 1) // after 'close' is wired: no leak window
 
     const last = hdr('last-event-id')
     if (last !== undefined && /^\d+$/.test(last)) {
@@ -98,8 +104,8 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     timer = clock.setInterval(() => {
       if (closed) return
       // Expiry doesn't notify subscribers (core-session): poll here and end the stream.
-      if (!inspector && !resolve()) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close() }
-      safe(() => { res.write(': ping\n\n') })
+      if (!inspector && !lookup(sessions.peek)) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close() }
+      safe(() => { res.write(': ping\n\n'); if (res.writableLength > MAX_BUF) close() })
     }, HEARTBEAT_MS)
   }
 }

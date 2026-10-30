@@ -42,6 +42,13 @@ export class SessionStore {
     return s
   }
 
+  // Like resolve() but read-only: TTL-checked, never refreshes lastSeen or evicts (liveness polling).
+  peek(key: { sid?: Sid; cookie?: string }): Session | undefined {
+    const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
+    const s = sid === undefined ? undefined : this.byId.get(sid)
+    return s && Date.now() - s.lastSeen <= this.settings.ttlMs ? s : undefined
+  }
+
   link(cookie: string, sid: Sid): void {
     this.byCookie.set(cookie, sid)
     let set = this.cookiesBySid.get(sid)
