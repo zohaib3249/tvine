@@ -70,18 +70,23 @@ async function pending(url: string, apps: string): Promise<string> {
   return open.length ? `pending: ${open.join(', ')} (run tvine migrate)` : 'models.ts changed since the last migration (run tvine makemigrations)'
 }
 
-// tvine dev: regenerate tvine-api.d.ts when apps/*/{views,serializers} change. A child process, because
-// this one's ESM cache keeps the old modules. ponytail: fs.watch recursive (macOS/Windows/Linux on Node >= 20)
-function devRegenerate(apps: string, io: Io): { close(): void } {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const run = () => spawn(process.execPath, [...process.execArgv, process.argv[1]!, 'generate', '--apps', apps], { stdio: ['ignore', 'ignore', 'pipe'] })
+// tvine dev: on change, regenerate tvine-api.d.ts (apps/*/{views,serializers}; a child process, because
+// this one's ESM cache keeps the old modules) and re-run the FE/DB boundary check (esbuild reads from disk).
+// ponytail: fs.watch recursive (Node >= 20); the Next error overlay / withTvine build gate are not wired yet
+function devWatch(apps: string, io: Io): { close(): void } {
+  const root = dirname(apps)
+  const timers: Record<string, ReturnType<typeof setTimeout> | undefined> = {}
+  const later = (k: string, fn: () => void) => { clearTimeout(timers[k]); timers[k] = setTimeout(fn, 200) }
+  const regen = () => spawn(process.execPath, [...process.execArgv, process.argv[1]!, 'generate', '--apps', apps], { stdio: ['ignore', 'ignore', 'pipe'] })
     .stderr.on('data', (b: Buffer) => io.err(b.toString().trimEnd()))
-  const w = watch(apps, { recursive: true }, (_e, f) => {
-    if (!f || !/(^|[\\/])(views|serializers)\.(m?[jt]s)$/.test(String(f))) return
-    clearTimeout(timer)
-    timer = setTimeout(run, 200)
+  const check = () => void boundaryCheck(root).then((v) => { if (v.length) io.err(boundaryReport(v)) }, (e: unknown) => io.err(`tvine: boundary check failed: ${String(e)}`))
+  const w = watch(root, { recursive: true }, (_e, f) => {
+    const p = String(f ?? '')
+    if (!p || /(^|[\\/])(node_modules|\.next|\.git|dist)([\\/]|$)/.test(p) || !/\.(m?[jt]sx?)$/.test(p)) return
+    if (join(root, p).startsWith(apps) && /(^|[\\/])(views|serializers)\.(m?[jt]s)$/.test(p)) later('gen', regen)
+    later('check', check)
   })
-  return { close: () => { clearTimeout(timer); w.close() } }
+  return { close: () => { for (const t of Object.values(timers)) clearTimeout(t); w.close() } }
 }
 
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
@@ -110,7 +115,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
-        const regen = dev ? devRegenerate(apps, io) : undefined
+        const regen = dev ? devWatch(apps, io) : undefined
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
           regen?.close()
