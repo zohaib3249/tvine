@@ -86,6 +86,8 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
       'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))',
     )
   }
-  const merged = merge({ ...DEFAULTS, secret } as Record<string, unknown>, rest as Record<string, unknown>)
+  // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
+  const base = { ...DEFAULTS, secret, logging: prod ? 'json' : 'pretty' }
+  const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   return schema.parse(merged)
 }
