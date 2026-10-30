@@ -1,11 +1,11 @@
 'use client'
-import { createContext, isValidElement, useCallback, useContext, useLayoutEffect, useRef, type JSX, type ReactNode, type Ref } from 'react'
+import { createContext, isValidElement, useCallback, useContext, useLayoutEffect, useMemo, useRef, type JSX, type ReactNode, type Ref } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { describeWidget, widgetFragment } from '../runtime/fragment.js'
 import { getRegistry, type Entry } from '../runtime/registry.client.js'
 import { applyOverrides, WeftError } from '../widget/hooks.js'
 import { joinId, segmentOf } from '../widget/ids.js'
-import { WidgetScopeCtx, useWidgetScope } from '../widget/scope.js'
+import { WidgetScopeCtx, chainOf, useScopeValue } from '../widget/scope.js'
 import type { AgentState, AutoChild, Control, ControlCtx, Json, WidgetSpec } from '../widget/types.js'
 import { inputType, labelOf, nameOf, offByProps, roleOf, safeHref, sensitive, textOf, type Props } from './qualify.js'
 
@@ -150,7 +150,7 @@ function stateOf(tag: string, role: string, p: Props, el: HTMLElement | null): J
 const domOff = (el: HTMLElement | null) => !!el && (el.closest('[inert],[aria-hidden="true"],[hidden]') !== null ||
   el.matches(':disabled') || (el as { checkVisibility?: () => boolean }).checkVisibility?.() === false)
 
-interface Cur { tag: string; role: string; p: Props; name?: string; parent: string; id: string; el: HTMLElement | null }
+interface Cur { tag: string; role: string; p: Props; name?: string; parent: string; chain: readonly string[]; id: string; el: HTMLElement | null }
 
 // A spec whose fields are read live: props of the last commit, the element, the parent's ChildPolicy
 // (applied lazily — the parent registers after its children in layout-effect order).
@@ -194,14 +194,16 @@ export function AutoEl(props: AutoProps) {
   const { $tag: tag, $key, $s, ref: userRef, agent, agentId: _i, agentLabel: _l, agentConfirm: _c, agentSensitive: _x, ...rest } = props
   const p = props as Props   // names/labels/confirm read the agent props too
   const off = useContext(Off)
-  const parent = useWidgetScope()
+  const outer = useScopeValue()
+  const parent = outer.id
+  const chain = chainOf(outer)
   const role = off || agent === false ? null : roleOf(tag, rest)
   const live = role !== null && !offByProps(rest)
   const name = live ? nameOf(tag, p, $key) : undefined
   const base = !live ? '' : name === undefined ? joinId(parent, `${role}:?`) : joinId(parent, segmentOf({ kind: role as WidgetSpec['kind'], name }))
 
   const cur = useRef<Cur>(null as unknown as Cur)
-  cur.current ??= { tag, role: role ?? '', p, name, parent, id: base, el: null }
+  cur.current ??= { tag, role: role ?? '', p, name, parent, chain, id: base, el: null }
   const spec = useRef<WidgetSpec | null>(null)
   spec.current ??= autoSpec(cur)
 
@@ -214,7 +216,7 @@ export function AutoEl(props: AutoProps) {
   }, [userRef])
 
   // Every commit: pointer writes only (no subscribers, nothing re-renders).
-  useLayoutEffect(() => { Object.assign(cur.current, { tag, role: role ?? '', p, name, parent }) })
+  useLayoutEffect(() => { Object.assign(cur.current, { tag, role: role ?? '', p, name, parent, chain }) })
 
   useLayoutEffect(() => {
     if (!base) return
@@ -241,14 +243,18 @@ export function AutoEl(props: AutoProps) {
       },
     }
     Object.defineProperty(e, 'el', { get: () => cur.current.el, set: () => {} })   // always the live node
+    Object.defineProperty(e, 'chain', { get: () => cur.current.chain })            // this mount's scope chain (hook bubbling)
     return reg.register(e)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-register only when the address changes
   }, [base])
 
+  const chainKey = chain.join('\n')
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- chain by value
+  const scopeValue = useMemo(() => ({ id: base, up: chain }), [base, chainKey])
   const el = ($s ? jsxs : jsx)(tag as keyof JSX.IntrinsicElements, { ...rest, ref })
   if (agent === false) return <AutoOff>{el}</AutoOff>
   if (!live) return el
-  const scoped = SCOPES.has(tag) ? <WidgetScopeCtx.Provider value={base}>{el}</WidgetScopeCtx.Provider> : el
+  const scoped = SCOPES.has(tag) ? <WidgetScopeCtx.Provider value={scopeValue}>{el}</WidgetScopeCtx.Provider> : el
   if (tag !== 'a' || !safeHref(rest.href)) return scoped
   // Plain links are headless too: a v2 fragment with a url map (pure props → identical on SSR and hydration).
   const frag = widgetFragment(describeWidget(base, parent, {
