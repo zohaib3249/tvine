@@ -38,6 +38,9 @@ async function tsHooks(): Promise<void> {
   if (typeof registerHooks !== 'function') throw new Error(`loading TypeScript app modules needs Node >= 22.15 (this is ${process.version}); or compile apps/ to .js`)
   // hidden from bundlers: Next bundles warp into page chunks and must not follow esbuild's native binary
   const { transformSync } = (await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'esbuild')) as typeof import('esbuild')
+  process.setSourceMapsEnabled(true)   // stack traces point at the app's .ts lines (inline maps below)
+  // ponytail: tsconfig is not read (no tsconfigRaw: TC39 decorators, ES2022 class fields) and only .ts/.mts are
+  // transformed (.tsx/.cts go to Node as-is); read the app's tsconfig if an app needs other compiler options.
   registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith('file:') || url.includes('/node_modules/') || !TS.test(new URL(url).pathname)) return nextLoad(url, context)

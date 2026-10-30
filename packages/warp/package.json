@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": { "tvine": "bin/tvine.js" },
+  "engines": { "node": ">=22.15" },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

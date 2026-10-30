@@ -176,6 +176,8 @@ export function onCommit(fn: () => unknown): void | Promise<void> {
 const VERSION = Symbol.for('tvine.dataVersion')
 const gv = globalThis as { [VERSION]?: number }
 export const dataVersion = (): number => gv[VERSION] ?? 0
+// ponytail: one counter for the whole process and every table, so a write-heavy app rarely hits the snapshot
+// cache; per-table versions (pages would declare what they read) if that cost shows up.
 const bump = () => { gv[VERSION] = dataVersion() + 1 }
 function wrote<R>(r: R): R {
   const tx = bound.getStore()

@@ -61,7 +61,8 @@ function decoratorCall(a: unknown, b: unknown, c: unknown): [fn: unknown, name: 
     const el = a as Element
     return [el.descriptor.value, el.key, el.kind === 'method' && el.placement === 'prototype']
   }
-  if (typeof a !== 'function') return [(c as PropertyDescriptor | undefined)?.value, b, true]   // legacy: a = prototype
+  // legacy: (prototype, key, descriptor) for an instance method; a static one gets the constructor as `a`
+  if (typeof b === 'string' || typeof b === 'symbol') return [(c as PropertyDescriptor | undefined)?.value, b, typeof a !== 'function']
   const ctx = b as ClassMethodDecoratorContext                                            // TC39
   return [a, ctx.name, !ctx.static && !ctx.private]
 }

@@ -99,10 +99,11 @@ export class SnapshotCache {
   // ver: the data version the render STARTED at (a write committed mid-render leaves the entry stale)
   set(route: string, snap: Body | Snapshot, ver = this.version()): string {
     const now = Date.now()
-    for (const [k, e] of this.m) if (now - e.at > this.ttlMs) this.m.delete(k)
     const { page, title, nodes, links } = snap
     const body = deepFreeze({ page, title, nodes, links })
     const etag = createHash('sha1').update(canon(body)).digest('hex')
+    if (this.ttlMs <= 0) return etag   // cache off: nothing stored
+    for (const [k, e] of this.m) if (now - e.at > this.ttlMs) this.m.delete(k)
     this.m.delete(route)
     this.m.set(route, { etag, body, at: now, ver })
     while (this.m.size > this.max) this.m.delete(this.m.keys().next().value as string)
