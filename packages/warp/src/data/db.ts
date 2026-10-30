@@ -5,15 +5,24 @@ import type Database from 'better-sqlite3'
 import { sqliteDriver, type Driver } from './driver.js'
 import { sqlite as sqliteDialect } from './sql/dialects/sqlite.js'
 import type { Dialect } from './sql/dialect.js'
+import { resolveDbUrl } from '../settings.js'
 
 // ponytail: `sqlite` raw handle is on every Connection because sqlite is the only engine; it moves
 // behind a dialect check when pg/mysql land (migrate.ts and one test still use it).
 export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite: Database.Database }
 
-export function sqlitePath(url: string): string {
-  if (/^postgres(ql)?:/.test(url)) throw new Error('postgres is not available yet; use a file: url')
+export function sqlitePath(raw: string): string {
+  const url = raw.trim()
+  if (!url) throw new Error('database url is empty')
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
+  if (scheme === 'postgres' || scheme === 'postgresql') throw new Error('postgres support lands in Task 20; use a file: url')
+  if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`${scheme} support is not available; use a file: url`)
   if (url === ':memory:' || url === 'file::memory:') return ':memory:'
-  return url.startsWith('file:') ? url.slice(5) : url
+  if (scheme === 'file') return url.slice(5)
+  // dev convenience: bare path (no scheme://) ending in .db/.sqlite/.sqlite3
+  if (/\.(db|sqlite3?)$/i.test(url) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url
+  // only the scheme is echoed, never user:pass
+  throw new Error(`unsupported database url '${scheme ?? 'no scheme'}' — use file:./name.db for sqlite`)
 }
 
 export function openConn(url: string, alias = 'default'): Connection {
@@ -33,7 +42,7 @@ class ConnectionHandler {
   get(alias = 'default'): Connection {
     let c = this.open.get(alias)
     if (!c) {
-      const url = this.urls.get(alias) ?? (alias === 'default' ? process.env.DATABASE_URL ?? 'file:./tvine.db' : undefined)
+      const url = this.urls.get(alias) ?? (alias === 'default' ? resolveDbUrl() : undefined)
       if (!url) throw new Error(`database "${alias}" is not configured`)
       this.open.set(alias, (c = openConn(url, alias)))
     }
@@ -49,7 +58,7 @@ export const connections = new ConnectionHandler()
 
 // Older entry points, kept: configureDb(url) / closeDb() / getConn().
 export function configureDb(url?: string): void {
-  connections.configure({ db: { url: url ?? process.env.DATABASE_URL ?? 'file:./tvine.db' } })
+  connections.configure({ db: { url: resolveDbUrl(url) } })
 }
 export const getConn = (): Connection => connections.get()
 export function closeDb(): void { void connections.closeAll() }

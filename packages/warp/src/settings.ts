@@ -9,6 +9,13 @@ type DeepPartial<T> = {
 }
 export type SettingsInput = DeepPartial<Settings>
 
+export const DEFAULT_DB_URL = 'file:./tvine.db'
+
+// THE db url precedence, used by defineSettings and db.ts: explicit setting > DATABASE_URL > default.
+export function resolveDbUrl(explicit?: string): string {
+  return explicit ?? (process.env.DATABASE_URL?.trim() ? process.env.DATABASE_URL : DEFAULT_DB_URL)
+}
+
 export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   site: { name: 'tvine app', description: '' },
   header: 'x-tvine',
@@ -27,7 +34,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   guards: [],
   media: { dir: './media', route: '/media' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
-  db: { url: 'file:./tvine.db', pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 } },
+  // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
+  db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 } },
   logging: 'json',
   audit: false,
 }
@@ -87,7 +95,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
     )
   }
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
-  const base = { ...DEFAULTS, secret, logging: prod ? 'json' : 'pretty' }
+  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, secret, logging: prod ? 'json' : 'pretty' }
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   return schema.parse(merged)
 }
