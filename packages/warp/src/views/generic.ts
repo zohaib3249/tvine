@@ -376,7 +376,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     // permissions run first (DRF initial()), before params are validated or anything is read
     for (const a of actions) {
       const def: ActionDef = {
-        id: a, schema: schemas[a](), rules: withPerms(rulesFor[a]),
+        id: a, schema: schemas[a](), rules: withPerms(rulesFor[a]), rawParams: true,
         run: async (raw, ctx) => {
           const self = Object.create(gv) as Self
           const vctx: ViewCtx = { ...ctx, action: a, actionId: def.id, params: {} }
@@ -399,7 +399,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const meta = typeof fn === 'function' ? decorated.get(fn) : undefined
       if (!meta) continue
       const def: ActionDef = {
-        id: key, schema: meta.schema, rules: withPerms(meta.opts.rules, meta.opts.permissions),
+        id: key, schema: meta.schema, rules: withPerms(meta.opts.rules, meta.opts.permissions), rawParams: true,
         run: async (raw, ctx) => {
           const self = Object.create(view) as View
           const vctx: ViewCtx = { ...ctx, action: key, actionId: def.id, params: {} }

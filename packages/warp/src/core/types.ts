@@ -136,6 +136,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   schema: S
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
+  rawParams?: boolean               // run() validates its own params (class views); dispatch passes them unparsed
 }
 export interface ActionRules {
   anonymous?: boolean               // default true in v1
@@ -146,6 +147,7 @@ export interface ActionRules {
   readOnly?: boolean                // MCP readOnlyHint
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
+  bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
