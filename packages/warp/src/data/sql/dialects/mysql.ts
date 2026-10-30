@@ -32,6 +32,9 @@ type Op<K extends Operation['kind']> = Extract<Operation, { kind: K }>
 // An fk needs an index led by its column, and mysql reuses whichever one exists (dropping its own), so
 // DROP INDEX on that index is refused while the fk stands: lift the fk around it (re-adding recreates
 // an index if none is left).
+// ponytail: mysql DDL is not transactional, so between DROP FOREIGN KEY and ADD the fk is not enforced: a
+// write in that window can insert a dangling reference, and the re-ADD then fails (migrate stops, journaled,
+// resumable after fixing the row). Run such migrations in a quiet window; a lock-the-table variant if needed.
 function liftFk(field: string | undefined, model: string, from: ProjectState, to: ProjectState, inner: Statement[]): Statement[] {
   const spec = field === undefined ? undefined : findModel(from, model)!.model.fields[field]
   const fk = spec?.kind === 'fk' && findModel(to, model)!.model.fields[field!] ? fks(to, model, model, field)[0] : undefined
