@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { openConn, type Connection } from './db.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
-import { col, param } from './sql/ast.js'
+import { and, bin, col, inList, param } from './sql/ast.js'
 import type { Dialect, Statement } from './sql/dialect.js'
 import { sqlite } from './sql/dialects/sqlite.js'
 import { diff } from './schema/autodetect.js'
@@ -48,16 +48,16 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
 export const checksum = (m: Migration) =>
   createHash('sha256').update(canon({ v: 1, dependencies: m.dependencies, operations: m.operations })).digest('hex')
 
-// one migration forwards from `state`; with a dialect, also its SQL (each op sees before/after)
-function step(n: MigrationNode, state: ProjectState, d?: Dialect): { state: ProjectState; stmts: Statement[] } {
-  const stmts: Statement[] = []
+// one migration forwards from `state`; with a dialect, also its SQL per operation (each op sees before/after)
+function step(n: MigrationNode, state: ProjectState, d?: Dialect): { state: ProjectState; ops: Statement[][] } {
+  const ops: Statement[][] = []
   for (const op of n.migration.operations) {
     const next = structuredClone(state)
     op.stateForwards(next, n.app)
-    if (d) stmts.push(...op.databaseForwards(d, state, next))
+    if (d) ops.push(op.databaseForwards(d, state, next))
     state = next
   }
-  return { state, stmts }
+  return { state, ops }
 }
 
 // ---- makemigrations ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ const JOURNAL = '__tvine_migrations'
 
 async function readJournal({ driver, dialect: d }: Connection, create: boolean): Promise<Map<string, string>> {
   if (create) {
-    const text = new TextField(), int = new IntField()
+    const text = new TextField({ index: true }), int = new IntField()   // index: key columns (VARCHAR on mysql)
     const t = d.render({
       t: 'createTable', name: JOURNAL, ifNotExists: true, columns: [
         ...text.columnDDL('app', d), ...text.columnDDL('name', d), ...text.columnDDL('checksum', d), ...int.columnDDL('applied_at', d),
@@ -188,25 +188,69 @@ async function readJournal({ driver, dialect: d }: Connection, create: boolean):
     const rows = await driver.query(s.sql, s.params)
     return new Map(rows.map(r => [`${r.app}.${r.name}`, String(r.checksum)]))
   } catch (e) {
-    // sqlite texts / postgres SQLSTATE (42703 undefined column, 42P01 undefined table)
+    // sqlite texts / postgres SQLSTATE (42703 undefined column, 42P01 undefined table) / mysql codes
     const msg = String((e as Error).message), code = (e as { code?: string }).code
-    if (/no such column/i.test(msg) || code === '42703') throw new Error(`the migration journal ${JOURNAL} is from an older Tvine build (pre-release format); migrate a fresh database or drop that table`)
-    if (!create && (/no such table/i.test(msg) || code === '42P01')) return new Map()
+    if (/no such column/i.test(msg) || code === '42703' || code === 'ER_BAD_FIELD_ERROR') throw new Error(`the migration journal ${JOURNAL} is from an older Tvine build (pre-release format); migrate a fresh database or drop that table`)
+    if (!create && (/no such table/i.test(msg) || code === '42P01' || code === 'ER_NO_SUCH_TABLE')) return new Map()
     throw e
   }
+}
+
+const journalRow = (d: Dialect, app: string, name: string, sum: string) =>
+  d.render({ t: 'insert', into: JOURNAL, cols: ['app', 'name', 'checksum', 'applied_at'], values: [app, name, sum, Date.now()].map(param) })
+
+// `createModel half`, `addField rv_p.x`, `renameModel a` — how an error names an operation
+const opLabel = (o: Operation) => {
+  const on = 'model' in o ? o.model : 'from' in o ? o.from : ''
+  const f = 'name' in o ? o.name : o.kind === 'renameField' ? o.from : ''
+  return `${o.kind}${on ? ` ${on}` : ''}${f ? `.${f}` : ''}`
+}
+// the journal row of one applied statement of a half-applied migration: `0002_x#<op>.<statement>`
+const stepName = (n: MigrationNode, i: number, j: number) => `${n.name}#${i + 1}.${j + 1}`
+
+// mysql: DDL auto-commits, so a migration cannot be all-or-nothing. Each statement is applied and
+// journaled on its own; a re-run skips the journaled ones and resumes where it failed. Complete =
+// the migration's row replaces its step rows.
+async function applyStepwise({ driver, dialect: d }: Connection, n: MigrationNode, ops: Statement[][], sum: string, done: Map<string, string>): Promise<void> {
+  const list = n.migration.operations
+  for (const [i, stmts] of ops.entries()) {
+    for (const [j, s] of stmts.entries()) {
+      if (done.has(`${n.app}.${stepName(n, i, j)}`)) continue
+      try {
+        await driver.exec(s.sql, s.params)
+      } catch (e) {
+        const applied = i === 0 ? 'no operation is fully applied'
+          : `operation${i > 1 ? `s 1-${i}` : ' 1'} (${list.slice(0, i).map(opLabel).join(', ')}) ${i > 1 ? 'are' : 'is'} applied`
+        const partly = j > 0 ? `, as ${j === 1 ? 'is the first statement' : `are the first ${j} statements`} of operation ${i + 1}` : ''
+        throw new Error(`migration ${n.key} failed at operation ${i + 1}/${list.length} (${opLabel(list[i])}): ${(e as Error).message}. ` +
+          `${applied}${partly} and recorded in ${JOURNAL} — ${d.name} cannot roll back schema changes. Fix the cause and run migrate again ` +
+          `to resume at operation ${i + 1}; to change the migration instead, undo what it applied by hand and delete its '${n.name}#…' rows from ${JOURNAL}.`, { cause: e })
+      }
+      const row = journalRow(d, n.app, stepName(n, i, j), sum)
+      await driver.exec(row.sql, row.params)
+    }
+  }
+  const steps = ops.flatMap((stmts, i) => stmts.map((_, j) => param(stepName(n, i, j))))
+  await driver.transaction(async tx => {
+    const row = journalRow(d, n.app, n.name, sum)
+    await tx.exec(row.sql, row.params)
+    if (!steps.length) return
+    const del = d.render({ t: 'delete', from: JOURNAL, where: and(bin('=', col('app'), param(n.app)), inList(col('name'), steps)) })
+    await tx.exec(del.sql, del.params)
+  })
 }
 
 async function apply({ driver, dialect: d }: Connection, n: MigrationNode, stmts: Statement[], sum: string): Promise<void> {
   // The whole migration (+ its journal row) is ONE transaction: sqlite and postgres have
   // transactional DDL. The FK-off wrapper is sqlite's (rebuilds need it; the pragma is a no-op
-  // inside a transaction); postgres ALTERs in place, so its fks stay on. mysql: Task 20b.
+  // inside a transaction); postgres ALTERs in place, so its fks stay on. mysql: applyStepwise.
   const lite = d.name === 'sqlite'
   if (lite) await driver.exec('PRAGMA foreign_keys = OFF', [])
   try {
     await driver.transaction(async tx => {
       for (const s of stmts) await tx.exec(s.sql, s.params)
       if (lite && (await tx.query('PRAGMA foreign_key_check', [])).length) throw new Error(`migration ${n.key} would leave rows pointing at missing records`)
-      const ins = d.render({ t: 'insert', into: JOURNAL, cols: ['app', 'name', 'checksum', 'applied_at'], values: [n.app, n.name, sum, Date.now()].map(param) })
+      const ins = journalRow(d, n.app, n.name, sum)
       await tx.exec(ins.sql, ins.params)
     })
   } finally {
@@ -227,12 +271,20 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Lo
     const done = await readJournal(conn, true)
     for (const n of plan) {
       if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(`migration ${n.key} was edited after it was applied`)
+      if (!done.has(n.key) && [...done].some(([k, sum]) => k.startsWith(`${n.key}#`) && sum !== checksum(n.migration))) {
+        throw new Error(`migration ${n.key} was edited after it was partly applied: restore it and run migrate to finish it, or undo what it applied by hand and delete its '${n.name}#…' rows from ${JOURNAL}`)
+      }
     }
     let state = emptyState()
     const applied: string[] = []
     for (const n of plan) {
       const r = step(n, state, done.has(n.key) ? undefined : conn.dialect)
-      if (!done.has(n.key)) { await apply(conn, n, r.stmts, checksum(n.migration)); applied.push(n.key) }
+      if (!done.has(n.key)) {
+        const sum = checksum(n.migration)
+        if (conn.dialect.transactionalDDL) await apply(conn, n, r.ops.flat(), sum)
+        else await applyStepwise(conn, n, r.ops, sum, done)
+        applied.push(n.key)
+      }
       state = r.state
     }
     return { applied }
@@ -258,7 +310,7 @@ export async function sqlMigrate(appsDir: string, app: string, name: string, dia
   if (!target) throw new Error(hits.length ? `${app}.${name} is ambiguous: ${hits.map(n => n.name).join(', ')}` : `no migration ${app}.${name}`)
   let state = emptyState()
   for (const n of plan) {
-    if (n === target) return step(n, state, dialect).stmts.map(s => `${s.sql};${s.params.length ? ` -- params: ${JSON.stringify(s.params)}` : ''}`).join('\n')
+    if (n === target) return step(n, state, dialect).ops.flat().map(s => `${s.sql};${s.params.length ? ` -- params: ${JSON.stringify(s.params)}` : ''}`).join('\n')
     state = step(n, state).state
   }
   throw new Error('unreachable')

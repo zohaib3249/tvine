@@ -16,9 +16,21 @@ export interface Dialect {
   likeEscape: string                           // backslash as a string literal for LIKE … ESCAPE, as this DB reads it
   bool: readonly [string, string]              // how Raw '0' / '1' (false / true) are spelled
   nullsSmallest: boolean                       // false → ORDER BY spells NULLS FIRST/LAST so nulls sort smallest everywhere
+  insertReturning: boolean                     // INSERT … RETURNING * (mysql has none: the engine reads the row back by pk)
+  literal(v: unknown, type: string): string    // a DDL default (DDL cannot take params): a checked literal for a column of `type`
   // A migration operation as this database runs it (from = state before the op, to = after).
   // sqlite rebuilds tables for what it cannot ALTER; others use the shared defaultRender.
   renderOperation(op: Operation, from: ProjectState, to: ProjectState): Statement[]
+}
+
+// `<a>_<b>_<label>` trimmed to 63 bytes by shortening the longer of a / b one char at a time — pg's
+// own makeObjectName; mysql reuses it for the names it must address later (64-char limit).
+// Identifiers are ASCII (checkIdent).
+export function pgObjectName(a: string, b: string, label: string): string {
+  const avail = 63 - (label.length + 1) - 1
+  let x = a.length, y = b.length
+  while (x + y > avail) { if (x > y) x--; else y-- }
+  return `${a.slice(0, x)}_${b.slice(0, y)}_${label}`
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -43,7 +55,7 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       case 'isNull': return `${e(x.e)} IS ${x.negated ? 'NOT ' : ''}NULL`
       case 'in': return x.list.length ? `${e(x.e)} IN (${x.list.map(e).join(', ')})` : d.bool[0]
       case 'like': return `${x.ci ? `${checkIdent(d.lowerFn)}(${e(x.e)})` : e(x.e)} LIKE ${e(x.pattern)} ESCAPE ${d.likeEscape}`
-      case 'castText': return `CAST(${e(x.e)} AS TEXT)`
+      case 'castText': return `CAST(${e(x.e)} AS ${d.name === 'mysql' ? 'CHAR' : 'TEXT'})`
       case 'raw':
         if (!(RAW as readonly string[]).includes(x.sql)) throw new Error('Raw accepts compile-time constants only')
         return x.sql === '0' ? d.bool[0] : x.sql === '1' ? d.bool[1] : x.sql
@@ -57,7 +69,7 @@ export function renderNode(node: SqlNode, d: Dialect): Statement {
       }
       case 'insert': {
         const body = x.cols.length ? `(${x.cols.map(q).join(', ')}) VALUES (${x.values.map(e).join(', ')})` : 'DEFAULT VALUES'
-        return `INSERT INTO ${q(x.into)} ${body}${x.returning ? ' RETURNING *' : ''}`
+        return `INSERT INTO ${q(x.into)} ${body}${x.returning && d.insertReturning ? ' RETURNING *' : ''}`
       }
       case 'update': return `UPDATE ${q(x.table)} SET ${x.set.map(([c, v]) => `${q(c)} = ${e(v)}`).join(', ')}${x.where ? ` WHERE ${e(x.where)}` : ''}`
       case 'delete': return `DELETE FROM ${q(x.from)}${x.where ? ` WHERE ${e(x.where)}` : ''}`

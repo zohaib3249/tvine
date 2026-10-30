@@ -1,11 +1,12 @@
 // Connections, Django-style: models never hold one; queries call connections.get() when they RUN.
 // configure() registers an alias without opening anything; get() builds the driver lazily (and the
-// pg pool connects on its first query). sqlite: WAL + busy_timeout, one connection per alias;
-// postgres: a pg.Pool sized from settings.db.pool.
+// pg / mysql pool connects on its first query). sqlite: WAL + busy_timeout, one connection per alias;
+// postgres / mysql: a pool sized from settings.db.pool.
 import type Database from 'better-sqlite3'
-import { pgDriver, sqliteDriver, type Driver, type PoolOpts, type PoolStats } from './driver.js'
+import { mysqlDriver, pgDriver, sqliteDriver, type Driver, type PoolOpts, type PoolStats } from './driver.js'
 import { sqlite as sqliteDialect } from './sql/dialects/sqlite.js'
 import { postgres as pgDialect } from './sql/dialects/postgres.js'
+import { mysql as mysqlDialect } from './sql/dialects/mysql.js'
 import type { Dialect } from './sql/dialect.js'
 import { resolveDbUrl } from '../settings.js'
 
@@ -14,7 +15,7 @@ export interface Connection { alias: string; dialect: Dialect; driver: Driver; s
 
 const DEFAULT_POOL: PoolOpts = { max: 10, acquireMs: 5_000, idleMs: 30_000 }
 const schemeOf = (url: string) => /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
-const isPg = (url: string) => ['postgres', 'postgresql'].includes(schemeOf(url.trim()) ?? '') && /^[a-z]+:\/\//i.test(url.trim())
+const server = (url: string, schemes: string[]) => schemes.includes(schemeOf(url.trim()) ?? '') && /^[a-z]+:\/\//i.test(url.trim())
 
 export function sqlitePath(raw: string): string {
   const url = raw.trim()
@@ -22,17 +23,18 @@ export function sqlitePath(raw: string): string {
   const scheme = schemeOf(url)
   const hasAuthority = /^[a-z][a-z0-9+.-]*:\/\//i.test(url)
   if (scheme === 'postgres' || scheme === 'postgresql') throw new Error(`a ${scheme}:// url is not a sqlite path (it opens the postgres driver)`)
-  if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`${scheme} support is not available; use a file: or postgres:// url`)
+  if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`a ${scheme}:// url is not a sqlite path (it opens the mysql driver)`)
   if (url === ':memory:' || url === 'file::memory:') return ':memory:'
   if (scheme === 'file') return url.slice(5)
   // dev convenience: bare path (no scheme://) ending in .db/.sqlite/.sqlite3
   if (/\.(db|sqlite3?)$/i.test(url) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url
   // only the scheme is echoed, never user:pass
-  throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite or postgres://`)
+  throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite, postgres:// or mysql://`)
 }
 
 export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL): Connection {
-  if (isPg(url)) return { alias, dialect: pgDialect, driver: pgDriver(url.trim(), pool) }
+  if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: pgDriver(url.trim(), pool) }
+  if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: mysqlDriver(url.trim(), pool) }
   const driver = sqliteDriver(sqlitePath(url))
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
 }

@@ -6,6 +6,7 @@ import type { DataSource } from './queryset.js'
 import type { ModelDef } from './fields.js'
 import { connections, type Connection } from './db.js'
 import { Table } from './table.js'
+import { pkField } from './fields/index.js'
 
 // ---- error vocabulary ------------------------------------------------------------------------
 function wrapErr(def: ModelDef, e: unknown): never {
@@ -20,6 +21,13 @@ function wrapErr(def: ModelDef, e: unknown): never {
     const field = (pg.column ?? /Key \("?(\w+)"?\)/.exec(pg.detail ?? '')?.[1])?.replace(/Id$/, '')
     if (code === '23505') throw new DomainError('domain', `${def.name}.${field} must be unique`, field)
     throw new DomainError('invalid_param', `${def.name}.${field} is required`, field)
+  }
+  // mysql: "Duplicate entry 'x' for key 'vendor.name'", "Column 'name' cannot be null", "Field 'name' doesn't have a default value"
+  if (code.startsWith('ER_')) {
+    const field = (/for key '(?:[^']*\.)?([^'.]+)'/.exec(msg) ?? /^(?:Column|Field) '([^']+)'/.exec(msg))?.[1]?.replace(/Id$/, '')
+    if (/^ER_(NO_)?(ROW_IS_REFERENCED|REFERENCED_ROW)/.test(code)) throw new DomainError('domain', `${def.name} is still referenced by other records, or points at a record that does not exist`)
+    if (code === 'ER_DUP_ENTRY') throw new DomainError('domain', `${def.name}.${field} must be unique`, field)
+    if (code === 'ER_BAD_NULL_ERROR' || code === 'ER_NO_DEFAULT_FOR_FIELD') throw new DomainError('invalid_param', `${def.name}.${field} is required`, field)
   }
   if (code.startsWith('SQLITE_CONSTRAINT')) {
     const field = msg.split(':').pop()?.trim().split('.').pop()?.replace(/Id$/, '')
@@ -36,7 +44,7 @@ function wrapErr(def: ModelDef, e: unknown): never {
 // connection is bound in AsyncLocalStorage: operations from the callback skip the queue (they
 // already own the connection), nested atomic reuses it. Once the block ends (commit, rollback or
 // abort) the binding is closed, so a late query from the callback throws instead of escaping.
-// postgres (pooled): no queue; atomic() holds ONE pool client for the whole block (tx.conn.driver).
+// postgres / mysql (pooled): no queue; atomic() holds ONE pool connection for the whole block (tx.conn.driver).
 class TxError extends Error {}
 type Closed = 'committed' | 'rolled back' | 'aborted'
 interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[] }
@@ -144,7 +152,12 @@ export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise
   return exec(async ({ driver, dialect }) => {
     try {
       const s = t.insert(data, dialect)
-      return t.hydrate((await driver.query(s.sql, s.params))[0], dialect)
+      if (dialect.insertReturning) return t.hydrate((await driver.query(s.sql, s.params))[0], dialect)
+      // no RETURNING (mysql): read the row back by pk — the given one (uuid) or the auto-increment id
+      const { lastId } = await driver.exec(s.sql, s.params)
+      const [pk, f] = pkField(def)
+      const g = t.get(data[f.key(pk)] ?? lastId, dialect)
+      return t.hydrate((await driver.query(g.sql, g.params))[0], dialect)
     } catch (e) { return wrapErr(def, e) }
   })
 }

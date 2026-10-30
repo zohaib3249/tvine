@@ -49,16 +49,21 @@ export abstract class Field<V = unknown, O extends boolean = boolean, K extends 
     const defaults = this.opts.default === undefined ? [] : this.toDb(this.opts.default, d)
     return this.columns(name).map((c, i) =>
       `${d.quoteIdent(c)} ${types[i]}${this.opts.optional ? '' : ' NOT NULL'}${this.opts.unique && i === 0 ? ' UNIQUE' : ''}` +
-      `${defaults[i] !== undefined ? ` DEFAULT ${ddlLiteral(defaults[i])}` : ''}${i === 0 ? this.references(d) : ''}`)
+      `${defaults[i] !== undefined ? ` DEFAULT ${d.literal(defaults[i], types[i])}` : ''}${i === 0 ? this.references(d) : ''}`)
   }
   references(_d: Dialect): string { return '' }
+  // table-level clauses after the columns (mysql ignores an inline REFERENCES: its fks go here)
+  tableConstraints(_table: string, _name: string, _d: Dialect): string[] { return [] }
 
   toDb(value: unknown, _d: Dialect): unknown[] { return [value ?? null] }
   fromDb(row: Record<string, unknown>, name: string, _d: Dialect): V | null { return (row[name] ?? null) as V | null }
 
+  // a filter value as a param (json on mysql wraps it so JSON compares to JSON)
+  protected toParam(v: unknown, d: Dialect): Expr { return param(this.toDb(v, d)[0]) }
+
   // Positive form of a filter on this field. exclude() negation is applied by the caller.
   lookup(op: Op, col: Expr, value: unknown, d: Dialect): Expr {
-    const p = (v: unknown) => param(this.toDb(v, d)[0])
+    const p = (v: unknown) => this.toParam(v, d)
     switch (op) {
       case 'eq': return value == null ? isNull(col) : bin('=', col, p(value))
       case 'ne': return value == null ? isNotNull(col) : or(isNull(col), bin('<>', col, p(value)))
@@ -77,7 +82,8 @@ export abstract class Field<V = unknown, O extends boolean = boolean, K extends 
 export const containsExpr = (col: Expr, term: string): Expr =>
   like(fn('coalesce', castText(col), param('')), param('%' + term.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'), true)
 
-// DDL cannot take params; defaults are developer constants from models.ts, rendered as checked literals.
+// DDL cannot take params; defaults are developer constants from models.ts, rendered as checked literals
+// (sqlite / postgres; mysql's own literal also escapes backslashes — dialects/mysql.ts).
 export function ddlLiteral(v: unknown): string {
   if (v === null) return 'NULL'
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE'               // postgres BOOLEAN; sqlite bools arrive as 1/0
@@ -87,7 +93,7 @@ export function ddlLiteral(v: unknown): string {
   throw new Error(`unsupported column default ${String(v)}`)
 }
 
-// sqlite + postgres entries run in the conformance suites; mysql entries: untested until Task 20b
+// every entry runs in a conformance suite (sqlite always; postgres / mysql via scripts/test-*.sh)
 export const byDb = (d: Dialect, t: Record<DbName, string>) => t[d.name]
 
 export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => f.key(name)
