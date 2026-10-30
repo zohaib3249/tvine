@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tvine inspect</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1b1f; --mute:#6b6b76; --line:#e3e3e8; --card:#f6f6f8; --acc:#2a5bd7; --ok:#1f7a3a; --err:#b42318; --hi:#fff3bf; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141417; --fg:#e8e8ec; --mute:#9a9aa6; --line:#2c2c33; --card:#1d1d22; --acc:#7da2ff; --ok:#5fd38a; --err:#ff7a6e; --hi:#4a3f12; } }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:grid; grid-template-rows:auto 1fr 32vh; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui, sans-serif; }
+  header { display:flex; gap:8px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header b { margin-right:8px; }
+  input, select, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
+  button { cursor:pointer; }
+  #path { width:260px; }
+  main { display:grid; grid-template-columns:1fr 1fr; min-height:0; }
+  iframe { width:100%; height:100%; border:0; border-right:1px solid var(--line); background:#fff; }
+  #agent { overflow:auto; padding:10px 12px; }
+  .node { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; }
+  .node h4 { margin:0 0 4px; font-size:12px; } .node h4 span { color:var(--mute); font-weight:400; }
+  .act { display:inline-block; margin:4px 4px 0 0; padding:1px 8px; border-radius:99px; border:1px solid var(--acc); color:var(--acc); font:12px ui-monospace, monospace; }
+  .act.hit, .node.hit { background:var(--hi); }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; font:12px/1.4 ui-monospace, monospace; }
+  .links a { margin-right:10px; color:var(--acc); cursor:pointer; }
+  footer { display:grid; grid-template-columns:2fr 1fr; border-top:1px solid var(--line); min-height:0; }
+  #log { overflow:auto; margin:0; padding:6px 12px; list-style:none; font:12px/1.6 ui-monospace, monospace; }
+  #log li.err { color:var(--err); } #log li.note { color:var(--mute); } #log li .ok { color:var(--ok); }
+  #log li pre { padding-left:2em; }
+  #try { overflow:auto; padding:8px 12px; border-left:1px solid var(--line); }
+  #try h3 { margin:4px 0; font-size:12px; } #try pre { background:var(--card); padding:6px; border-radius:6px; margin-bottom:4px; }
+  .mute { color:var(--mute); }
+  @media (max-width: 800px) { main, footer { grid-template-columns:1fr; } iframe { height:40vh; } body { height:auto; grid-template-rows:auto auto auto; } }
+</style>
+</head>
+<body>
+<header>
+  <b>tvine inspect</b>
+  <input id="path" value="/" aria-label="page path">
+  <select id="routes" aria-label="routes"><option value="">routes…</option></select>
+  <button id="go">Go</button>
+  <select id="format" aria-label="snapshot format"><option>json</option><option>notation</option></select>
+  <label><input type="checkbox" id="raw"> raw</label>
+  <span id="target" class="mute"></span>
+</header>
+<main>
+  <iframe id="human" title="human page"></iframe>
+  <section id="agent" aria-label="agent snapshot"></section>
+</main>
+<footer>
+  <ul id="log" aria-label="traffic log"><li class="note">waiting for agent traffic…</li></ul>
+  <section id="try">
+    <h3>Try it with Claude</h3>
+    <div class="mute">Claude Code</div><pre id="cc"></pre>
+    <div class="mute">Claude Desktop (claude_desktop_config.json)</div><pre id="cd"></pre>
+    <div class="mute">First prompt</div><pre id="prompt">Browse this site and add any shirt to the cart</pre>
+    <button data-copy="cc">Copy CLI</button> <button data-copy="cd">Copy JSON</button> <button data-copy="prompt">Copy prompt</button>
+  </section>
+</footer>
+<script>
+// All target data is rendered with textContent only: snapshot and log content are untrusted.
+const $ = (id) => document.getElementById(id)
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e }
+let target = '', page = '/', lastHit = ''
+
+function go(path) {
+  page = path.startsWith('/') ? path : '/' + path
+  $('path').value = page
+  $('human').src = target + page
+  loadSnapshot()
+}
+
+async function loadSnapshot() {
+  const r = await fetch('/api/snapshot?path=' + encodeURIComponent(page) + '&format=' + $('format').value)
+  const text = await r.text()
+  const box = $('agent'); box.replaceChildren()
+  if ($('format').value === 'notation' || $('raw').checked) { box.append(el('pre', '', text)); return }
+  let s; try { s = JSON.parse(text) } catch { box.append(el('pre', '', text)); return }
+  box.append(el('div', 'mute', s['#tvine'] + (s.title ? ' · ' + s.title : '')))
+  if (s.status === 'err') box.append(el('pre', '', s.code + ': ' + s.message))
+  for (const n of s.nodes ?? []) {
+    const card = el('div', 'node'); card.dataset.id = n.id
+    const h = el('h4', '', n.id + ' '); h.append(el('span', '', n.type)); card.append(h)
+    if (n.data) card.append(el('pre', '', JSON.stringify(n.data, null, 1)))
+    for (const a of n.actions ?? []) {
+      const chip = el('span', 'act' + (a.id === lastHit ? ' hit' : ''), a.id + '(' + a.params.map((p) => p.name + ':' + p.type + (p.required ? '' : '?')).join(', ') + ')')
+      chip.title = 'bind: ' + (a.bind ? 'signed' : 'none')
+      card.append(chip)
+    }
+    box.append(card)
+  }
+  if (s.links?.length) {
+    const links = el('div', 'links')
+    for (const l of s.links) { const a = el('a', '', l.label || l.href); a.onclick = () => go(l.href); links.append(a) }
+    box.append(links)
+  }
+}
+
+function row(r) {
+  const li = el('li', r.status === 'ok' ? '' : 'err')
+  const t = new Date(r.t).toTimeString().slice(0, 5)
+  const params = Object.entries(r.params ?? {}).map(([k, v]) => k + '=' + (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')
+  li.append(t + ' ' + r.action + (params ? ' ' + params : '') + ' → ')
+  li.append(el('span', r.status === 'ok' ? 'ok' : '', r.status))
+  li.append((r.rev !== undefined ? ' rev=' + r.rev : '') + ' ' + r.ms + 'ms' + (r.sid ? ' sid#' + r.sid : ''))
+  if (r.message) li.append(el('pre', '', (r.field ? r.field + ': ' : '') + r.message))
+  return li
+}
+
+let empty = true
+function logLi(li) {
+  const log = $('log')
+  if (empty) { empty = false; log.replaceChildren() }
+  log.prepend(li)
+  while (log.children.length > 500) log.lastChild.remove()
+}
+
+const es = new EventSource('/api/log')
+es.onmessage = (m) => { const r = JSON.parse(m.data); lastHit = r.action; logLi(row(r)); loadSnapshot(); $('human').src = $('human').src }
+es.addEventListener('note', (m) => logLi(el('li', 'note', JSON.parse(m.data).message)))
+
+$('go').onclick = () => go($('path').value)
+$('path').onkeydown = (e) => { if (e.key === 'Enter') go($('path').value) }
+$('routes').onchange = (e) => { if (e.target.value) go(e.target.value) }
+$('format').onchange = loadSnapshot
+$('raw').onchange = loadSnapshot
+for (const b of document.querySelectorAll('[data-copy]')) b.onclick = () => navigator.clipboard.writeText($(b.dataset.copy).textContent)
+
+fetch('/api/config').then((r) => r.json()).then((c) => {
+  target = c.target
+  $('target').textContent = '→ ' + target
+  $('cc').textContent = 'claude mcp add --transport http tvine ' + c.mcp
+  $('cd').textContent = JSON.stringify({ mcpServers: { tvine: { command: 'npx', args: ['-y', 'mcp-remote', c.mcp] } } }, null, 2)
+  for (const p of c.routes.filter((p) => !p.includes('['))) $('routes').append(el('option', '', p))
+  go(location.hash.slice(1) || '/')
+})
+</script>
+</body>
+</html>

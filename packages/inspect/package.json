@@ -4,6 +4,8 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": { "tvine-inspect": "dist/cli.js" },
+  "files": ["dist", "static"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -12,6 +14,9 @@
   },
   "scripts": {
     "build": "tsc -p .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "zod": "^3.25.76"
   }
 }
