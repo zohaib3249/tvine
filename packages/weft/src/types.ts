@@ -23,3 +23,13 @@ export interface AgentSpec {
   actions?: { def: ActionDef; bind?: Record<string, unknown> }[]
   personal?: boolean
 }
+
+// Channel frame payload (warp serialize/json.ts, one flat object per SSE `data:`).
+// TODO(W1): derive from @tvine/warp's Event/envelope types.
+export interface TvineEvent {
+  status: string
+  source?: 'human' | 'agent'
+  code?: string
+  message?: string
+  [k: string]: unknown
+}
