@@ -8,6 +8,12 @@ import { useAgent as serverUseAgent } from './useAgent.js'
 import type { AgentSpec, Link as LinkSpec } from './types.js'
 
 export { AgentBadge, registerWebMcp, useTvineChannel, type TvineEvent } from './index.js'
+export {
+  ACTION_KINDS, defineWidget, signature, useWidget, useWidgetScope, WeftError,
+  type ActionKind, type ActionOutcome, type AgentActionEvent, type AgentState, type AutoChild, type ChildPolicy, type Control,
+  type ControlCtx, type ControlOverrides, type DefinedProps, type ErrCode, type Override, type ParamSpec, type Presence,
+  type PresenceOptions, type UiStepResult, type Widget, type WidgetDef, type WidgetHandle, type WidgetKind,
+} from './index.js'
 export * from './server.js'   // useAgent and Link are re-declared below: they differ per condition
 export const Link: typeof LinkPrimitive = LinkPrimitive
 export type Link = LinkSpec
