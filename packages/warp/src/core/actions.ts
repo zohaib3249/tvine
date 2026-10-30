@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
+import { checkRate } from '../security/ratelimit.js'
 
 export { DomainError } from './errors.js'
 
@@ -46,12 +47,6 @@ export function paramSpecs(def: Pick<ActionDef, 'schema'>): ActionRef['params'] 
   })
 }
 
-function checkRate(id: string, r?: Rate) {
-  if (r && !(r.limit >= 1 && r.windowMs > 0)) {
-    throw new Error(`action ${id}: invalid rate ${JSON.stringify(r)} (need limit >= 1 and windowMs > 0)`)
-  }
-}
-
 const qualified = new WeakMap<ActionDef, ActionId>()
 
 export class ActionManifest {
@@ -80,7 +75,9 @@ export class ActionManifest {
     }
     const perms = [...(appRules.permissions ?? []), ...(own.permissions ?? [])]
     if (perms.length) rules.permissions = perms
-    checkRate(id, rules.rate)
+    checkRate(`action ${id}`, rules.rate)
+    const names = new Set(paramSpecs(def).map((p) => p.name))
+    for (const k of rules.bind ?? []) if (!names.has(k)) throw new Error(`action ${id}: bind key "${k}" is not a param of its schema`)
     qualified.set(def, id)
     def.id = id
     this.defs.set(id, { ...def, id, rules })

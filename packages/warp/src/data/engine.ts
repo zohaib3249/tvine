@@ -47,14 +47,14 @@ function wrapErr(def: ModelDef, e: unknown): never {
 // postgres / mysql (pooled): no queue; atomic() holds ONE pool connection for the whole block (tx.conn.driver).
 class TxError extends Error {}
 type Closed = 'committed' | 'rolled back' | 'aborted'
-interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[] }
+interface Tx { conn: Connection; closed?: Closed; hooks: (() => unknown)[]; open?: () => Promise<unknown> }   // open: lazy block, BEGIN on first query
 const bound = new AsyncLocalStorage<Tx>()
 let tail: Promise<unknown> = Promise.resolve()
 
 function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
   const tx = bound.getStore()
   if (tx) {
-    return Promise.resolve().then(() => {
+    return Promise.resolve(tx.open?.()).then(() => {
       if (tx.closed) throw new TxError(`query after the atomic block was ${tx.closed}`)
       return fn(tx.conn)
     })
@@ -72,12 +72,13 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
 let onCommitError: (e: unknown) => void = e => console.error('onCommit hook failed:', e)
 export function setOnCommitErrorHandler(fn: (e: unknown) => void): void { onCommitError = fn }
 
-export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } = {}): Promise<R> {
+export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal; lazy?: boolean } = {}): Promise<R> {
   const outer = bound.getStore()
   if (outer) {
     if (outer.closed) return Promise.reject(new TxError(`atomic() after the atomic block was ${outer.closed}`))
     return fn()
   }
+  if (opts.lazy) return lazyAtomic(fn, opts.signal)
   const { signal } = opts
   let tx!: Tx
   const run = exec(conn => {
@@ -104,6 +105,52 @@ export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal } =
     }
     return r
   })
+}
+
+// lazy: the block runs at once and the transaction opens (in queue order) at its FIRST query, so a block
+// that never queries opens nothing (no BEGIN, no db file) and holds no queue while it awaits other I/O.
+// Same rules as atomic(): commit on success, rollback on throw/abort (abort marks the block dead), and
+// onCommit hooks after the commit. Used by dispatch for per-request atomicity.
+function lazyAtomic<R>(fn: () => Promise<R>, signal?: AbortSignal): Promise<R> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new TxError('atomic block aborted'))
+  const tx: Tx = { conn: undefined as unknown as Connection, hooks: [] }
+  let end!: (failed?: { err: unknown }) => void
+  const ended = new Promise<{ err: unknown } | undefined>(r => { end = r })
+  let real: Promise<unknown> | undefined   // the driver transaction, once opened
+  let opening: Promise<unknown> | undefined
+  tx.open = () => tx.closed ? Promise.reject(new TxError(`query after the atomic block was ${tx.closed}`)) : (opening ??= new Promise((resolve, reject) => {
+    real = bound.exit(() => exec(conn => conn.driver.transaction(txd => {
+      if (tx.closed) throw new TxError(`query after the atomic block was ${tx.closed}`)
+      tx.conn = { ...conn, driver: txd }
+      resolve(undefined)
+      return ended.then(f => { if (f) throw f.err })
+    }, { signal })))
+    real.catch(reject)
+  }))
+  let onAbort!: () => void
+  const aborted = new Promise<never>((_, rej) => {
+    onAbort = () => { tx.closed ??= 'aborted'; rej(signal!.reason ?? new TxError('atomic block aborted')) }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+  aborted.catch(() => undefined)
+  const settle = async (): Promise<R> => {
+    let r: R
+    try { r = await Promise.race([bound.run(tx, fn), aborted]) }
+    catch (e) {
+      tx.closed ??= 'rolled back'   // no late query may start a transaction now
+      end({ err: e })
+      if (tx.conn) await real?.catch(() => undefined)   // opened: wait for the ROLLBACK; still queued: it rolls back on its turn
+      throw e
+    }
+    end()
+    try { await real } catch (e) { tx.closed = 'rolled back'; throw e }
+    tx.closed = 'committed'   // COMMIT resolved = committed, even if an abort landed mid-commit
+    for (const h of tx.hooks) {
+      try { await h() } catch (e) { onCommitError(e) }
+    }
+    return r
+  }
+  return settle().finally(() => signal?.removeEventListener('abort', onAbort))
 }
 
 // Inside atomic(): run fn after the outermost commit (dropped on rollback). Outside atomic(), or

@@ -52,7 +52,7 @@ function devWarn(e: unknown) {
 }
 
 // randomUUID is undefined on non-secure contexts (plain http).
-function newId(): string {
+export function newId(): string {
   const c = (globalThis as any).crypto
   if (c?.randomUUID) return c.randomUUID()
   const b: Uint8Array = c.getRandomValues(new Uint8Array(16))

@@ -54,9 +54,10 @@ export function clientIp(xff: string | null, remote: string, hops: number): stri
   return normalizeIp(pick ?? remote)
 }
 
-function requestId(h: ReadonlyHeaders): string {
+// Echoed in a response header and logged: only a short safe token is kept, anything else gets a fresh id.
+export function requestId(h: ReadonlyHeaders): string {
   const rid = h.get('x-request-id')
-  if (rid) return rid
+  if (rid && /^[\w.-]{1,128}$/.test(rid)) return rid
   const tid = /^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(h.get('traceparent') ?? '')?.[1]
   return tid && !/^0+$/.test(tid) ? tid : nanoid()
 }
