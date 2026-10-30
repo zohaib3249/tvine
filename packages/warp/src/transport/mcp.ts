@@ -11,7 +11,7 @@ import { collect, dispatch, renderCtx, type Log, type ServerCtx } from '../core/
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
-import type { ActionDef, ActionId, Command, Event, Settings, Snapshot } from '../core/types.js'
+import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot } from '../core/types.js'
 import { render, type Ctx } from '../serialize/envelope.js'
 
 export interface McpOptions {
@@ -137,11 +137,10 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const cmd: Command = tool.action
       ? { action: tool.action, params: rest, sid, cmdId, bind }
       : { action: p.data.action as string, params: p.data.params as Record<string, unknown>, sid, cmdId, bind }
-    const def = server.actions.get(cmd.action)
-    // missing and disabled answer alike (dispatch's wording), so disabled ids can't be probed
-    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`)], blank(url))
     const request = await requestFor(server, opts, src, url)
     if (!request) return notPage(server, url)
+    const def = server.actions.get(cmd.action)
+    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], renderCtx(server, cmd, request))
     return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
   }
   return srv
@@ -150,6 +149,7 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
 // ---- helpers -------------------------------------------------------------------------------
 type Src = Omit<McpSource, 'url' | 'route'>
 const blank = (page: string): Ctx => ({ sid: '', rev: 0, page })
+const pagePath = (r: Request) => r.path + (r.query.size ? `?${r.query}` : '')
 
 // Every snapshot an MCP client sees drops actions disabled for MCP.
 function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
@@ -170,6 +170,20 @@ const bad = (server: ServerCtx, e: z.ZodError) => {
 const notPage = (server: ServerCtx, url: string) =>
   reply(server, [ev.err('invalid_param', 'url is not a page of this site', { field: 'url' })], blank('/'))
 
+// Missing and disabled ids answer alike (dispatch's wording + a snapshot to recover from, filtered in
+// reply()), so disabled ids can't be probed. No live session → no snapshot (never creates one).
+async function unknownAction(server: ServerCtx, cmd: Command, request: Request): Promise<Event> {
+  const msg = `unknown action ${String(cmd.action).slice(0, 100)}`
+  const session = server.sessions.peek({ sid: cmd.sid })
+  if (!session) return ev.err('unknown_action', msg)
+  const page = pagePath(request)
+  try { return ev.err('unknown_action', msg, { snapshot: await server.snapshot(page, session.sid) }) }
+  catch (e) {
+    server.log('error', 'snapshot render failed', { page, error: e instanceof Error ? e.message : String(e) })
+    return ev.err('unknown_action', msg)
+  }
+}
+
 // Only route-table paths of this site ever reach snapshot(): absolute URLs to other origins are refused.
 async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: string) {
   let u: URL
@@ -183,7 +197,7 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<ty
   const request = await requestFor(server, opts, src, a.url)
   if (!request) return notPage(server, a.url)
   const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
-  const ctx: Ctx = { sid: session.sid, rev: session.rev, page: request.path + (request.query.size ? `?${request.query}` : '') }
+  const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   try {
     return reply(server, [ev.snapshot(await server.snapshot(ctx.page, session.sid))], ctx)
   } catch (e) {
