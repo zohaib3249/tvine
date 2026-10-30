@@ -8,7 +8,6 @@ export class JsonField extends Field<unknown, boolean, 'json', boolean> {
   dbType(d: Dialect) { return [byDb(d, { sqlite: 'TEXT', postgres: 'JSONB', mysql: 'JSON' })] }
   zod() { return z.unknown() }
   toDb(v: unknown) { return [v == null ? null : JSON.stringify(v)] }
-  // postgres branch (already-parsed jsonb): untested until Task 20
   fromDb(row: Record<string, unknown>, name: string, d: Dialect) {
     const v = row[name]
     return v == null ? null : typeof v === 'string' && d.name !== 'postgres' ? JSON.parse(v) : v

@@ -1,58 +1,70 @@
 // Connections, Django-style: models never hold one; queries call connections.get() when they RUN.
-// configure() registers an alias without opening anything; get() opens lazily.
-// sqlite only for now (postgres lands with the pool work): WAL + busy_timeout, one connection per alias.
+// configure() registers an alias without opening anything; get() builds the driver lazily (and the
+// pg pool connects on its first query). sqlite: WAL + busy_timeout, one connection per alias;
+// postgres: a pg.Pool sized from settings.db.pool.
 import type Database from 'better-sqlite3'
-import { sqliteDriver, type Driver } from './driver.js'
+import { pgDriver, sqliteDriver, type Driver, type PoolOpts, type PoolStats } from './driver.js'
 import { sqlite as sqliteDialect } from './sql/dialects/sqlite.js'
+import { postgres as pgDialect } from './sql/dialects/postgres.js'
 import type { Dialect } from './sql/dialect.js'
 import { resolveDbUrl } from '../settings.js'
 
-// ponytail: `sqlite` raw handle is on every Connection because sqlite is the only engine; it moves
-// behind a dialect check when pg/mysql land (migrate.ts and one test still use it).
-export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite: Database.Database }
+// `sqlite` is the raw handle, present only on sqlite connections (tests and the sqlite runner use it)
+export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite?: Database.Database }
+
+const DEFAULT_POOL: PoolOpts = { max: 10, acquireMs: 5_000, idleMs: 30_000 }
+const schemeOf = (url: string) => /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
+const isPg = (url: string) => ['postgres', 'postgresql'].includes(schemeOf(url.trim()) ?? '') && /^[a-z]+:\/\//i.test(url.trim())
 
 export function sqlitePath(raw: string): string {
   const url = raw.trim()
   if (!url) throw new Error('database url is empty')
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase()
+  const scheme = schemeOf(url)
   const hasAuthority = /^[a-z][a-z0-9+.-]*:\/\//i.test(url)
-  if (scheme === 'postgres' || scheme === 'postgresql') throw new Error('postgres support lands in Task 20; use a file: url')
-  if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`${scheme} support is not available; use a file: url`)
+  if (scheme === 'postgres' || scheme === 'postgresql') throw new Error(`a ${scheme}:// url is not a sqlite path (it opens the postgres driver)`)
+  if (scheme === 'mysql' || scheme === 'mariadb') throw new Error(`${scheme} support is not available; use a file: or postgres:// url`)
   if (url === ':memory:' || url === 'file::memory:') return ':memory:'
   if (scheme === 'file') return url.slice(5)
   // dev convenience: bare path (no scheme://) ending in .db/.sqlite/.sqlite3
   if (/\.(db|sqlite3?)$/i.test(url) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url
   // only the scheme is echoed, never user:pass
-  throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite`)
+  throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite or postgres://`)
 }
 
-export function openConn(url: string, alias = 'default'): Connection {
+export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL): Connection {
+  if (isPg(url)) return { alias, dialect: pgDialect, driver: pgDriver(url.trim(), pool) }
   const driver = sqliteDriver(sqlitePath(url))
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
 }
 
 class ConnectionHandler {
-  private urls = new Map<string, string>()
+  private dbs = new Map<string, { url: string; pool?: PoolOpts }>()
   private open = new Map<string, Connection>()
 
-  configure(settings: { db: { url: string } }): void {
-    this.closeAll()
-    this.urls.set('default', settings.db.url)
+  configure(settings: { db: { url: string; pool?: PoolOpts } }): void {
+    void this.closeAll()
+    this.dbs.set('default', settings.db)
   }
 
   get(alias = 'default'): Connection {
     let c = this.open.get(alias)
     if (!c) {
-      const url = this.urls.get(alias) ?? (alias === 'default' ? resolveDbUrl() : undefined)
-      if (!url) throw new Error(`database "${alias}" is not configured`)
-      this.open.set(alias, (c = openConn(url, alias)))
+      const db = this.dbs.get(alias) ?? (alias === 'default' ? { url: resolveDbUrl() } : undefined)
+      if (!db?.url) throw new Error(`database "${alias}" is not configured`)
+      this.open.set(alias, (c = openConn(db.url, alias, db.pool)))
     }
     return c
   }
 
+  // pool stats for /tvine/health (undefined: not opened yet, or sqlite — no pool)
+  stats(alias = 'default'): PoolStats | undefined {
+    return this.open.get(alias)?.driver.stats?.()
+  }
+
   async closeAll(): Promise<void> {
-    for (const c of this.open.values()) c.driver.close()
+    const all = [...this.open.values()]
     this.open.clear()
+    await Promise.all(all.map(c => c.driver.close()))
   }
 }
 export const connections = new ConnectionHandler()

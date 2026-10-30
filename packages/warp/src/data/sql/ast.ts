@@ -23,8 +23,10 @@ export type Update = { t: 'update'; table: string; set: [string, Expr][]; where?
 export type Delete = { t: 'delete'; from: string; where?: Expr }
 // DDL: column fragments come from Field.columnDDL (identifiers quoted, defaults as checked literals).
 export type CreateTable = { t: 'createTable'; name: string; columns: string[]; ifNotExists?: boolean }
+// alterColumn.action is a fragment built from field DDL (types / checked default literals), like addColumn
 export type AlterTable = {
   t: 'alterTable'; name: string; addColumn?: string; dropColumn?: string; renameTo?: string; renameColumn?: { from: string; to: string }
+  alterColumn?: { name: string; action: string }; addUnique?: { constraint: string; col: string }; dropConstraint?: string
 }
 export type DropTable = { t: 'dropTable'; name: string }
 export type CreateIndex = { t: 'createIndex'; name: string; table: string; cols: string[]; unique?: boolean }

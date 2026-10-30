@@ -76,13 +76,14 @@ export const containsExpr = (col: Expr, term: string): Expr =>
 // DDL cannot take params; defaults are developer constants from models.ts, rendered as checked literals.
 export function ddlLiteral(v: unknown): string {
   if (v === null) return 'NULL'
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE'               // postgres BOOLEAN; sqlite bools arrive as 1/0
   if (typeof v === 'number' && Number.isFinite(v)) return String(v)
   if (typeof v === 'bigint') return v.toString()
   if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
   throw new Error(`unsupported column default ${String(v)}`)
 }
 
-// postgres/mysql entries in every field: untested until Task 20 (docker conformance)
+// sqlite + postgres entries run in the conformance suites; mysql entries: untested until Task 20b
 export const byDb = (d: Dialect, t: Record<DbName, string>) => t[d.name]
 
 export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => f.key(name)

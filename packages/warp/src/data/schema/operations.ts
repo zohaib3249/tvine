@@ -198,7 +198,7 @@ export function defaultRender(o: OpData, d: Dialect, from: ProjectState, to: Pro
       return [...indexDiff(d, from, o.model, to, o.model).drop, ...cols.map(c => r({ t: 'alterTable', name: o.model, dropColumn: c }))]
     }
     case 'alterField': {
-      // TODO(Task 20): ALTER COLUMN TYPE / SET NOT NULL / DEFAULT for postgres + mysql
+      // sqlite rebuilds, postgres renders native ALTER COLUMN (dialects/*); mysql lands in Task 20b
       if (columnsChanged(o, d, from, to)) throw new Error(`alterField ${o.model}.${o.name} is not supported on ${d.name} yet`)
       const ix = indexDiff(d, from, o.model, to, o.model)
       return [...ix.drop, ...ix.create]
