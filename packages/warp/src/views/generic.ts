@@ -1,6 +1,7 @@
 // Class-based generic views (DRF generics + mixins). Spec: docs/design/conventions/generic-views.md
-// A view class exported from apps/<app>/views.ts is instantiated ONCE at discovery; every request
-// gets a fresh ViewCtx (action + params), so hooks never keep per-request state on `this`.
+// A view class exported from apps/<app>/views.ts is instantiated ONCE at discovery. Every call runs
+// its hooks / @action method on a fresh `Object.create(view)`, so `this.x = …` never leaks between
+// requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
 import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission, type PermissionCtx } from '../core/types.js'
@@ -9,6 +10,14 @@ import { hasDefault, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
+
+// View-level field flags (no DDL, kept out of schema state). Declared here so data/fields stays untouched.
+declare module '../data/fields/base.js' {
+  interface Opts {
+    readOnly?: boolean                  // never accepted by default serializer input (create/update)
+    writeOnly?: boolean                 // with hidden: accepted as input, still left out of output
+  }
+}
 type Out = Record<string, unknown>
 export type Shapers = Record<string, (data: Out) => Out>    // apps/<app>/serializers.ts `serializers`
 
@@ -16,7 +25,8 @@ export type Shapers = Record<string, (data: Out) => Out>    // apps/<app>/serial
 export type ViewCtx = ActionCtx & { action: string; actionId: ActionId; params: Record<string, unknown> }
 
 export interface Serializer<T> {
-  input?: z.ZodType                                 // create/update params (update applies .partial())
+  input?: z.ZodObject<z.ZodRawShape>                // create/update params; must be a plain z.object (update = .partial())
+  readOnlyFields?: string[]                         // DRF read_only_fields: dropped from input; sending one → invalid_param
   output(obj: T, sctx: Record<string, unknown>): Out
 }
 export const defineSerializer = <T>(s: Serializer<T>): Serializer<T> => s
@@ -54,10 +64,13 @@ function parseLookup(l: string): { field: string; op: Op | undefined } {
 }
 
 // URL params arrive as strings; coerce through the field's type ("30" → 30, "a,b" → [a, b]).
-const num = z.preprocess(v => (typeof v === 'string' ? Number(v) : v), z.number())
+// A blank string stays a string, so z.number rejects it (never silently 0).
+const num = z.preprocess(v => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v), z.number())
 function valueSchema(f: AnyField): z.ZodTypeAny {
   switch (f.kind) {
-    case 'id': case 'int': case 'float': case 'money': return num    // money compares in cents
+    // money: the number goes to the field's own lookup()/toDb unchanged; the field owns its units
+    // (major-units switch is a follow-up task at the field level, views need no change)
+    case 'id': case 'int': case 'float': case 'money': return num
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
@@ -72,7 +85,7 @@ function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
 }
 
 // zod failure → DomainError invalid_param naming the offending param
-function validate(schema: z.ZodTypeAny, raw: unknown, url = false): Record<string, unknown> {
+function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOnly?: Set<string>): Record<string, unknown> {
   const input = url && raw && typeof raw === 'object'
     ? Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== '' && v !== undefined))   // empty form field = absent
     : raw
@@ -80,7 +93,18 @@ function validate(schema: z.ZodTypeAny, raw: unknown, url = false): Record<strin
   if (r.success) return r.data
   const i = r.error.issues[0]
   const field = i.code === 'unrecognized_keys' ? i.keys[0] : String(i.path[0] ?? '')
-  throw new DomainError('invalid_param', i.code === 'unrecognized_keys' ? `unknown param "${field}"` : `${field}: ${i.message}`, field)
+  const msg = i.code !== 'unrecognized_keys' ? `${field}: ${i.message}`
+    : readOnly?.has(field) ? `"${field}" is read-only` : `unknown param "${field}"`
+  throw new DomainError('invalid_param', msg, field)
+}
+
+// PermissionCtx from an ActionCtx (shared by checkPermissions and the page helper)
+function permissionCtx(ctx: ActionCtx, action: ActionId): PermissionCtx {
+  const r = ctx.request
+  return { sid: ctx.sid, session: ctx.session, action, route: r?.route ?? '', user: r?.user ?? ANONYMOUS, agent: r?.agent, ip: r?.ip ?? '' }
+}
+async function runPermissions(perms: Permission[], pctx: PermissionCtx): Promise<void> {
+  for (const p of perms) if (!(await p(pctx))) throw new DomainError('forbidden', `not allowed: ${pctx.action}`)
 }
 
 // ---- GenericView ----------------------------------------------------------------------------------
@@ -131,15 +155,8 @@ export abstract class GenericView<T extends object = any> extends View {
 
   getPermissions(_ctx: ViewCtx): Permission[] { return this.permissions }
 
-  async checkPermissions(ctx: ViewCtx): Promise<void> {
-    const r = ctx.request
-    const pctx: PermissionCtx = {
-      sid: ctx.sid, session: ctx.session, action: ctx.actionId, route: r?.route ?? '',
-      user: r?.user ?? ANONYMOUS, agent: r?.agent, ip: r?.ip ?? '',
-    }
-    for (const p of this.getPermissions(ctx)) {
-      if (!(await p(pctx))) throw new DomainError('forbidden', `not allowed: ${ctx.action}`)
-    }
+  checkPermissions(ctx: ViewCtx): Promise<void> {
+    return runPermissions(this.getPermissions(ctx), permissionCtx(ctx, ctx.actionId))
   }
 
   // DRF has_object_permission. Default allow; override and throw DomainError('forbidden', …) to deny.
@@ -160,27 +177,41 @@ export abstract class GenericView<T extends object = any> extends View {
 
   performDestroy(obj: T, _ctx: ViewCtx): Promise<void> { return this.model.delete((obj as { id: string | number }).id) }
 
-  // Page-component helper: `await ProductList.queryset(searchParams)` → serialized Paginated.
+  // Page-component helper: `await ProductList.queryset(searchParams)` → the same serialized Paginated
+  // as `<app>.list`. Uses the def discovery registered (merged app + class + action permissions run
+  // first, app shapers apply). Unknown URL keys (utm_*, …) are dropped here; the action stays strict.
   // Without a ctx the hooks see ANONYMOUS and request.query only.
   static async queryset<V extends GenericView>(
     this: (new () => V) & typeof GenericView,
     searchParams: URLSearchParams | Record<string, string | string[] | undefined>,
     ctx?: ActionCtx,
   ): Promise<Paginated<Out>> {
-    let list = listDefs.get(this)
-    if (!list) {
-      list = viewActions(this).find(d => d.id === 'list')
-      if (!list) throw new Error(`${this.name} has no list action`)
-      listDefs.set(this, list)
-    }
+    const list = registeredList.get(this)
+    if (!list) throw new Error(`${this.name}.queryset(): no registered list action; export the view from apps/<app>/views.ts and run discover() at boot`)
+    const known = (list.schema as z.AnyZodObject).shape
     const query = searchParams instanceof URLSearchParams ? searchParams : new URLSearchParams()
     const params: Record<string, string> = {}
-    if (searchParams instanceof URLSearchParams) for (const k of new Set(query.keys())) params[k] = query.getAll(k).join(',')
-    else for (const [k, v] of Object.entries(searchParams)) if (v !== undefined) params[k] = Array.isArray(v) ? v.join(',') : v
-    return list.run(params, ctx ?? ({ request: { query, user: ANONYMOUS } } as unknown as ActionCtx)) as Promise<Paginated<Out>>
+    if (searchParams instanceof URLSearchParams) {
+      for (const k of new Set(query.keys())) if (k in known) params[k] = query.getAll(k).join(',')
+    } else {
+      for (const [k, v] of Object.entries(searchParams)) {
+        if (v === undefined || !(k in known)) continue
+        params[k] = Array.isArray(v) ? v.join(',') : v
+        query.set(k, params[k])
+      }
+    }
+    const c = ctx ?? ({ request: { query, user: ANONYMOUS } } as unknown as ActionCtx)
+    await runPermissions(list.rules?.permissions ?? [], permissionCtx(c, list.id))
+    return list.run(params, c) as Promise<Paginated<Out>>
   }
 }
-const listDefs = new WeakMap<Function, ActionDef>()
+
+// discovery → page helper: the manifest's merged-rules copy of each view's list def
+const generatedName = new WeakMap<ActionDef, GeneratedAction>()
+const registeredList = new WeakMap<Function, ActionDef>()
+export function bindRegistered(V: Function, original: ActionDef, registered: ActionDef): void {
+  if (generatedName.get(original) === 'list') registeredList.set(V, registered)
+}
 
 // Concrete views: DRF generics names. Each is GenericView + which actions it generates.
 export abstract class ListView<T extends object = any> extends GenericView<T> { static actions: readonly GeneratedAction[] = ['list'] }
@@ -208,34 +239,55 @@ function effectiveFilters(v: GenericView): string[] {
 const effectiveSearch = (v: GenericView): string[] => v.searchFields ?? Object.entries(v.model.fields as Record<string, AnyField>)
   .filter(([, f]) => f.opts.searchable).map(([n, f]) => f.key(n))
 
-const defaultSerializers = new WeakMap<GenericView, Serializer<any>>()
+const DEFAULT_SER = Symbol('defaultSerializer')
 function defaultSerializer<T extends object>(v: GenericView<T>): Serializer<T> {
-  let s = defaultSerializers.get(v)
-  if (!s) {
-    const hidden = new Set(Object.entries(v.model.fields as Record<string, AnyField>).filter(([, f]) => f.opts.hidden).map(([n, f]) => f.key(n)))
-    const shape = v.shapers?.[v.model.name]
-    s = {
-      input: createInput(v.model),
-      output: (obj: T) => {
-        const out = Object.fromEntries(Object.entries(obj).filter(([k]) => !hidden.has(k)))
-        return shape ? shape(out) : out
-      },
-    }
-    defaultSerializers.set(v, s)
+  const holder = v as unknown as { [DEFAULT_SER]?: Serializer<T> }
+  if (holder[DEFAULT_SER]) return holder[DEFAULT_SER]
+  const hidden = new Set(Object.entries(v.model.fields as Record<string, AnyField>).filter(([, f]) => f.opts.hidden).map(([n, f]) => f.key(n)))
+  const shape = v.shapers?.[v.model.name]
+  const s: Serializer<T> = {
+    input: createInput(v.model),
+    output: (obj: T) => {
+      const out = Object.fromEntries(Object.entries(obj).filter(([k]) => !hidden.has(k)))
+      return shape ? shape(out) : out
+    },
   }
+  Object.defineProperty(v, DEFAULT_SER, { value: s })     // non-enumerable, on the boot instance
   return s
 }
 
-// model.schema minus id/uuid/auto fields; defaulted fields optional; unknown keys rejected
+// Write-protected by the model: readOnly, or hidden unless writeOnly; plus generated keys.
+function modelReadOnly(model: Model<any, any>): Set<string> {
+  return new Set(Object.entries(model.fields as Record<string, AnyField>)
+    .filter(([, f]) => f.kind === 'id' || f.kind === 'uuid' || f.opts.auto || f.opts.readOnly || (f.opts.hidden && !f.opts.writeOnly))
+    .map(([n, f]) => f.key(n)))
+}
+
+// model.schema minus write-protected fields; defaulted fields optional
 function createInput(model: Model<any, any>): z.ZodObject<z.ZodRawShape> {
+  const ro = modelReadOnly(model)
   const shape: z.ZodRawShape = {}
   for (const [n, f] of Object.entries(model.fields as Record<string, AnyField>)) {
-    if (f.kind === 'id' || f.kind === 'uuid' || f.opts.auto) continue
-    shape[f.key(n)] = hasDefault(f) ? f.schema().optional() : f.schema()
+    if (!ro.has(f.key(n))) shape[f.key(n)] = hasDefault(f) ? f.schema().optional() : f.schema()
   }
-  return z.object(shape).strict()
+  return z.object(shape)
 }
-const partialOf = (s: z.ZodTypeAny): z.ZodTypeAny => (s instanceof z.ZodObject ? s.partial() : s)
+
+// The input a serializer really accepts: plain object, read-only keys removed, unknown keys rejected.
+const inputs = new WeakMap<Serializer<any>, { schema: z.AnyZodObject; readOnly: Set<string> }>()
+function inputOf(model: Model<any, any>, ser: Serializer<any>): { schema: z.AnyZodObject; readOnly: Set<string> } {
+  let r = inputs.get(ser)
+  if (!r) {
+    const base = ser.input ?? createInput(model)
+    if (!(base instanceof z.ZodObject)) {
+      throw new Error(`serializer.input must be a plain z.object(...) so update can apply .partial(); refine individual fields instead`)
+    }
+    const readOnly = new Set([...modelReadOnly(model), ...(ser.readOnlyFields ?? [])])
+    const drop = Object.fromEntries(Object.keys(base.shape).filter(k => readOnly.has(k)).map(k => [k, true as const]))
+    inputs.set(ser, (r = { schema: base.omit(drop).strict(), readOnly }))
+  }
+  return r
+}
 
 // Boot: instantiate, validate config against the model, build every ActionDef (bare names).
 export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {}): ActionDef[] {
@@ -262,7 +314,9 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     for (const l of effectiveFilters(gv)) {
       const { field, op } = parseLookup(l)
       if (!op) fail(`filter "${l}": unknown lookup (use exact, __lt, __lte, __gt, __gte, __in, __contains, __ne)`)
-      lookups[l] = lookupSchema(need(`filter "${l}"`, field), op!).optional()
+      const f = need(`filter "${l}"`, field)
+      if (op === 'contains' && f.kind !== 'text') fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
+      lookups[l] = lookupSchema(f, op!).optional()
     }
     const sorts = gv.ordering.flatMap(f => [f, `-${f}`])
     const listSchema = z.object({
@@ -272,53 +326,72 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       ...lookups,
     }).strict()
     const lookupObj = z.object({ [gv.lookupParam]: valueSchema(lookupF) })
-    const input = gv.serializer?.input ?? createInput(model)
-    const schemas: Record<GeneratedAction, z.ZodTypeAny> = {
-      list: listSchema, get: lookupObj.strict(), delete: lookupObj.strict(), create: input,
-      update: input instanceof z.ZodObject ? lookupObj.merge(input.partial()) : lookupObj.passthrough(),
+
+    // Advertised create/update schemas come from getSerializer() resolved per action at boot (no
+    // request yet: ctx has the action name and ANONYMOUS). Switching serializers per REQUEST still
+    // works at runtime but cannot change the advertised schema.
+    const bootCtx = (a: GeneratedAction): ViewCtx =>
+      ({ action: a, actionId: a, params: {}, request: { user: ANONYMOUS, query: new URLSearchParams() } } as unknown as ViewCtx)
+    const inputFor = (ctx: ViewCtx) => {
+      try { return inputOf(model, gv.getSerializer.call(Object.create(gv), ctx)) } catch (e) { return fail((e as Error).message) }
     }
+    const actions = (V as unknown as typeof GenericView).actions
+    const updIn = actions.includes('update') ? inputFor(bootCtx('update')).schema : undefined
+    if (updIn && gv.lookupParam !== gv.lookupField && gv.lookupParam in updIn.shape) {
+      fail(`lookupParam "${gv.lookupParam}" collides with the writable field "${gv.lookupParam}"; rename the param`)
+    }
+    const schemas = {
+      list: () => listSchema, get: () => lookupObj.strict(), delete: () => lookupObj.strict(),
+      create: () => inputFor(bootCtx('create')).schema,
+      update: () => lookupObj.merge(updIn!.partial()).strict(),
+    } satisfies Record<GeneratedAction, () => z.ZodTypeAny>
 
     const rulesFor: Record<GeneratedAction, ActionRules> = {
       list: { readOnly: true }, get: { readOnly: true }, create: {}, update: {}, delete: { destructive: true },
     }
-    const out = (ctx: ViewCtx, obj: object) => gv.getSerializer(ctx).output(obj, gv.getSerializerContext(ctx))
-    const bodies: Record<GeneratedAction, (raw: unknown, ctx: ViewCtx) => Promise<unknown>> = {
-      list: async (raw, ctx) => {
+    type Self = GenericView
+    const out = (v: Self, ctx: ViewCtx, obj: object) => v.getSerializer(ctx).output(obj, v.getSerializerContext(ctx))
+    const bodies: Record<GeneratedAction, (v: Self, raw: unknown, ctx: ViewCtx) => Promise<unknown>> = {
+      list: async (v, raw, ctx) => {
         ctx.params = validate(listSchema, raw, true)
-        const page = await gv.paginateQueryset(gv.filterQueryset(gv.getQueryset(ctx), ctx), ctx)
-        return { ...page, items: page.items.map(o => out(ctx, o)) }
+        const page = await v.paginateQueryset(v.filterQueryset(v.getQueryset(ctx), ctx), ctx)
+        return { ...page, items: page.items.map(o => out(v, ctx, o)) }
       },
-      get: async (raw, ctx) => {
+      get: async (v, raw, ctx) => {
         ctx.params = validate(lookupObj.strict(), raw, true)
-        return out(ctx, await gv.getObject(ctx))
+        return out(v, ctx, await v.getObject(ctx))
       },
-      create: async (raw, ctx) => {
-        ctx.params = validate(gv.getSerializer(ctx).input ?? input, raw)
-        return out(ctx, await gv.performCreate(ctx.params, ctx))
+      create: async (v, raw, ctx) => {
+        const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
+        ctx.params = validate(schema, raw, false, readOnly)
+        return out(v, ctx, await v.performCreate(ctx.params, ctx))
       },
-      update: async (raw, ctx) => {
-        const { [gv.lookupParam]: _id, ...rest } = (raw ?? {}) as Record<string, unknown>
-        ctx.params = validate(lookupObj, { [gv.lookupParam]: _id }, true)
-        const data = validate(partialOf(gv.getSerializer(ctx).input ?? input), rest)
-        const obj = await gv.getObject(ctx)
-        return out(ctx, await gv.performUpdate(obj, data, ctx))
+      update: async (v, raw, ctx) => {
+        const { [gv.lookupParam]: key, ...rest } = (raw ?? {}) as Record<string, unknown>
+        ctx.params = validate(lookupObj, { [gv.lookupParam]: key }, true)
+        const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
+        const data = validate(schema.partial(), rest, false, readOnly)
+        const obj = await v.getObject(ctx)
+        return out(v, ctx, await v.performUpdate(obj, data, ctx))
       },
-      delete: async (raw, ctx) => {
+      delete: async (v, raw, ctx) => {
         ctx.params = validate(lookupObj.strict(), raw, true)
-        await gv.performDestroy(await gv.getObject(ctx), ctx)
+        await v.performDestroy(await v.getObject(ctx), ctx)
         return null
       },
     }
     // permissions run first (DRF initial()), before params are validated or anything is read
-    for (const a of (V as unknown as typeof GenericView).actions) {
+    for (const a of actions) {
       const def: ActionDef = {
-        id: a, schema: schemas[a], rules: withPerms(rulesFor[a]),
+        id: a, schema: schemas[a](), rules: withPerms(rulesFor[a]),
         run: async (raw, ctx) => {
+          const self = Object.create(gv) as Self
           const vctx: ViewCtx = { ...ctx, action: a, actionId: def.id, params: {} }
-          await gv.checkPermissions(vctx)
-          return bodies[a](raw, vctx)
+          await self.checkPermissions(vctx)
+          return bodies[a](self, raw, vctx)
         },
       }
+      generatedName.set(def, a)
       defs.push(def)
     }
   }
@@ -332,14 +405,14 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const fn = (view as unknown as Record<string, unknown>)[key]
       const meta = typeof fn === 'function' ? decorated.get(fn) : undefined
       if (!meta) continue
-      const check = view instanceof GenericView ? (c: ViewCtx) => view.checkPermissions(c) : async () => {}
       const def: ActionDef = {
         id: key, schema: meta.schema, rules: withPerms(meta.opts.rules, meta.opts.permissions),
         run: async (raw, ctx) => {
+          const self = Object.create(view) as View
           const vctx: ViewCtx = { ...ctx, action: key, actionId: def.id, params: {} }
-          await check(vctx)
+          if (self instanceof GenericView) await self.checkPermissions(vctx)
           vctx.params = validate(meta.schema, raw)
-          return (fn as (p: unknown, c: ViewCtx) => Promise<unknown>).call(view, vctx.params, vctx)
+          return (fn as (p: unknown, c: ViewCtx) => Promise<unknown>).call(self, vctx.params, vctx)
         },
       }
       defs.push(def)

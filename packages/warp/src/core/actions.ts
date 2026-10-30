@@ -1,14 +1,10 @@
-import { readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
-import { isViewClass, viewActions } from '../views/generic.js'
 
 export { DomainError } from './errors.js'
 
-type Rate = NonNullable<ActionRules['rate']>
-const APP_RE = /^[a-z][a-z0-9_]*$/
+export type Rate = NonNullable<ActionRules['rate']>
+export const APP_RE = /^[a-z][a-z0-9_]*$/
 
 // Bare name here; the manifest rewrites id to `${app}.${name}` on register.
 export function defineAction<S extends z.ZodType>(
@@ -20,7 +16,7 @@ export function defineAction<S extends z.ZodType>(
   return { id: name, schema, run, rules }
 }
 
-const isActionDef = (v: unknown): v is ActionDef =>
+export const isActionDef = (v: unknown): v is ActionDef =>
   typeof v === 'object' && v !== null &&
   typeof (v as ActionDef).id === 'string' && typeof (v as ActionDef).run === 'function' &&
   typeof (v as ActionDef).schema?.safeParse === 'function'
@@ -64,42 +60,7 @@ export class ActionManifest {
 
   constructor(private defaults: { rate?: Rate } = {}) {}
 
-  // Boot-time scan of apps/*/views.ts. Pass settings.limits.rate as defaults.rate.
-  // Exported View subclasses are instantiated and register their generated + @action actions.
-  static async discover(appsDir: string, defaults: { rate?: Rate } = {}): Promise<ActionManifest> {
-    const m = new ActionManifest(defaults)
-    for (const app of (await readdir(appsDir)).sort()) {
-      const dir = join(appsDir, app)
-      if (!(await stat(dir)).isDirectory()) continue
-      const views = join(dir, 'views.ts')
-      if (!(await stat(views).catch(() => null))) continue
-      if (!APP_RE.test(app)) throw new Error(`${views}: folder name "${app}" must match ${APP_RE}`)
-      const mod = await import(pathToFileURL(views).href)
-      const rulesFile = join(dir, 'rules.ts')
-      const rules = (await stat(rulesFile).catch(() => null)) ? await import(pathToFileURL(rulesFile).href) : {}
-      const serFile = join(dir, 'serializers.ts')
-      const shapers = (await stat(serFile).catch(() => null)) ? (await import(pathToFileURL(serFile).href)).serializers : undefined
-      const found: [string, ActionDef][] = []
-      for (const [exp, v] of Object.entries(mod)) {
-        if (isActionDef(v)) found.push([exp, v])
-        else if (isViewClass(v)) {
-          try { for (const d of viewActions(v, { shapers })) found.push([exp, d]) }
-          catch (e) { throw new Error(`${views} export ${exp}: ${(e as Error).message}`) }
-        }
-      }
-      // generic-views.md: a view action name used by several classes becomes <Class>.<name>
-      const viewNames = found.filter(([e]) => isViewClass(mod[e])).map(([, d]) => d.id)
-      for (const [exp, d] of found) {
-        if (isViewClass(mod[exp]) && viewNames.filter((n) => n === d.id).length > 1) d.id = `${exp}.${d.id}`
-        try {
-          m.register(app, d, rules)
-        } catch (e) {
-          throw new Error(`${views} export ${exp}: ${(e as Error).message}`)
-        }
-      }
-    }
-    return m
-  }
+  // Boot-time scan of apps/*/views.ts lives in views/discover.ts (core never imports views).
 
   // appRules = exports of apps/<app>/rules.ts. Precedence: action > app > settings.
   // Permissions are cumulative (app then action; first deny wins per permissions.md).

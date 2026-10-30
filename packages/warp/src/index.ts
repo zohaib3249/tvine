@@ -4,6 +4,7 @@ export { atomic, onCommit, setOnCommitErrorHandler } from './data/engine.js'
 export { configureDb, closeDb } from './data/db.js'
 export { makeMigrations, migrate, migrateCheck } from './data/migrate.js'
 export { defineAction, ActionManifest, paramSpecs, DomainError } from './core/actions.js'
+export { discover } from './views/discover.js'
 export {
   View, GenericView, ListView, DetailView, CreateView, UpdateView, DeleteView, ListCreateView,
   RetrieveUpdateView, RetrieveDestroyView, RetrieveUpdateDestroyView, ModelViewSet, action, defineSerializer,

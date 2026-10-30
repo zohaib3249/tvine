@@ -16,14 +16,16 @@ type AnyField = Field<any, boolean, Kind, boolean>
 export const emptyState = (): ProjectState => ({ apps: {} })
 
 // boolean flags that mean nothing when false; `default: false` is a real value and stays
-const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto', 'hidden'])
+const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto'])
+// view-only flags (generic views' serializers): no DDL, so they never enter state or migrations
+const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly'])
 
 // Field → spec (Django's deconstruct). Opts sorted so specs and generated code are deterministic.
 export function specOf(f: AnyField): FieldSpec {
   const opts: Record<string, unknown> = {}
   for (const k of Object.keys(f.opts).sort()) {
     const v = (f.opts as Record<string, unknown>)[k]
-    if (v !== undefined && !(FLAGS.has(k) && v === false)) opts[k] = v
+    if (v !== undefined && !VIEW_ONLY.has(k) && !(FLAGS.has(k) && v === false)) opts[k] = v
   }
   const s: FieldSpec = { kind: f.kind, opts }
   if (f.kind === 'enum') s.values = [...f.values!]
