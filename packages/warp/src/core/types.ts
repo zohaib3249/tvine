@@ -50,13 +50,16 @@ export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
 
-// channels.md: named pub/sub groups (interface only; implementation comes later).
+// channels.md: named pub/sub groups. Implementation: core/channels.ts (MemoryChannelLayer).
 export interface ChannelLayer {
   group(name: string): {
     add(subscriber: (e: Event) => void): () => void   // returns unsubscribe
     send(e: Event): void
-    size(): number
+    size(): number                                    // live subscribers
+    since(cursor: number): Event[]                    // ring events after a cursor (Last-Event-ID)
   }
+  head(): number                                      // cursor of the latest event on any group
+  drop(name: string): void                            // remove a group's ring and subscribers
 }
 
 // request.md: the per-call request object.

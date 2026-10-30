@@ -88,6 +88,7 @@ export class SessionStore {
     this.byId.delete(sid)
     for (const c of this.cookiesBySid.get(sid) ?? []) this.byCookie.delete(c)
     this.cookiesBySid.delete(sid)
+    this.channels.drop(`sid:${sid}`)
     this.onEvict?.(sid)
   }
 }
