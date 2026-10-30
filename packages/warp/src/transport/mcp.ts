@@ -219,7 +219,8 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<ty
   try {
     const t0 = performance.now()
     const snap = await server.snapshot(ctx.page, session.sid)
-    server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms: Math.round(performance.now() - t0) })
+    const ms = Math.round(performance.now() - t0)
+    if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms }))
     return reply(server, [ev.snapshot(snap)], ctx)
   } catch (e) {
     server.log('error', 'snapshot render failed', { page: ctx.page, error: e instanceof Error ? e.message : String(e) })

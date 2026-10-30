@@ -210,6 +210,9 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     setCtx({ sid: session.sid, rev: session.rev, page })
     const snap = await server.snapshot(page, session.sid)
     const etag = `"${createHash('sha1').update(format).update(JSON.stringify(snap)).digest('base64url')}"`
+    // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
+    const ms = Math.round(performance.now() - t0)
+    if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms }))
     res.setHeader('etag', etag)
     const inm = req.headers['if-none-match']
     if (inm && inm.split(',').some((t) => t.trim() === etag)) {
@@ -218,7 +221,6 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       return 304
     }
     res.setHeader('cache-control', 'private, no-cache')
-    server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms: Math.round(performance.now() - t0) })
     return reply(200, [ev.snapshot(snap)])
   }
 
