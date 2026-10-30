@@ -1,5 +1,5 @@
-import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -129,7 +129,7 @@ export async function receiveUpload(
   const counted = Readable.from((async function* () {
     for await (const b of guarded(head, it as AsyncIterator<Buffer>, maxBytes, source)) { size += b.length; yield b }
   })())
-  await storage.put(key, counted, { type: found.type, size: 0 })
+  try { await storage.put(key, counted, { type: found.type, size: 0 }) } catch (e) { counted.destroy(); source.destroy(); throw e }
   return { field, key, url: storage.url(key), type: found.type, size }
 }
 
@@ -144,13 +144,16 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
     try { key = decodeURIComponent(path.slice(routePrefix.length + 1)) } catch { return notFound() }
     if (!KEY_RE.test(key) || key.endsWith('.json')) return notFound()
     try {
-      const [info, body] = await Promise.all([readFile(join(storage.dir, `${key}.json`), 'utf8'), readFile(join(storage.dir, key))])
+      const file = join(storage.dir, key)
+      const [info, st] = await Promise.all([readFile(join(storage.dir, `${key}.json`), 'utf8'), stat(file)])
+      if (!st.isFile()) return notFound()
       res.statusCode = 200
       res.setHeader('Content-Type', (JSON.parse(info) as { type: string }).type)
       res.setHeader('X-Content-Type-Options', 'nosniff')
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-      res.setHeader('Content-Length', String(body.length)) // ponytail: whole file in memory (capped by maxBytes); stream if large media appears
-      res.end(req.method === 'HEAD' ? undefined : body)
-    } catch { notFound() }
+      res.setHeader('Content-Length', String(st.size))
+      if (req.method === 'HEAD') return void res.end()
+      await pipeline(createReadStream(file), res)
+    } catch { if (!res.headersSent) notFound(); else res.destroy() }
   }
 }
