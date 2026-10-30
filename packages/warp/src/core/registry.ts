@@ -11,28 +11,48 @@ export class RegistryError extends Error {
 }
 
 type Body = Omit<Snapshot, 'sid' | 'rev'>
-const SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi
 const TVINE = /\btype\s*=\s*(["'])text\/tvine\1/i
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+const isStr = (v: unknown): v is string => typeof v === 'string'
 
 // Collects every real <script type="text/tvine"> fragment in document order (incl. streamed
 // Suspense chunks). Text inside other scripts (RSC payload strings) is never parsed. JSON.parse
 // handles `</script` inside strings because the frontend escapes `<` as \u003c.
+// Dedup is first-wins, so a Suspense FALLBACK fragment can win over the resolved one (ruled behavior).
+// Linear scan: each position is visited once; an unclosed <script stops the walk.
 export function extract(html: string, route = '?'): Body & { personal: boolean } {
+  const low = html.replace(/[A-Z]/g, c => c.toLowerCase()) // ASCII-only: keeps offsets aligned
+  const bad = () => new RegistryError('internal', `invalid embed fragment for ${route}`)
   let pg: { page: string; title: string } | undefined
   const nodes = new Map<string, any>(), links = new Map<string, any>()
   let personal = false
-  for (const m of html.matchAll(SCRIPT)) {
-    if (!TVINE.test(m[1]!)) continue
+  for (let i = 0; (i = low.indexOf('<script', i)) >= 0;) {
+    const gt = html.indexOf('>', i)
+    if (gt < 0) break
+    const next = low[i + 7]
+    if (next !== undefined && !/[\s>/]/.test(next)) { i += 7; continue } // e.g. <scripts
+    const close = low.indexOf('</script', gt)
+    if (close < 0) break
+    const attrs = html.slice(i + 7, gt)
+    const text = html.slice(gt + 1, close)
+    i = close + 8
+    if (!TVINE.test(attrs)) continue
     let f: any
-    try { f = JSON.parse(m[2]!) }
-    catch { throw new RegistryError('internal', `invalid embed fragment for ${route}`) }
+    try { f = JSON.parse(text) }
+    catch { throw bad() }
     if (f?.v !== 1) throw new RegistryError('internal', 'unsupported embed version')
     // fail closed: anything but absent/false marks the snapshot personal
     if (f.personal !== undefined && f.personal !== false) personal = true
-    if (f.k === 'page') pg ??= { page: f.page, title: f.title }
-    else if (f.k === 'node' && f.node && !nodes.has(f.node.id)) nodes.set(f.node.id, f.node)
-    else if (f.k === 'link' && f.link && !links.has(f.link.id)) links.set(f.link.id, f.link)
-    // unknown k: ignored (forward compatible)
+    if (f.k === 'page') {
+      if (!isStr(f.page) || !isStr(f.title)) throw bad()
+      pg ??= { page: f.page, title: f.title }
+    } else if (f.k === 'node') {
+      if (!isObj(f.node) || !isStr(f.node.id) || !isStr(f.node.type)) throw bad()
+      if (!nodes.has(f.node.id)) nodes.set(f.node.id, f.node)
+    } else if (f.k === 'link') {
+      if (!isObj(f.link) || !isStr(f.link.id) || !isStr(f.link.href)) throw bad()
+      if (!links.has(f.link.id)) links.set(f.link.id, f.link)
+    } // unknown k: ignored (forward compatible)
   }
   if (!pg) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
   return { ...pg, personal, nodes: [...nodes.values()], links: [...links.values()] }
