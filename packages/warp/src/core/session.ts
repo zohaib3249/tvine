@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import type { ChannelLayer, Event, Rev, Session, Settings, Sid } from './types.js'
+import type { ChannelLayer, Event, Rev, Session, Settings, Sid, Snapshot } from './types.js'
 import { MemoryChannelLayer } from './channels.js'
 import { ev } from './events.js'
 
@@ -16,6 +16,9 @@ export class SessionStore {
   private channels: ChannelLayer
   private onEvict?: (sid: Sid) => void
   private watchers: ((sid: Sid, kind: 'created' | 'expired') => void)[] = []
+  // progressive-disclosure.md §expand: per-sid last full snapshot of each page (expand serves L2 from it).
+  // Keyed by sid, so one session can never read another's cache; dropped on evict.
+  private snaps = new Map<Sid, Map<string, Snapshot>>()
 
   constructor(private settings: Settings['session'], opts: SessionStoreOptions = {}) {
     this.channels = opts.channels ?? new MemoryChannelLayer()
@@ -86,6 +89,21 @@ export class SessionStore {
     return this.channels.group(`sid:${sid}`).add(fn)
   }
 
+  // Remember the snapshot `sid` was just shown (rendered for that sid). ponytail: last 8 pages per sid.
+  remember(snap: Snapshot): void {
+    if (!snap.sid || !this.byId.has(snap.sid)) return
+    let m = this.snaps.get(snap.sid)
+    if (!m) this.snaps.set(snap.sid, (m = new Map()))
+    m.delete(snap.page); m.set(snap.page, snap)
+    if (m.size > 8) m.delete(m.keys().next().value as string)
+  }
+
+  // The cached snapshot of `page` for `sid`, only while the session is still at that rev.
+  recall(sid: Sid, page: string): Snapshot | undefined {
+    const s = this.byId.get(sid), snap = this.snaps.get(sid)?.get(page)
+    return s && snap && snap.rev === s.rev ? snap : undefined
+  }
+
   get size(): number { return this.byId.size }
 
   // Drop a session now (e.g. one created for a render that was then refused): the normal evict path.
@@ -106,6 +124,7 @@ export class SessionStore {
 
   private evict(sid: Sid): void {
     this.byId.delete(sid)
+    this.snaps.delete(sid)
     for (const c of this.cookiesBySid.get(sid) ?? []) this.byCookie.delete(c)
     this.cookiesBySid.delete(sid)
     this.channels.drop(`sid:${sid}`)

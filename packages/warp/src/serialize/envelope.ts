@@ -2,13 +2,16 @@ import type { Event, Rev, Settings, Sid, Snapshot } from '../core/types.js'
 import { recoveryOf } from '../core/errors.js'
 import { toJson } from './json.js'
 import { toNotation, bare, cell, quote } from './notation.js'
-import { disclose, kindOfWidget, toTree, type Shaped } from '../shape/disclose.js'
+import { disclose, expand, kindOfWidget, level, toTree, type Shaped } from '../shape/disclose.js'
 import { HINT2 } from '../shape/notation.js'
 
 export type Format = 'json' | 'notation'
 export type Shapers = Record<string /* node type */, (data: Record<string, unknown>) => Record<string, unknown>>
 export interface Ctx { sid: Sid; rev: Rev; page: string }
-export interface RenderOpts { ctx: Ctx; shapers?: Shapers }
+export type ViewOpt = 'auto' | 'full' | 'L1' | 'L0'
+export interface ExpandOpt { id: string; offset?: number; limit?: number }
+// view: forced level (default auto: full → L1 → L0 by budget); expand: L2 of one node (unknown id → L0 map)
+export interface RenderOpts { ctx: Ctx; shapers?: Shapers; view?: ViewOpt; expand?: ExpandOpt }
 
 const HINT = '#hint @type @id=node id then cols, rows=values in order, "-"=null | ! act name(p:type) bind=<b> -> POST {action,params,sid,bind}'
 
@@ -86,7 +89,7 @@ export function snapshotOf(e: Event): Snapshot | undefined {
 // head + status? + body. sid/rev come from the first snapshot/update in `events`; `ctx` fills the
 // gaps (ok/goto/err carry no sid themselves).
 // settings.agent.shape: 'v2' (default) → the snapshot goes through the shaper (budgeted view); 'v1' → today's bytes.
-export function render(events: Event[], format: Format, settings: Settings, { ctx, shapers }: RenderOpts): string {
+export function render(events: Event[], format: Format, settings: Settings, { ctx, shapers, view, expand: x }: RenderOpts): string {
   const evs: Event[] = events.map(e => {
     if (e.kind === 'snapshot') return { kind: 'snapshot', snapshot: shape(e.snapshot, shapers) }
     if (e.kind === 'err' && e.snapshot) return { ...e, snapshot: shape(e.snapshot, shapers) }
@@ -99,9 +102,12 @@ export function render(events: Event[], format: Format, settings: Settings, { ct
   const rev = snap?.rev ?? upd?.rev ?? patch?.rev ?? ctx?.rev
   if (sid === undefined || rev === undefined) throw new Error('render: no sid/rev in events or ctx')
   const agent = settings?.agent
-  const v2: Shaped | undefined = snap && agent?.shape !== 'v1'
-    ? disclose(toTree(snap, { headless: true }), { budget: agent?.budget ?? 1500, rowsL1: agent?.rowsL1 ?? 10 })
-    : undefined
+  const tree = snap && agent?.shape !== 'v1' ? toTree(snap, { headless: true }) : undefined
+  const rowsL1 = agent?.rowsL1 ?? 10
+  // allowL0: the L0 map is reachable now that expand exists (W2 ruling lifted by W5)
+  const v2: Shaped | undefined = tree && (x
+    ? expand(tree, x.id, x) ?? level(tree, 'L0', rowsL1)
+    : disclose(tree, { budget: agent?.budget ?? 1500, rowsL1, view, allowL0: true }))
   const hint = format === 'notation' && !!snap && (!v2 || (v2.nodes.some(n => n.rows || n.actions || n.links) || !!v2.links) && HINT2)
   const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint, view: v2?.view })
   return format === 'json' ? toJson(evs, h, v2) : toNotation(evs, h, v2)

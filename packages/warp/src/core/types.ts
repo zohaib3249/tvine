@@ -185,6 +185,7 @@ export interface Settings {
   logging: 'json' | 'pretty' | 'none'
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
+  frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS

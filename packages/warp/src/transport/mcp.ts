@@ -1,4 +1,5 @@
-// transport/mcp — docs/design/server/transport-mcp.md. Two generic tools (read_page, do) plus one typed
+// transport/mcp — docs/design/server/transport-mcp.md + frontend/v2/core/transports.md. Generic tools
+// (read_page, expand, ui, do — in that order: agents act through widget controls first) plus one typed
 // tool per manifest action; every call is a thin proxy into the same dispatch pipeline.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
@@ -7,13 +8,14 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type { ActionManifest } from '../core/actions.js'
-import { collect, dispatch, renderCtx, type Log, type ServerCtx } from '../core/dispatch.js'
+import { collect, dispatch, rateLimited, renderCtx, type Log, type ServerCtx } from '../core/dispatch.js'
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
 import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot } from '../core/types.js'
-import { render, type Ctx } from '../serialize/envelope.js'
+import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
+import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 
 export interface McpOptions {
@@ -27,13 +29,16 @@ export type McpTool = Tool & { action?: ActionId }
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
 export const GENERIC = {
   read_page: 'Open a page of this site and get its data + callable actions. Returns a sid — include it in every later call. Re-call this whenever an action returns a stale/expired error.',
-  do: 'Run an action listed on a page from read_page. Pass url (that page), action (its id), params, and the sid read_page returned. Copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
+  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
+  ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
+  do: 'Advanced: prefer ui on the page\'s widgets. Run a backend action listed on a page from read_page. Pass url (that page), action (its id), params, and the sid read_page returned. Copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
 } as const
 
 // fresh instances: a reused zod instance becomes a $ref in the JSON Schema
 const opt = () => z.string().optional()
 const envelope = z.object({ url: z.string().default('/'), sid: opt(), cmdId: opt(), bind: opt() })
-const readPage = z.object({ url: z.string(), sid: opt() })
+const readPage = z.object({ url: z.string(), sid: opt(), view: z.enum(['auto', 'full', 'L1', 'L0']).optional() })
+const expandIn = z.object({ url: z.string(), id: z.string(), sid: opt(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() })
 const doInput = envelope.extend({ url: z.string(), action: z.string(), params: z.record(z.unknown()).default({}) })
 const IMPLICIT = Object.keys(envelope.shape)
 
@@ -61,11 +66,15 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
   const generic: McpTool[] = mode === 'typed' ? [] : [
     { name: 'read_page', description: GENERIC.read_page, inputSchema: jsonSchema(readPage) as Tool['inputSchema'],
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
+    { name: 'expand', description: GENERIC.expand, inputSchema: jsonSchema(expandIn) as Tool['inputSchema'],
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
+    { name: 'ui', description: GENERIC.ui, inputSchema: jsonSchema(uiInput) as Tool['inputSchema'],
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
     { name: 'do', description: GENERIC.do, inputSchema: jsonSchema(doInput) as Tool['inputSchema'],
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
   ]
   if (mode === 'generic') return generic
-  const taken = new Set(['read_page', 'do'])
+  const taken = new Set(['read_page', 'expand', 'ui', 'do'])
   let typed: (McpTool & { def: ActionDef })[] = []
   for (const def of actions.all()) {
     if (!mcpEnabled(def, settings)) continue
@@ -84,7 +93,7 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
     const required = [...((props.required ?? []) as string[]).filter((k) => !bound.includes(k)), ...(bound.length ? ['bind'] : [])]
     typed.push({
       def, action: def.id, name,
-      description: `${def.id}${ro ? ' (read-only)' : destructive ? ' (destructive)' : ''}. Same as do with action "${def.id}". Pass the sid from read_page and url = the page it acts on; send a new cmdId on changes; ${bound.length ? 'requires the signed bind from read_page (its action ref)' : "copy bind from the page's action ref"}.`,
+      description: `Advanced: prefer ui. ${def.id}${ro ? ' (read-only)' : destructive ? ' (destructive)' : ''}. Same as do with action "${def.id}". Pass the sid from read_page and url = the page it acts on; send a new cmdId on changes; ${bound.length ? 'requires the signed bind from read_page (its action ref)' : "copy bind from the page's action ref"}.`,
       inputSchema: {
         ...propsNoReq, properties: { ...Object.fromEntries(Object.entries(own).filter(([k]) => !bound.includes(k))), ...jsonSchema(envelope).properties as object },
         ...(required.length && { required }),
@@ -138,7 +147,16 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const src = { ...caller, headers, clientInfo: srv.getClientVersion() }
     if (name === 'read_page') {
       const p = readPage.safeParse(args)
-      return p.success ? page(server, opts, src, p.data) : bad(server, p.error)
+      return p.success ? page(server, opts, src, p.data, { view: p.data.view }) : bad(server, p.error)
+    }
+    if (name === 'expand') {
+      const p = expandIn.safeParse(args)
+      return p.success ? page(server, opts, src, p.data, { expand: { id: p.data.id, offset: p.data.offset, limit: p.data.limit } }) : bad(server, p.error)
+    }
+    if (name === 'ui') {
+      const p = uiInput.safeParse(args)
+      if (!p.success) return bad(server, p.error)
+      return ui(server, opts, src, p.data)
     }
     const p = (tool.action ? envelope.passthrough() : doInput).safeParse(args)
     if (!p.success) return bad(server, p.error)
@@ -175,10 +193,12 @@ function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
   return out
 }
 
-function reply(server: ServerCtx, events: Event[], ctx: Ctx): CallToolResult {
+// Every snapshot an MCP client sees is remembered for its session (expand serves L2 from it), then filtered.
+function reply(server: ServerCtx, events: Event[], ctx: Ctx, shape: { view?: ViewOpt; expand?: ExpandOpt } = {}): CallToolResult {
+  for (const e of events) if (e.kind === 'snapshot') server.sessions.remember(e.snapshot)
   events = events.map((e) => e.kind === 'snapshot' ? ev.snapshot(filterSnapshot(server, e.snapshot))
     : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterSnapshot(server, e.snapshot) } : e)
-  const text = render(events, server.settings.formats.default, server.settings, { ctx })
+  const text = render(events, server.settings.formats.default, server.settings, { ctx, ...shape })
   return { content: [{ type: 'text', text }], ...(events.some((e) => e.kind === 'err') && { isError: true }) }
 }
 const bad = (server: ServerCtx, e: z.ZodError) => {
@@ -219,19 +239,45 @@ async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: st
   return (await guardCheck(server.settings)(path, request, server.sessions.peek({ sid }))) ? request : FORBIDDEN
 }
 
-async function page(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<typeof readPage>): Promise<CallToolResult> {
+// read_page (view) and expand (L2 of one node from the session's cached snapshot; unknown id → L0 map).
+async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: string; sid?: string }, shape: { view?: ViewOpt; expand?: ExpandOpt }): Promise<CallToolResult> {
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
   const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
-  try {
+  return rendering(server, ctx, async () => {
     const t0 = performance.now()
-    const snap = await server.snapshot(ctx.page, session.sid)
+    const snap = shape.expand ? await pageSnapshot(server, session.sid, ctx.page) : await server.snapshot(ctx.page, session.sid)
     const ms = Math.round(performance.now() - t0)
     if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms }))
-    return reply(server, [ev.snapshot(snap)], ctx)
-  } catch (e) {
+    if (shape.expand && !hasNode(filterSnapshot(server, snap), shape.expand.id)) {
+      return reply(server, [ev.err('unknown_action', `unknown node ${shape.expand.id.slice(0, 100)}; ids are in the map`, { snapshot: snap })], ctx, { view: 'L0' })
+    }
+    return reply(server, [ev.snapshot(snap)], ctx, shape)
+  })
+}
+
+// Headless ui: resolved by Warp from the page's widget fragments (core/ui.ts), on this sid's session.
+async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<typeof uiInput>): Promise<CallToolResult> {
+  const steps = stepsOf(a)
+  if (!steps) return reply(server, [ev.err('invalid_param', 'give target + control, or steps', { field: 'target' })], blank('/'))
+  const request = await requestFor(server, opts, src, a.url, a.sid)
+  if (!request) return notPage(server, a.url)
+  if (request === FORBIDDEN) return forbidden(server)
+  const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
+  const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
+  const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
+  if (!rl.ok) return reply(server, [rateLimited(rl.retryAfterMs)], ctx)
+  return rendering(server, ctx, async () => {
+    const at = async (pg: string) => { const r = await requestFor(server, opts, src, pg, session.sid); return r && r !== FORBIDDEN ? r : undefined }
+    const out = await runUi(server, steps, a, { session, page: ctx.page, request: at, filter: (s) => filterSnapshot(server, s) })
+    return reply(server, out.events, { ...ctx, page: out.page, rev: session.rev })
+  })
+}
+
+async function rendering(server: ServerCtx, ctx: Ctx, fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
+  try { return await fn() } catch (e) {
     if (e instanceof Goto) return reply(server, [ev.goto(e.url)], ctx)   // the page redirected
     if (e instanceof DomainError) return reply(server, [ev.err('domain', e.message, { reason: e.code })], ctx)   // e.g. not_found
     server.log('error', 'snapshot render failed', { page: ctx.page, error: e instanceof Error ? e.message : String(e) })
