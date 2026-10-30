@@ -16,6 +16,7 @@ let lastChange = 0          // last registry/pending change (ms)
 let pending = 0             // mounted <AgentSuspense> fallbacks
 let popped = false          // a back/forward happened since the agent last looked
 let agentPage: string | undefined   // the page the agent's last answer described
+let lastUrl: string | undefined     // the URL settle last observed
 const touch = () => { lastChange = Date.now() }
 
 // Started by <WeftRoot> (survives client navigations: it lives in the root layout).
@@ -40,7 +41,10 @@ export async function settle(target?: string, signal?: AbortSignal): Promise<{ p
   const end = Date.now() + navLimits.capMs
   let urlAt = target === undefined ? 0 : -1
   while (Date.now() < end && !signal?.aborted) {
-    if (urlAt < 0 && currentPage() === target) urlAt = Date.now()
+    // A URL we have not seen yet counts as a change: its route's widgets may still be mounting.
+    const now = currentPage()
+    if (now !== lastUrl) { lastUrl = now; touch() }
+    if (urlAt < 0 && now === target) urlAt = Date.now()
     if (urlAt >= 0 && !pending && Date.now() - Math.max(lastChange, urlAt) >= navLimits.quietMs) break
     await sleep(navLimits.tickMs)
   }
@@ -84,7 +88,7 @@ export function navNotice(): string | undefined {
 // Call after answering the agent: its view is now the current page.
 export function markSeen(): void { agentPage = currentPage(); popped = false }
 
-export function resetNav(): void { agentPage = undefined; popped = false; pending = 0; lastChange = 0 }
+export function resetNav(): void { agentPage = lastUrl = undefined; popped = false; pending = 0; lastChange = 0 }
 
 // A Suspense boundary the agent view knows about: while its fallback shows, the snapshot says
 // `pending` and the settle rule waits (up to the cap) for it to resolve.
