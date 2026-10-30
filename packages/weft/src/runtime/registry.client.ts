@@ -8,6 +8,7 @@ export interface Entry {
   spec: WidgetSpec                 // latest committed spec
   el: HTMLElement | null
   token: symbol                    // which mount owns this entry
+  chain?: readonly string[]        // every scope above this mount, nearest first (hook bubbling; RSC containers included)
   order: number                    // mount sequence (dup resolution only)
   agent?(a: AgentState): void      // executor/presence marks the widget as targeted (re-renders that widget only)
 }
