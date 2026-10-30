@@ -164,7 +164,13 @@ const pagePath = (r: Request) => r.path + (r.query.size ? `?${r.query}` : '')
 function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
   const off = (id: ActionId) => { const d = server.actions.get(id); return !!d && !mcpEnabled(d, server.settings) }
   const out = { ...s, nodes: s.nodes.map((n) => ({ ...n, actions: n.actions.filter((a) => !off(a.id)) })) }
-  if (s.widgets) out.widgets = s.widgets.map((w) => (w.actions ? { ...w, actions: w.actions.filter((a) => !off(a.id)) } : w))
+  // widgets: their actions, and controls whose headless map submits a disabled action (h.params.id)
+  const offCtl = (h: unknown) => { const id = (h as { params?: { id?: unknown } } | undefined)?.params?.id; return typeof id === 'string' && off(id) }
+  if (s.widgets) out.widgets = s.widgets.map((w) => ({
+    ...w,
+    ...(w.actions && { actions: w.actions.filter((a) => !off(a.id)) }),
+    ...(w.ctl && { ctl: Object.fromEntries(Object.entries(w.ctl).filter(([, c]) => !offCtl(c.h))) }),
+  }))
   return out
 }
 

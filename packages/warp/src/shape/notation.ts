@@ -37,7 +37,7 @@ export const actionLine = (a: { id: string; params: { name: string; type: string
 
 export const HINT2 = '#hint ~ id kind "label" k=v | controls · @type cols then rows, "-"=null · > href label · ! act(p:type) bind=<b> -> POST {action,params,sid,bind} · + more'
 
-const KV = ['of', 'count', 'next', 'shown', 'href', 'at', 'n', 'state', 'desc'] as const
+const KV = ['of', 'count', 'next', 'shown', 'href', 'at', 'n', 'state', 'desc', 'does'] as const
 
 // v2 body lines: `= title`, `~` node lines (+ rows / links / actions under them), `+` expand hints.
 export function notationBody(s: Shaped): string[] {
@@ -55,7 +55,7 @@ function node(n: SnapNode, out: string[]) {
   for (const k of KV) if (n[k] !== undefined) l += ` ${k}=${cell(n[k])}`
   for (const [k, v] of Object.entries(n.data ?? {})) l += ` ${str(k)}=${cell(v)}`
   if (n.sum !== undefined) l += ' ' + quote(n.sum)
-  if (n.ctl?.length) l += ' | ' + n.ctl.join('; ')
+  if (n.ctl?.length) l += ' | ' + n.ctl.map(ascii).join('; ')   // escaped like cells: no line can be injected
   out.push(l)
   if (n.cols && n.rows) {
     const hdr = `@${str(n.of ?? '?')} ${n.cols.map(str).join(' ')}`
