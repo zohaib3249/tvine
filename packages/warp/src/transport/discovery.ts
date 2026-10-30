@@ -1,0 +1,98 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { ActionManifest } from '../core/actions.js'
+import type { ActionRef, Settings } from '../core/types.js'
+
+export interface RouteInfo { path: string; name?: string }
+export interface HealthStats { sessions: number; db?: unknown }
+export interface SiteManifest {
+  apps: Record<string, { actions: { id: string; params: ActionRef['params'] }[] }>
+  routes: RouteInfo[]
+}
+export interface DiscoveryDeps {
+  settings: Settings
+  manifest: ActionManifest
+  routes: RouteInfo[]
+  stats: () => HealthStats
+  startedAt: number
+}
+
+export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
+  const apps: SiteManifest['apps'] = {}
+  for (const d of manifest.all()) {
+    const app = d.id.slice(0, d.id.indexOf('.'))
+    ;(apps[app] ??= { actions: [] }).actions.push({ id: d.id, params: manifest.paramSpecs(d.id) })
+  }
+  return { apps, routes }
+}
+
+// .next/app-path-routes-manifest.json maps "/product/[id]/page" -> "/product/[id]".
+export function loadNextRoutes(nextDir: string): RouteInfo[] {
+  try {
+    const m = JSON.parse(readFileSync(join(nextDir, 'app-path-routes-manifest.json'), 'utf8')) as Record<string, string>
+    return [...new Set(Object.values(m))].filter((p) => !p.startsWith('/_')).sort().map((path) => ({ path }))
+  } catch {
+    return []
+  }
+}
+
+const JSON_CT = 'application/json; charset=utf-8'
+const CACHED = 'public, max-age=3600'
+
+export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+  const { settings, manifest, routes, stats, startedAt } = deps
+  const send = (res: ServerResponse, type: string, cache: string, body: string) => {
+    res.writeHead(200, { 'content-type': type, 'cache-control': cache })
+    res.end(body)
+  }
+  // Built once at construction.
+  const wellKnown = JSON.stringify({
+    tvine: '1', formats: ['json', 'notation'], header: settings.header, mcp: '/mcp', mcpAuth: 'none',
+    channel: '/tvine/channel', manifest: '/tvine/manifest',
+  })
+  const site = JSON.stringify(buildSiteManifest(manifest, routes))
+  const llms = [
+    `# ${settings.site.name}`,
+    '',
+    `> ${settings.site.description}`,
+    '',
+    '## Talking to this site as an agent',
+    `- Send the header \`${settings.header}: 1\` (or \`Accept: text/tvine\`) on any page request to get a`,
+    '  structured snapshot of the page and its actions instead of HTML.',
+    '- MCP endpoint: /mcp (no authentication in v1; anonymous visitor scope).',
+    '',
+    '## Capabilities',
+    '- Full action list with parameters: /tvine/manifest',
+    '- Discovery document: /.well-known/tvine.json',
+    '',
+    '## Routes',
+    ...routes.slice(0, 10).map((r) => `- ${r.path}${r.name ? ` — ${r.name}` : ''}`),
+    '',
+  ].join('\n')
+
+  return (req, res, next) => {
+    const path = (req.url ?? '').split('?')[0]
+    const get = (type: string, cache: string, body: () => string) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { allow: 'GET' })
+        return res.end()
+      }
+      send(res, type, cache, body())
+    }
+    switch (path) {
+      case '/.well-known/tvine.json': return get(JSON_CT, CACHED, () => wellKnown)
+      case '/tvine/manifest': return get(JSON_CT, CACHED, () => site)
+      case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
+      case '/tvine/health':
+        return get(JSON_CT, 'no-store', () => {
+          const { sessions, db } = stats()
+          return JSON.stringify({
+            ok: true, uptime: Math.floor((Date.now() - startedAt) / 1000),
+            actions: manifest.all().length, sessions, ...(db !== undefined && { db }),
+          })
+        })
+      default: return next()
+    }
+  }
+}
