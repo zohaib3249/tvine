@@ -47,9 +47,10 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const ip = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
 
     const inspector = url.searchParams.get('group') === 'inspector'
-    // Prod: socket loopback AND no proxy header (a local reverse proxy makes every client look like 127.0.0.1).
+    // Inspector feed: dev only, AND socket loopback (never X-Forwarded-For), AND no proxy header (a local
+    // reverse proxy makes every client look like 127.0.0.1). `listen(port)` binds every interface.
     const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
-    if (inspector && !isDev && (proxied || !LOOPBACK.has(clientIp(null, remote, 0)))) return json(403, ev.err('domain', 'forbidden'))
+    if (inspector && (!isDev || proxied || !LOOPBACK.has(clientIp(null, remote, 0)))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)

@@ -22,6 +22,7 @@ import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
+import { inspectorFeed } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 
@@ -116,7 +117,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
-  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev: process.env.NODE_ENV !== 'production' })
+  const isDev = process.env.NODE_ENV !== 'production'
+  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev })
+  const unfeed = isDev ? inspectorFeed(ctx) : () => {}   // tvine inspect's traffic log; never in production
   const mcp = mcpHandler(ctx, { route })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
   const fail = (res: ServerResponse) => (e: unknown) => {
@@ -199,6 +202,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     // stop accepting, drain SSE, clear intervals; in-flight requests get ≤ 4 s before sockets are cut
     async close() {
       clearInterval(sweep)
+      unfeed()
       ctx.close()
       if (g[SIGNER] === signer) g[SIGNER] = prev.signer
       if (g[DISPATCHER] === dispatcher) g[DISPATCHER] = prev.dispatcher

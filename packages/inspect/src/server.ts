@@ -1,24 +1,27 @@
 // The inspector UI: one static page + three GET endpoints, on loopback only. It reaches the target only
 // through public surfaces (agent GETs, /tvine/channel?group=inspector, /tvine/manifest), so every
 // target guard still applies: the page sees exactly what any agent would.
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { redact, refuseInProduction } from './attach.js'
 
 export interface InspectorOptions { target: string; port?: number }
 export interface Inspector { url: string; address: string; port: number; close(): Promise<void> }
 
 const HOST = '127.0.0.1'   // ponytail: loopback only, no --host flag; the page proxies a dev server's agent view
 const PAGE = new URL('../static/index.html', import.meta.url)
+// same short hash warp puts in rows: lets the log hide the inspector's own page reads
+const sidHash = (sid: string) => createHash('sha256').update(sid).digest('base64url').slice(0, 12)
 
 export async function startInspector(o: InspectorOptions): Promise<Inspector> {
-  refuseInProduction('tvine inspect')
+  if (process.env.NODE_ENV === 'production') throw new Error('tvine inspect is a dev tool and refuses to run with NODE_ENV=production')
   const t = new URL(o.target)
   if (t.protocol !== 'http:' && t.protocol !== 'https:') throw new Error(`target must be an http(s) URL: ${o.target}`)
   const target = t.origin
   const html = await readFile(PAGE)
   let sid = ''   // the inspector's own agent session, so refreshes don't mint a session each
+  let reading: Promise<unknown> = Promise.resolve()   // a pane fetch in flight: its read row can beat its sid here
   const streams = new Set<AbortController>()
   let port = 0
 
@@ -31,13 +34,15 @@ export async function startInspector(o: InspectorOptions): Promise<Inspector> {
     const to = path.startsWith('/') && !path.startsWith('//') && !path.includes('\\') ? new URL(path, target) : undefined
     if (!to || to.origin !== target) return json(res, 400, { error: 'path must be a site path like /shop' })
     const notation = u.searchParams.get('format') === 'notation'
-    const r = await fetch(to, { redirect: 'manual', headers: { accept: notation ? 'text/tvine' : 'application/tvine+json', ...(sid && { 'x-tvine-sid': sid }) } })
-    const body = Buffer.from(await r.arrayBuffer())
-    sid = /sid=([A-Za-z0-9_-]+)/.exec(body.subarray(0, 200).toString())?.[1] ?? sid
+    const got = fetch(to, { redirect: 'manual', headers: { accept: notation ? 'text/tvine' : 'application/tvine+json', ...(sid && { 'x-tvine-sid': sid }) } })
+      .then(async (r) => ({ r, body: Buffer.from(await r.arrayBuffer()) }))
+    reading = got.then((x) => { sid = /sid=([A-Za-z0-9_-]+)/.exec(x.body.subarray(0, 200).toString())?.[1] ?? sid }, () => {})
+    const { r, body } = await got
+    await reading
     send(res, r.status, r.headers.get('content-type') ?? 'text/plain', body)   // byte-for-byte what an agent gets
   }
 
-  // Upstream SSE → one redacted row per frame. Rows are already redacted by attachInspector; this is the second net.
+  // Upstream SSE (rows redacted by warp, transport/inspector.ts) → one row per frame, minus this inspector's own reads.
   async function log(req: IncomingMessage, res: ServerResponse) {
     const ac = new AbortController()
     streams.add(ac)
@@ -57,11 +62,11 @@ export async function startInspector(o: InspectorOptions): Promise<Inspector> {
           const data = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '))
           buf = buf.slice(i + 2)
           if (!data) continue
-          const f = JSON.parse(data.slice(6)) as { action?: string; status?: string; message?: string; result?: Record<string, unknown> }
-          if (f.action === 'inspector.command' && f.result) {
-            const row = { ...f.result, params: redact(f.result.params), ...(f.result.message !== undefined && { message: redact(f.result.message) }) }
-            res.write(`data: ${JSON.stringify(row)}\n\n`)
-          } else if (f.status === 'err') note(String(redact(f.message ?? 'error')))
+          const f = JSON.parse(data.slice(6)) as { action?: string; status?: string; message?: string; result?: { kind?: string; sid?: string } }
+          if (f.action === 'inspector.row' && f.result) {
+            if (f.result.kind === 'read') await reading
+            if (!(f.result.kind === 'read' && sid && f.result.sid === sidHash(sid))) res.write(`data: ${JSON.stringify(f.result)}\n\n`)
+          } else if (f.status === 'err') note(f.message ?? 'error')
         }
       }
       note('target closed the stream')

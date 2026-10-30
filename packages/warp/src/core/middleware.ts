@@ -13,12 +13,13 @@ export interface HookEvents {
   command: { cmd: Command; action: string; status: 'ok' | ErrCode; sid: Sid | undefined; events: Event[]; ms: number }
   error: { cmd: Command; code: ErrCode; message: string }   // additionally, on any err outcome
   session: { sid: Sid; kind: 'created' | 'expired' }
+  read: { page: string; via: 'http' | 'mcp'; sid: Sid; rev: number; ms: number }   // an agent read a page snapshot
 }
 export type HookName = keyof HookEvents
 
 // ponytail: in-process listener sets, not channel-layer groups; move to the channel layer when hooks must cross processes.
 export class Hooks {
-  private fns: { [K in HookName]: Set<(e: HookEvents[K]) => unknown> } = { command: new Set(), error: new Set(), session: new Set() }
+  private fns: { [K in HookName]: Set<(e: HookEvents[K]) => unknown> } = { command: new Set(), error: new Set(), session: new Set(), read: new Set() }
   constructor(private onError: (hook: HookName, e: unknown) => void) {}
 
   on<K extends HookName>(name: K, fn: (e: HookEvents[K]) => unknown): () => void {

@@ -26,7 +26,7 @@ export interface ServerCtx {
   limiter: RateLimiter
   idempotency: IdempotencyCache
   log: Log
-  hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session', fn)
+  hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
   close(): void                    // stops this ctx's session watcher
 }

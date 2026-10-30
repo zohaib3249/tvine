@@ -42,7 +42,7 @@ class Refuse extends Error {
 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
-const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
+export const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
 
 // JSON.parse accepts any depth; recursive consumers (hash, clone, zod) then blow the stack.
 function tooDeep(v: unknown, max = 64): boolean {
@@ -202,6 +202,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
     setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
+    const t0 = performance.now()
     const session = (ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined) ?? sessions.create()
     const q = new URLSearchParams(u.searchParams)
     q.delete('sid'); q.delete('format')
@@ -217,6 +218,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       return 304
     }
     res.setHeader('cache-control', 'private, no-cache')
+    server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms: Math.round(performance.now() - t0) })
     return reply(200, [ev.snapshot(snap)])
   }
 

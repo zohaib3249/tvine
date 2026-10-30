@@ -9,7 +9,7 @@ const target = args[0] ?? 'http://localhost:3000'
 
 try {
   const ins = await startInspector({ target, port })
-  console.error(`tvine inspect: ${ins.url} → ${target} (the target app must call attachInspector(server) for the traffic log)`)
+  console.error(`tvine inspect: ${ins.url} → ${target}`)
   const stop = () => void ins.close().then(() => process.exit(0))
   process.once('SIGINT', stop).once('SIGTERM', stop)
 } catch (e) {

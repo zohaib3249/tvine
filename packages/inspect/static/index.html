@@ -100,7 +100,7 @@ function row(r) {
   const li = el('li', r.status === 'ok' ? '' : 'err')
   const t = new Date(r.t).toTimeString().slice(0, 5)
   const params = Object.entries(r.params ?? {}).map(([k, v]) => k + '=' + (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')
-  li.append(t + ' ' + r.action + (params ? ' ' + params : '') + ' → ')
+  li.append(t + ' ' + r.action + (r.via ? '@' + r.via : '') + (params ? ' ' + params : '') + ' → ')
   li.append(el('span', r.status === 'ok' ? 'ok' : '', r.status))
   li.append((r.rev !== undefined ? ' rev=' + r.rev : '') + ' ' + r.ms + 'ms' + (r.sid ? ' sid#' + r.sid : ''))
   if (r.message) li.append(el('pre', '', (r.field ? r.field + ': ' : '') + r.message))
@@ -116,7 +116,12 @@ function logLi(li) {
 }
 
 const es = new EventSource('/api/log')
-es.onmessage = (m) => { const r = JSON.parse(m.data); lastHit = r.action; logLi(row(r)); loadSnapshot(); $('human').src = $('human').src }
+es.onmessage = (m) => {
+  const r = JSON.parse(m.data)
+  logLi(row(r))
+  if (r.kind === 'read') return   // a read changes nothing; refetching on it would only feed the log
+  lastHit = r.action; loadSnapshot(); $('human').src = $('human').src
+}
 es.addEventListener('note', (m) => logLi(el('li', 'note', JSON.parse(m.data).message)))
 
 $('go').onclick = () => go($('path').value)
