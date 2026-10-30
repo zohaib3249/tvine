@@ -15,10 +15,11 @@ export interface HookEvents {
   read: { page: string; via: 'http' | 'mcp'; sid: Sid; rev: number; ms: number }   // an agent read a page snapshot
 }
 export type HookName = keyof HookEvents
+const HOOK_NAMES: HookName[] = ['command', 'error', 'session', 'read']
 
 // ponytail: in-process listener sets, not channel-layer groups; move to the channel layer when hooks must cross processes.
 export class Hooks {
-  private fns: { [K in HookName]: Set<(e: HookEvents[K]) => unknown> } = { command: new Set(), error: new Set(), session: new Set(), read: new Set() }
+  private fns = Object.fromEntries(HOOK_NAMES.map((n) => [n, new Set()])) as { [K in HookName]: Set<(e: HookEvents[K]) => unknown> }
   constructor(private onError: (hook: HookName, e: unknown) => void) {}
 
   on<K extends HookName>(name: K, fn: (e: HookEvents[K]) => unknown): () => void {
@@ -49,6 +50,23 @@ export async function discoverMiddleware(appsDir: string): Promise<Map<string, M
     const list: unknown = (await importApp(file)).default
     if (!Array.isArray(list) || !list.every((f) => typeof f === 'function')) throw new Error(`${file}: default export must be an array of functions`)
     out.set(app, list as Middleware[])
+  }
+  return out
+}
+
+// apps/<app>/hooks.ts: every exported function is a receiver named after its hook (`export function command(e) {…}`),
+// registered at boot like Django signal receivers connected in AppConfig.ready().
+export async function discoverHooks(appsDir: string): Promise<[HookName, (e: never) => unknown][]> {
+  const out: [HookName, (e: never) => unknown][] = []
+  for (const app of (await readdir(appsDir)).sort()) {
+    if (!(await stat(join(appsDir, app)).catch(() => null))?.isDirectory()) continue
+    const file = appModule(join(appsDir, app), 'hooks')
+    if (!file) continue
+    for (const [name, fn] of Object.entries(await importApp(file))) {
+      if (typeof fn !== 'function') continue   // shared constants are fine; an exported function must be a receiver
+      if (!HOOK_NAMES.includes(name as HookName)) throw new Error(`${file}: "${name}" is not a hook (${HOOK_NAMES.join(', ')}); export one function per hook name`)
+      out.push([name as HookName, fn as (e: never) => unknown])
+    }
   }
   return out
 }

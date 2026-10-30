@@ -4,7 +4,7 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": { "tvine": "dist/cli.js" },
+  "bin": { "tvine": "bin/tvine.js" },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

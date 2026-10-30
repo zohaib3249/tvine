@@ -39,6 +39,7 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
   constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
+  get reason() { return this.status === 403 ? 'forbidden' : undefined }
 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
@@ -188,7 +189,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (res.headersSent) { res.destroy(); status = 500 }
       else if (e instanceof Refuse) {
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
-        const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }) }
+        const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
         status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })

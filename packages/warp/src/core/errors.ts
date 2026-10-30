@@ -20,3 +20,8 @@ export const recovery: Record<ErrCode, string> = {
   domain: 'the message above is the business rule; change the input or choose another option',
   internal: 'server error; retry once, then re-read the page',
 }
+// err domain with reason 'forbidden' (route guards, permissions, cross-origin): no input change helps
+const FORBIDDEN = 'not allowed for this session; do not retry it, choose another page or action'
+export const recoveryOf = (e: { code: ErrCode; reason?: string }): string =>
+  e.code === 'domain' && e.reason === 'forbidden' ? FORBIDDEN : recovery[e.code]
+export const RECOVERIES: string[] = [...new Set([...Object.values(recovery), FORBIDDEN])]
