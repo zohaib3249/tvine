@@ -4,7 +4,8 @@
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
 import { DomainError } from '../core/errors.js'
-import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission, type PermissionCtx } from '../core/types.js'
+import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
+import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
 import { hasDefault, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
@@ -78,7 +79,7 @@ function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
 }
 
 // zod failure → DomainError invalid_param naming the offending param
-function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOnly?: Set<string>): Record<string, unknown> {
+export function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOnly?: Set<string>): Record<string, unknown> {
   const input = url && raw && typeof raw === 'object'
     ? Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== '' && v !== undefined))   // empty form field = absent
     : raw
@@ -91,14 +92,6 @@ function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOnly?: Se
   throw new DomainError('invalid_param', msg, field)
 }
 
-// PermissionCtx from an ActionCtx (shared by checkPermissions and the page helper)
-function permissionCtx(ctx: ActionCtx, action: ActionId): PermissionCtx {
-  const r = ctx.request
-  return { sid: ctx.sid, session: ctx.session, action, route: r?.route ?? '', user: r?.user ?? ANONYMOUS, agent: r?.agent, ip: r?.ip ?? '' }
-}
-async function runPermissions(perms: Permission[], pctx: PermissionCtx): Promise<void> {
-  for (const p of perms) if (!(await p(pctx))) throw new DomainError('forbidden', `not allowed: ${pctx.action}`)
-}
 
 // ---- GenericView ----------------------------------------------------------------------------------
 export type GeneratedAction = 'list' | 'get' | 'create' | 'update' | 'delete'

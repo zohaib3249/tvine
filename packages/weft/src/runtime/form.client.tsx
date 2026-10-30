@@ -1,6 +1,7 @@
 'use client'
-import { createContext, startTransition, useActionState, useContext, useEffect, type ComponentType, type FormEvent, type ReactNode } from 'react'
+import { createContext, startTransition, useActionState, useContext, useEffect, useRef, type ComponentType, type FormEvent, type ReactNode } from 'react'
 import { submitForm } from './submit.js'
+import { newId } from './webmcp.js'
 import type { FormResult } from './dispatcher.js'
 
 export type Spec = { name: string; type: string; required: boolean; array: boolean }
@@ -36,11 +37,14 @@ function toParams(fd: FormData, specs: Spec[]): Record<string, unknown> {
 export function FormClient({ action, bind, specs, disabled, id, className, children }: {
   action: string; bind: string; specs: Spec[]; disabled?: boolean; id?: string; className?: string; children: ReactNode
 }) {
+  // One cmdId per attempt: a double submit before the result lands reuses it, so the server
+  // runs the handler once; it is cleared when a result arrives (next submit = new attempt).
+  const cmdId = useRef('')
   const [state, run, pending] = useActionState(
-    (_: FormResult, fd: FormData) => submitForm({ action, bind: bind || undefined, params: toParams(fd, specs) }),
+    (_: FormResult, fd: FormData) => submitForm({ action, bind: bind || undefined, params: toParams(fd, specs), cmdId: (cmdId.current ||= newId()) }),
     { ok: true },
   )
-  useEffect(() => { if (state.goto) window.location.assign(state.goto) }, [state])
+  useEffect(() => { cmdId.current = ''; if (state.goto) window.location.assign(state.goto) }, [state])
   // onSubmit + preventDefault: React skips its auto form-reset, so typed values survive an
   // error re-render. `action={run}` lets Next serialize the server action for pre-hydration
   // submits; plain react-dom SSR (no Next) renders a `javascript:throw` placeholder instead.

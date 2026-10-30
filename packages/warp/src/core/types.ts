@@ -145,6 +145,7 @@ export interface ActionRules {
   priority?: boolean                // transport-mcp.md: kept in trimmed MCP tool list
   readOnly?: boolean                // MCP readOnlyHint
   destructive?: boolean             // MCP destructiveHint
+  atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
@@ -169,6 +170,7 @@ export interface Settings {
   db: {
     url: string
     pool: { max: number; acquireMs: number; idleMs: number }
+    atomicRequests: boolean         // Django ATOMIC_REQUESTS: each non-readOnly action = one transaction
   }
   logging: 'json' | 'pretty' | 'none'
   audit: boolean                    // v1.1

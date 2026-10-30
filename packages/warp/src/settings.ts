@@ -40,7 +40,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   media: { dir: './media', route: '/media' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
   // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
-  db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 } },
+  db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
   logging: 'json',
   audit: false,
 }
@@ -69,6 +69,7 @@ const schema: z.ZodType<Settings> = z.object({
   db: z.object({
     url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),
     pool: z.object({ max: posInt, acquireMs: posInt, idleMs: posInt }),
+    atomicRequests: z.boolean(),
   }),
   logging: z.enum(['json', 'pretty', 'none']),
   audit: z.boolean(),
