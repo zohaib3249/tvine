@@ -7,6 +7,7 @@ import { applyOverrides, WeftError } from '../widget/hooks.js'
 import { joinId, segmentOf } from '../widget/ids.js'
 import { WidgetScopeCtx, chainOf, useScopeValue } from '../widget/scope.js'
 import type { AgentState, AutoChild, Control, ControlCtx, Json, WidgetSpec } from '../widget/types.js'
+import { agentNavigate } from '../runtime/nav.js'
 import { inputType, labelOf, nameOf, offByProps, roleOf, safeHref, sensitive, textOf, type Props } from './qualify.js'
 
 // jsx-runtime.md: the client wrapper the JSX runtime puts around every qualifying intrinsic (also
@@ -102,7 +103,9 @@ const key = (k: string, el: Element) => el.dispatchEvent(new KeyboardEvent('keyd
 
 function controlsOf(tag: string, role: string, p: Props, secret: boolean): Record<string, C> {
   switch (tag) {
-    case 'a': if (safeHref(p.href)) return { navigate: { kind: 'navigate', headless: { url: p.href }, run: click.run } }; break
+    // navigate: same-site check, then the real click (handlers + Next <Link> transition), then settle. Off-site is refused.
+    case 'a': if (safeHref(p.href)) { const href = p.href; return { navigate: { kind: 'navigate', headless: { url: href },
+      run: async (_, c) => { await agentNavigate(href, c.signal, async () => (await elOf(c)).click()) } } } } break
     case 'textarea': return typing(secret)
     case 'select': return { select: choose(p) }
     case 'form': return { submit: { kind: 'submit', run: async (_, c) => { (await elOf<HTMLFormElement>(c)).requestSubmit() } } }

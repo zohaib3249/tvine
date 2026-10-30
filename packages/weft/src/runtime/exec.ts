@@ -4,6 +4,7 @@ import { listed } from '../widget/vocabulary.js'
 import { getOverlay, POINTED } from '../presence/overlay.js'
 import { agentState } from './fragment.js'
 import { getRegistry, type Entry } from './registry.client.js'
+import { agentNavigate } from './nav.js'
 
 // control-protocol.md: the in-tab executor. A `ui` command = steps run in order, stop at the first
 // failure, nothing undone; the result lists exactly the steps that ran. Every step goes through
@@ -116,7 +117,9 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     try {
       if (POINTED.has(c.kind)) await presence.point(e.el)
       const call = callControl(target, control, args, {
-        via: o.via, cmdId, step: i, signal, presence, agent: o.agent, navigate: o.navigate,
+        via: o.via, cmdId, step: i, signal, presence, agent: o.agent,
+        // In-tab navigate: same-site client transition, resolves after the new page settles (navigation-spa.md).
+        navigate: o.navigate ?? (async (href) => { await agentNavigate(href, signal) }),
         ...(o.run && { run: (h, p) => o.run!(h, p ?? {}, `${cmdId}.${i}`) }),
       })
       hold(call)
