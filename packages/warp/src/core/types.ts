@@ -155,6 +155,7 @@ export interface ActionRules {
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
+  humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).

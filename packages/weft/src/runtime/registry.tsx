@@ -1,6 +1,7 @@
 import 'server-only'
 import type { ReactElement } from 'react'
 import type { ActionDef, ActionRef, Link, Node } from '../types.js'
+import type { ActionHandle } from '../widget/types.js'
 
 // Inline-fragment contract (runtime-registry.md banner): every registration renders its own
 // <script type="text/tvine"> next to itself. The server extractor collects all fragments in
@@ -56,6 +57,30 @@ export function bindFor(payload?: Record<string, unknown>): string {
 // payload so a bind for A can't be replayed against B (dispatcher checks $action === cmd.action).
 export function pairBind(action: string, payload?: Record<string, unknown>): Record<string, unknown> | undefined {
   return payload && { ...payload, $action: action }
+}
+
+// What bindAction reads from a warp ActionDef's rules (structural: weft does not import warp).
+type HandleRules = {
+  bind?: readonly string[]; permissions?: readonly unknown[]; mcp?: boolean
+  readOnly?: boolean; destructive?: boolean; humanAttention?: true | string
+}
+const AGENTS_DENIED = Symbol.for('tvine.denyAgents')   // warp security/permissions.ts static tag
+
+// widget-contract.md §ActionHandle: the signed-bind seam, server only (needs the signer). Plain JSON, so
+// it crosses the RSC boundary as a prop. Bind-only params are never advertised. `agent:false` for
+// denyAgents / mcp:false actions is a static UX tag — dispatch still enforces the permission.
+export function bindAction(def: ActionDef, bind?: Record<string, unknown>): ActionHandle {
+  const r = (def.rules ?? {}) as HandleRules
+  const denied = r.mcp === false || !!r.permissions?.some((p) => !!(p as { [AGENTS_DENIED]?: true })?.[AGENTS_DENIED])
+  return {
+    id: def.id,
+    params: paramSpecs(def.schema).filter((p) => !r.bind?.includes(p.name)),
+    bind: bindFor(pairBind(def.id, bind)),
+    agent: !denied,
+    ...(r.readOnly && { ro: true as const }),
+    ...(r.destructive && { danger: true as const }),
+    ...(r.humanAttention && { attention: r.humanAttention }),
+  }
 }
 
 // `<` → < so no data string can close the tag.

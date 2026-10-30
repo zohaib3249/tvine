@@ -52,18 +52,25 @@ export interface CallOptions {
 
 const NO_PRESENCE: Presence = { point: async () => {}, type: async () => {}, say: () => {} }
 
-// Target first, then each registered ancestor, then <WeftRoot hooks>.
+// Target first, then each registered ancestor in its mount's scope chain, then <WeftRoot hooks>.
 function chain(reg: Registry, e: Entry): WidgetHooks[] {
   const out: WidgetHooks[] = []
-  for (let cur: Entry | undefined = e, n = 0; cur && n < 256; cur = reg.get(cur.parent), n++) if (cur.spec.hooks) out.push(cur.spec.hooks)
+  if (e.spec.hooks) out.push(e.spec.hooks)
+  for (const p of ancestors(reg, e)) { const h = reg.get(p)?.spec.hooks; if (h) out.push(h) }
   for (const r of reg.roots) if (r.hooks) out.push(r.hooks)
   return out
 }
 
-function isUnder(reg: Registry, e: Entry, ancestor: string): boolean {
-  for (let p = e.parent, n = 0; p && n < 256; p = reg.get(p)?.parent ?? '', n++) if (p === ancestor) return true
-  return false
+// The mount's own scope chain (through RSC containers, which have no hooks but may sit inside a client
+// widget that does). Entries registered without one (tests, hand-made) walk registered parents.
+function ancestors(reg: Registry, e: Entry): readonly string[] {
+  if (e.chain) return e.chain
+  const out: string[] = []
+  for (let p = e.parent, n = 0; p && n < 256; p = reg.get(p)?.parent ?? '', n++) out.push(p)
+  return out
 }
+
+const isUnder = (reg: Registry, e: Entry, ancestor: string): boolean => ancestors(reg, e).includes(ancestor)
 
 // One agent call on one widget: lookup → onAgentAction (target → root) → re-lookup → run →
 // afterAgentAction (always, with the outcome, veto included). Missing target, missing control and
