@@ -9,8 +9,10 @@ import type { Op } from '../queryset.js'
 // (0.29*100 = 28.999… rounds to 29, and 29/100 is the same double as 0.29); anything finer does not.
 // ponytail: every currency gets 2 minor digits; JPY (0) and KWD/BHD (3) are not handled yet —
 // add a per-currency exponent table when a non-2-digit currency ships.
+// ponytail: amounts capped below 1e12 (a trillion); past ~2^43 major units a JS float can't hold
+// every cent exactly — move to string/bigint amounts if anyone needs more.
 const isMajor = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isSafeInteger(Math.round(v * 100)) && Math.round(v * 100) / 100 === v
+  typeof v === 'number' && Math.abs(v) < 1e12 && Math.round(v * 100) / 100 === v
 const toCents = (v: unknown): number => {
   if (!isMajor(v)) throw new DomainError('invalid_param', `money value must be a number with at most 2 decimals, got ${JSON.stringify(v) ?? String(v)}`)
   return Math.round(v * 100)
@@ -33,6 +35,7 @@ export class MoneyField extends Field<Money, boolean, 'money', boolean> {
     return row[name] == null ? null : { value: (row[name] as number) / 100, currency: row[`${name}Currency`] as string }
   }
   lookup(op: Op, col: Expr, value: unknown, d: Dialect): Expr {
+    if (op === 'contains') throw new DomainError('invalid_param', 'money does not support contains')   // cents text: "29" would match 2900
     const both = value != null && typeof value === 'object' && !Array.isArray(value)
     if ((op === 'eq' || op === 'ne') && both) {
       const [cents, cur] = this.toDb(value)

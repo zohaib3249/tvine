@@ -61,9 +61,11 @@ function parseLookup(l: string): { field: string; op: Op | undefined } {
 const num = z.preprocess(v => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v), z.number())
 function valueSchema(f: AnyField): z.ZodTypeAny {
   switch (f.kind) {
-    // money: major units ("30" = $30); the field's own value schema rejects >2 decimals here so the
-    // error names the URL param; the field's lookup()/toDb converts to cents
-    case 'money': return num.refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
+    // money: major units ("30" = $30). A URL string must be plain decimal (no 0x1E / 1e1 / 29.999…9
+    // that Number() would round); the field's value schema then checks numbers sent as JSON.
+    // The field's lookup()/toDb converts to cents.
+    case 'money': return z.preprocess(v => (typeof v === 'string' && /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : v), z.number())
+      .refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
     case 'id': case 'int': case 'float': return num
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
@@ -306,7 +308,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     if (!gv.model?.fields) fail('needs `model = SomeModel`')
     const model = gv.model
     const need = (what: string, f: string) => fieldNamed(model, f) ?? fail(`${what} "${f}": no field "${f}" on model ${model.name}`)
-    for (const f of effectiveSearch(gv)) need('searchFields', f)
+    for (const f of effectiveSearch(gv)) if (need('searchFields', f).kind === 'money') fail(`searchFields "${f}": a money field cannot be searched`)
     for (const f of gv.ordering) need('ordering', f)
     const lookupF = need('lookupField', gv.lookupField)
     const lookups: z.ZodRawShape = {}
