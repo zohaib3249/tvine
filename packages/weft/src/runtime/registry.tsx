@@ -68,7 +68,8 @@ function fragment(body: Record<string, unknown>): ReactElement {
 export function register({ id, type, data, actions = [], ...f }: RegisterInput): ReactElement {
   const node: Node = {
     id, type, data,
-    actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema), bind: bindFor(pairBind(a.def.id, a.bindPayload)) })),
+    // rules.bind keys come only from the signed bind: not advertised (as warp's paramSpecs and MCP)
+    actions: actions.map((a) => ({ id: a.def.id, params: paramSpecs(a.def.schema).filter((p) => !a.def.rules?.bind?.includes(p.name)), bind: bindFor(pairBind(a.def.id, a.bindPayload)) })),
   }
   return fragment({ k: 'node', node, ...flags(f) })
 }

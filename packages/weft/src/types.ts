@@ -15,7 +15,7 @@ export interface Node {
 export interface Link { id: string; href: string; label: string; params?: string[] }
 
 // Only what the registry reads; any real warp ActionDef is assignable.
-export interface ActionDef { id: string; schema: unknown }
+export interface ActionDef { id: string; schema: unknown; rules?: { bind?: readonly string[] } }
 
 export interface AgentSpec {
   id?: string

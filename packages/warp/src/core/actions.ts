@@ -85,11 +85,13 @@ function paramType(t: z.ZodTypeAny): string {
   return 'json'
 }
 
-// Pure: ActionRef params from a def's zod object schema (weft / MCP / snapshot use it too).
-export function paramSpecs(def: Pick<ActionDef, 'schema'>): ActionRef['params'] {
+// Pure: ActionRef params from a def's zod object schema (weft / MCP / snapshot use it too). rules.bind keys
+// come only from the signed bind (dispatch refuses them as params), so they are not advertised.
+export function paramSpecs(def: Pick<ActionDef, 'schema' | 'rules'>): ActionRef['params'] {
   const schema = def.schema
   if (!(schema instanceof z.ZodObject)) return []
-  return Object.entries(schema.shape as Record<string, z.ZodTypeAny>).map(([name, f]) => {
+  const bound = def.rules?.bind ?? []
+  return Object.entries(schema.shape as Record<string, z.ZodTypeAny>).filter(([name]) => !bound.includes(name)).map(([name, f]) => {
     let inner = f
     let required = true
     for (;;) {
@@ -135,7 +137,7 @@ export class ActionManifest {
     const perms = [...(appRules.permissions ?? []), ...(mine.permissions ?? [])]
     if (perms.length) rules.permissions = perms
     checkRate(`action ${id}`, rules.rate)
-    const names = new Set(paramSpecs(def).map((p) => p.name))
+    const names = new Set(paramSpecs({ schema: def.schema }).map((p) => p.name))
     for (const k of rules.bind ?? []) if (!names.has(k)) throw new Error(`action ${id}: bind key "${k}" is not a param of its schema`)
     qualified.set(def, id)
     def.id = id
