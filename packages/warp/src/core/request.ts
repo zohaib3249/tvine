@@ -6,8 +6,10 @@ export interface HttpSource { req: IncomingMessage; route: string; isAgent: bool
 export interface McpSource {
   url: string                                // the tool's url arg, may carry ?query
   route: string
-  headers?: Record<string, string>
-  ip?: string
+  headers: Record<string, string>
+  // MCP ip bypasses trustProxy: the MCP transport must derive it from its own HTTP request
+  // via clientIp(). Required and non-empty: '' would put every MCP caller on one rate-limit key.
+  ip: string
   clientInfo?: { name?: string }
   isAgent?: boolean
 }
@@ -32,11 +34,24 @@ function parseParams(route: string, path: string): Record<string, string> {
   return out
 }
 
+// Strip whitespace, port, brackets; unmap ::ffff:a.b.c.d. Keeps rate-limit keys stable per client.
+function normalizeIp(raw: string): string {
+  let a = raw.trim()
+  const br = /^\[([^\]]+)\](?::\d+)?$/.exec(a)
+  if (br) a = br[1]!
+  else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(a)) a = a.slice(0, a.lastIndexOf(':'))
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(a)
+  return m ? m[1]! : a
+}
+
 // Walk X-Forwarded-For right-to-left exactly `hops` steps; never trust entries further left.
-function clientIp(xff: string | null, remote: string, hops: number): string {
-  if (hops <= 0 || !xff) return remote
+// Fewer entries than hops -> socket address: DELIBERATE fail-closed (the leftmost entry would
+// hand the rate-limit key to a client hitting us directly).
+export function clientIp(xff: string | null, remote: string, hops: number): string {
+  if (hops <= 0 || !xff) return normalizeIp(remote)
   const parts = xff.split(',').map(s => s.trim()).filter(Boolean)
-  return parts[parts.length - hops] ?? remote
+  const pick = parts[parts.length - hops]
+  return normalizeIp(pick ?? remote)
 }
 
 function requestId(h: ReadonlyHeaders): string {
@@ -50,8 +65,9 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
   const isHttp = 'req' in src
   const rawUrl = isHttp ? (src.req.url ?? '/') : src.url
   const u = new URL(rawUrl, 'http://tvine.local')
-  const headers = readonlyHeaders(isHttp ? src.req.headers : (src.headers ?? {}))
-  const remote = isHttp ? (src.req.socket.remoteAddress ?? '') : (src.ip ?? '')
+  const headers = readonlyHeaders(isHttp ? src.req.headers : src.headers)
+  const remote = isHttp ? (src.req.socket.remoteAddress ?? '') : src.ip
+  if (!isHttp && !remote.trim()) throw new Error('McpSource.ip is required (derive it with clientIp)')
   const request: Request = {
     method: isHttp && src.req.method === 'GET' ? 'GET' : 'POST',
     path: u.pathname,
@@ -59,7 +75,7 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
     params: parseParams(src.route, u.pathname),
     query: u.searchParams,
     headers,
-    ip: isHttp ? clientIp(headers.get('x-forwarded-for'), remote, settings.trustProxy) : remote,
+    ip: isHttp ? clientIp(headers.get('x-forwarded-for'), remote, settings.trustProxy) : normalizeIp(remote),
     id: requestId(headers),
     agent: isHttp
       ? { is: src.isAgent, via: src.isAgent ? 'http' : 'human', client: headers.get('user-agent') ?? undefined }
