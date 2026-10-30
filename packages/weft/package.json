@@ -27,6 +27,11 @@
       "types": "./dist/api/client.d.ts",
       "default": "./dist/api/client.js"
     },
+    "./widgets": {
+      "types": "./dist/widgets/index.d.ts",
+      "import": "./dist/widgets/index.js",
+      "default": "./dist/widgets/index.js"
+    },
     "./jsx-runtime": {
       "types": "./dist/jsx/jsx-runtime.d.ts",
       "default": "./dist/jsx/jsx-runtime.js"
