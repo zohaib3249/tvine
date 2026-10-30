@@ -80,6 +80,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const port = o.port === undefined ? Number(process.env.PORT ?? 3000) : Number(o.port)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const dev = cmd === 'dev'
+        if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : frontend() })
         await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
         io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)

@@ -78,6 +78,8 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
 }
 
 export async function createAgentServer(opts: AgentServerOptions = {}): Promise<AgentServer> {
+  // next dev in production = unoptimized builds, HMR and dev error overlays served to real users
+  if (opts.dev && process.env.NODE_ENV === 'production') throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
   // 1. settings (zod; missing TVINE_SECRET in prod throws). Boot lines go to stderr (stdout stays CLI output).
   const settings = await loadSettings(opts.settings)
   const say = (msg: string, level: 'info' | 'warn' = 'info') => {
