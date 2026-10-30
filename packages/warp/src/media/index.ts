@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises'
 import { nanoid } from 'nanoid'
 import { z } from 'zod'
 import { defineAction, DomainError } from '../core/actions.js'
-import type { ActionDef, ActionRules, UploadedFile } from '../core/types.js'
+import type { ActionDef, ActionRules, Settings, UploadedFile } from '../core/types.js'
 
 export interface Storage {
   put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void>
@@ -63,16 +63,21 @@ export class DiskStorage implements Storage {
 
 type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
 export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions'] }
-export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types' | 'storage'>> }
+export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage'> }
+type Media = Settings['media']
+
+// The def's own storage, else disk at settings.media (known only once the server runs, so resolved per use).
+export const storageOf = (def: UploadDef, media: Media = { dir: './media', route: '/media' }): Storage =>
+  def.upload.storage ?? new DiskStorage(media.dir, media.route)
 
 // Returns an ordinary ActionDef (JSON/base64 path via `file: {base64}`); transports call
-// receiveUpload(stream, def, {field}) directly for multipart.
+// receiveUpload(stream, def, {field, media}) directly for multipart.
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
-  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage ?? new DiskStorage('./media', '/media') }
+  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage }
   const rules: UploadRules = { rate: opts.rate ?? { limit: 5, windowMs: 60_000 }, ...(opts.permissions && { permissions: opts.permissions }) }
   const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
     // multipart: transport-http already streamed the file into storage (request.files is transport-only)
-    ctx.request.files.find((f) => f.field === 'file') ?? receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file' }), rules)
+    ctx.request.files.find((f) => f.field === 'file') ?? receiveUpload(p.file as { base64: string }, def as UploadDef, { field: 'file', media: ctx.settings.media }), rules)
   return Object.assign(def, { upload }) as UploadDef
 }
 
@@ -92,9 +97,10 @@ const tooLarge = (max: number) => new DomainError('too_large', `file exceeds ${m
 
 export async function receiveUpload(
   src: Readable | { base64: string },
-  def: UploadDef, meta: { field: string },
+  def: UploadDef, meta: { field: string; media?: Media },
 ): Promise<UploadedFile> {
-  const { maxBytes, types, storage } = def.upload
+  const { maxBytes, types } = def.upload
+  const storage = storageOf(def, meta.media)
   const field = meta.field
   let source: Readable
   if (src instanceof Readable) source = src

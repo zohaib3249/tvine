@@ -7,7 +7,7 @@ import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.j
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
-import { receiveUpload, type UploadDef } from '../media/index.js'
+import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
 import { render, snapshotOf, type Ctx, type Format } from '../serialize/envelope.js'
 import type { RouteInfo } from './discovery.js'
@@ -128,7 +128,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       const f = upload.file
       if (!f || upload.keep) return
       upload.file = undefined
-      await upload.def!.upload.storage.delete(f.key)
+      await storageOf(upload.def!, settings.media).delete(f.key)
         .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
     }
     const reply = (status: number, events: Event[], headers: Record<string, string> = {}) => {
@@ -319,7 +319,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!d || !('upload' in d)) throw new Refuse(400, 'invalid_param', 'the action field must come before the file and name an upload action', 'action')
       def = d as UploadDef
       cap = textCap + def.upload.maxBytes
-      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file' }); upload.def = def }
+      try { file = upload.file = await receiveUpload(Readable.from(body()), def, { field: 'file', media: settings.media }); upload.def = def }
       catch (e) {
         const c = (e as { code?: unknown }).code
         if (c === 'too_large') throw new Refuse(413, 'invalid_param', (e as Error).message, 'file')
