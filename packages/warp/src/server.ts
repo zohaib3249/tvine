@@ -65,10 +65,13 @@ const API_ROUTES: RouteInfo[] = [{ path: '/' }]
 const pathOf = (req: IncomingMessage) => (req.url ?? '/').split('?')[0]!
 const STAMP = 'x-tvine-ip'   // `<boot nonce>:<https 0|1>:<socket ip per trustProxy>`, set by our handler only
 
-// A module of the APP (warp does not depend on next), imported dynamically from cwd.
+// How a module of the APP is found (warp does not depend on next). Replaceable: under pnpm, NODE_PATH can
+// make a hoisted `next` resolvable from anywhere, so tests inject "not installed" instead of relying on it.
+export const appResolver = { resolve: (spec: string): string => createRequire(join(process.cwd(), 'package.json')).resolve(spec) }
+
 async function fromApp<T>(spec: string): Promise<T> {
   let url: string
-  try { url = pathToFileURL(createRequire(join(process.cwd(), 'package.json')).resolve(spec)).href }
+  try { url = pathToFileURL(appResolver.resolve(spec)).href }
   catch { throw new Error(`"${spec}" cannot be found from ${process.cwd()}: install next (pnpm add next)`) }
   return (await import(url)) as T
 }
