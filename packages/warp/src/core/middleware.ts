@@ -9,8 +9,9 @@ import type { Command, ErrCode, Event, Middleware, Sid } from './types.js'
 export type { Middleware }
 
 export interface HookEvents {
-  command: { cmd: Command; events: Event[]; ms: number }   // a committed (ok) command
-  error: { cmd: Command; code: ErrCode; message: string }   // any err outcome (nothing committed)
+  // every dispatch, after it settled (an ok only after commit; a middleware short-circuit implies no commit)
+  command: { cmd: Command; action: string; status: 'ok' | ErrCode; sid: Sid | undefined; events: Event[]; ms: number }
+  error: { cmd: Command; code: ErrCode; message: string }   // additionally, on any err outcome
   session: { sid: Sid; kind: 'created' | 'expired' }
 }
 export type HookName = keyof HookEvents

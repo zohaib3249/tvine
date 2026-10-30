@@ -54,10 +54,10 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
 export async function* dispatch(cmd: Command, server: ServerCtx, request: Request): AsyncIterable<Event> {
   const t0 = performance.now()
   const events = await run(cmd, server, request)
-  // hooks see settled outcomes only: an ok was committed, an err committed nothing
+  // hooks fire once run() settled, so an ok is always after its commit
   const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+  server.hooks.emit('command', { cmd, action: cmd.action, status: err?.code ?? 'ok', sid: cmd.sid, events, ms: Math.round(performance.now() - t0) })
   if (err) server.hooks.emit('error', { cmd, code: err.code, message: err.message })
-  else server.hooks.emit('command', { cmd, events, ms: Math.round(performance.now() - t0) })
   yield* events
 }
 
