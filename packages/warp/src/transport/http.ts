@@ -3,14 +3,15 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
-import { collect, dispatch, renderCtx, type ServerCtx } from '../core/dispatch.js'
+import { collect, dispatch, rateLimited, renderCtx, type ServerCtx } from '../core/dispatch.js'
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
-import { render, snapshotOf, type Ctx, type Format } from '../serialize/envelope.js'
+import { render, snapshotOf, type Ctx, type ExpandOpt, type Format, type ViewOpt } from '../serialize/envelope.js'
+import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import type { RouteInfo } from './discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { routeMatcher } from './routes.js'
@@ -36,6 +37,9 @@ const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limite
 const TYPE: Record<Format, string> = { json: 'application/json; charset=utf-8', notation: 'text/plain; charset=utf-8' }
 const BASE = 'http://tvine.local'
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const VIEWS = new Set(['auto', 'full', 'L1', 'L0'])
+const uiBody = uiInput.omit({ url: true })
+type UiBody = { ui: unknown; sid?: string }
 
 // Transport-level refusal (bad body, too large, not found, guarded): answered without dispatch.
 class Refuse extends Error {
@@ -115,7 +119,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const hdr = { get: (n: string) => { const v = req.headers[n.toLowerCase()]; return Array.isArray(v) ? v.join(', ') : v ?? null } }
     const id = requestId(hdr)
     res.setHeader('x-request-id', id)
-    res.setHeader('vary', `${settings.header}, accept`)
+    res.setHeader('vary', `${settings.header}, accept, x-tvine-view, x-tvine-expand, x-tvine-offset, x-tvine-limit`)
     const u = new URL(req.url ?? '/', BASE)
     let format: Format = settings.formats.default
     let request: Request | undefined
@@ -133,12 +137,14 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       await storageOf(upload.def!, settings.media).delete(f.key)
         .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
     }
+    let shape: { view?: ViewOpt; expand?: ExpandOpt } = {}
     const reply = (status: number, events: Event[], headers: Record<string, string> = {}) => {
+      for (const e of events) if (e.kind === 'snapshot') sessions.remember(e.snapshot)   // expand serves from it
       sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
       setCookie(req, res, sid)
       const shown = reveal ? events : events.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
-      res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' } }))
+      res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape }))
       return status
     }
     let status = 0
@@ -172,9 +178,21 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
       await guard(raw, request, known)
       if (isGet) {
-        status = await agentGet(req, res, request, u, format, ctx, (c) => { ctx = c }, reply)
+        shape = getShape(req)
+        status = await agentGet(req, res, request, u, format, ctx, shape, (c) => { ctx = c }, reply)
       } else {
-        const cmd = await readCommand(req, request, sidKey ?? undefined, upload)
+        const got = await readCommand(req, request, sidKey ?? undefined, upload)
+        if ('ui' in got) {
+          if (got.sid !== undefined) reveal = true
+          action = 'ui'
+          const out = await headlessUi(got, request, raw, cookie)
+          ctx = out.ctx
+          const err = out.events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+          const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
+          status = reply(code, out.events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
+          return
+        }
+        const cmd = got
         action = cmd.action
         if (cmd.sid !== undefined) reveal = true
         const events = await collect(dispatch(cmd, server, request))
@@ -205,8 +223,47 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     }
   }
 
+  // x-tvine-view: auto|full|L1|L0 (bad value → auto); x-tvine-expand: <node id> (+ offset/limit)
+  const getShape = (req: IncomingMessage): { view?: ViewOpt; expand?: ExpandOpt } => {
+    const h = (n: string) => { const v = req.headers[n]; return typeof v === 'string' ? v : undefined }
+    const num = (n: string, lo: number, hi: number) => { const v = Number(h(n)); return Number.isInteger(v) && v >= lo && v <= hi ? v : undefined }
+    const id = h('x-tvine-expand')
+    if (id) return { expand: { id: id.slice(0, 500), offset: num('x-tvine-offset', 0, 1e6), limit: num('x-tvine-limit', 1, 100) } }
+    const v = h('x-tvine-view')
+    return v && VIEWS.has(v) ? { view: v as ViewOpt } : {}
+  }
+
+  // POST {ui: UiCommand}: headless ui on this page (core/ui.ts); later steps may only change the query.
+  async function headlessUi(body: UiBody, request: Request, raw: string, cookie: string | undefined): Promise<{ events: Event[]; ctx: Ctx }> {
+    const page0 = request.path + (request.query.size ? `?${request.query}` : '')
+    const p = uiBody.safeParse(body.ui)
+    const steps = p.success ? stepsOf(p.data) : undefined
+    if (!p.success || !steps) {
+      const i = p.success ? undefined : p.error.issues[0]
+      throw new Refuse(400, 'invalid_param', i ? `ui.${i.path.join('.')}: ${i.message}` : 'ui needs target + control, or steps', 'ui')
+    }
+    const sidKey = body.sid ?? p.data.sid
+    const session = sessions.resolve({ sid: sidKey, cookie: sidKey === undefined ? cookie : undefined }) ?? sessions.create()
+    const ctx = { sid: session.sid, rev: session.rev, page: page0 }
+    const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
+    if (!rl.ok) return { ctx, events: [rateLimited(rl.retryAfterMs)] }
+    const at = async (pg: string) => {
+      const u = new URL(pg, BASE)
+      if (u.origin !== new URL(BASE).origin || u.pathname !== request.path) return undefined   // ponytail: same path only (url maps change the query)
+      const r = { ...request, query: new URLSearchParams(u.searchParams) }
+      return (await allowed(decodeURIComponent(raw), r, session)) ? r : undefined
+    }
+    try {
+      const out = await runUi(server, steps, p.data, { session, page: page0, request: at })
+      return { events: out.events, ctx: { ...ctx, rev: session.rev, page: out.page } }
+    } catch (e) {
+      if (e instanceof Goto) return { ctx, events: [ev.goto(e.url)] }
+      throw e
+    }
+  }
+
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
-    setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
+    shape: { view?: ViewOpt; expand?: ExpandOpt }, setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
     const t0 = performance.now()
     const known = ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined
     const session = known ?? sessions.create()
@@ -215,12 +272,21 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const page = request.path + (q.size ? `?${q}` : '')
     setCtx({ sid: session.sid, rev: session.rev, page })
     let snap
-    try { snap = await server.snapshot(page, session.sid) } catch (e) {
+    try { snap = shape.expand ? await pageSnapshot(server, session.sid, page) : await server.snapshot(page, session.sid) } catch (e) {
       if (!known) { sessions.delete(session.sid); setCtx({ sid: '', rev: 0, page }) }   // a refused render or a redirect leaves no session and no cookie
       if (e instanceof Goto) return reply(200, [ev.goto(e.url)])
       throw e
     }
-    const etag = `"${createHash('sha1').update(format).update(JSON.stringify(snap)).digest('base64url')}"`
+    if (shape.expand) {   // L2 from the session's cached snapshot; never cached by anyone else
+      const id = shape.expand.id
+      if (!hasNode(snap, id)) {   // the L0 map comes back to recover from (reply reads this same shape)
+        delete shape.expand
+        shape.view = 'L0'
+        return reply(400, [ev.err('unknown_action', `unknown node ${id.slice(0, 100)}; ids are in the map`, { snapshot: snap })])
+      }
+      return reply(200, [ev.snapshot(snap)])
+    }
+    const etag = `"${createHash('sha1').update(format).update(String(req.headers['x-tvine-view'] ?? '')).update(JSON.stringify(snap)).digest('base64url')}"`
     // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
     const ms = Math.round(performance.now() - t0)
     if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms }))
@@ -236,7 +302,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   }
 
   // JSON command, or multipart upload (file streamed through the media module, never buffered whole).
-  async function readCommand(req: IncomingMessage, request: Request, headerSid: string | undefined, upload: Upload): Promise<Command> {
+  async function readCommand(req: IncomingMessage, request: Request, headerSid: string | undefined, upload: Upload): Promise<Command | UiBody> {
     const ct = (req.headers['content-type'] ?? '').toLowerCase()
     const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(req.headers['content-type'] ?? '')
     if (mp) {
@@ -257,6 +323,10 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     let body: unknown
     try { body = JSON.parse(raw.toString('utf8')) } catch { throw new Refuse(400, 'invalid_param', 'body is not valid JSON') }
     if (tooDeep(body)) throw new Refuse(400, 'invalid_param', 'body is nested too deeply')
+    if (isPlain(body) && 'ui' in body && !('action' in body)) {
+      if (body.sid !== undefined && typeof body.sid !== 'string') throw new Refuse(400, 'invalid_param', 'sid must be a string', 'sid')
+      return { ui: body.ui, sid: (body.sid as string | undefined) ?? headerSid }
+    }
     return toCommand(body, headerSid)
   }
 
