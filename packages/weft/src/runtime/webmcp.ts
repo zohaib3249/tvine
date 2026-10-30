@@ -1,11 +1,21 @@
 'use client'
-// WebMCP adapter: registers read_page + do with the browser's model-context API.
+import { disclose, expand, toTree, type WidgetFrag } from '@tvine/warp/shape'
+import type { ActionHandle, ActionOutcome } from '../widget/types.js'
+import { getOverlay } from '../presence/overlay.js'
+import { describeWidget } from './fragment.js'
+import { getRegistry, type RegistryNode } from './registry.client.js'
+import { isStopped, runUi, setStopped, type UiCommand } from './exec.js'
+
+// WebMCP adapter (transports.md §WebMCP): read_page, expand, ui, do for an in-browser agent in the
+// user's own tab. read_page/expand/ui run locally on the registry; do POSTs. Registered by <WeftRoot>
+// by default, in production too (security.md). Stop blocks every tool until the human clicks Resume.
 // The httpOnly session cookie is the agent's session: never read or sent from JS.
 
 type McTool = {
   name: string
   description: string
   inputSchema: object
+  annotations?: object
   execute: (args: any) => Promise<{ content: { type: 'text'; text: string }[] }>
 }
 type ModelContext = {
@@ -59,47 +69,121 @@ export function newId(): string {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
-export function registerWebMcp(opts: { header?: string } = {}): () => void {
+type Text = { content: { type: 'text'; text: string }[] }
+const reply = (v: unknown): Text => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }] })
+const errOut = (code: string, message: string, extra: object = {}) => reply({ kind: 'err', code, message, ...extra })
+
+// Tool descriptions are versioned constants (transports.md). `ui` before `do`: agents act through the UI.
+export const DESCRIPTIONS = {
+  read_page: 'Read the current page as a structured snapshot (JSON): widgets with ids, state and controls. Call this first, and again after acting. view: auto|L0|L1|full.',
+  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
+  ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
+  do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Call read_page first for actions and params. Retries with the same cmdId are safe.',
+} as const
+
+// The in-tab snapshot: the registry's widgets through the same shaper Warp uses (@tvine/warp/shape).
+function tree() {
+  const widgets: WidgetFrag[] = []
+  const walk = (n: RegistryNode, p: string) => {
+    for (const c of n.children) {
+      if (c.spec) {
+        const d = describeWidget(c.id, p, c.spec)
+        // Controls bound to an agent-off action are not shown (the executor refuses them alike).
+        if (d.ctl) for (const [k, v] of Object.entries(d.ctl)) if ((v.h as { params?: ActionHandle } | undefined)?.params?.agent === false) delete d.ctl[k]
+        widgets.push({ ...d, ...(c.spec.sensitive && { sensitive: true }) } as WidgetFrag)
+      }
+      walk(c, c.id)
+    }
+  }
+  walk(getRegistry().tree(), '')
+  const l = (globalThis as any).location
+  return toTree({ page: l.pathname + l.search, title: globalThis.document?.title ?? '', nodes: [], links: [], widgets }, { headless: false })
+}
+
+// ponytail: tolerant read of the Warp reply (json envelope or bare event); tighten when W7 lands agentCmd.
+function outcome(text: string): ActionOutcome {
+  let j: any
+  try { j = JSON.parse(text) } catch { return { ok: false, code: 'internal', message: text.slice(0, 200) } }
+  const evs: any[] = Array.isArray(j) ? j : Array.isArray(j?.events) ? j.events : [j]
+  const e = evs.find((x) => x && (x.kind === 'ok' || x.kind === 'err' || x.kind === 'goto'))
+  if (e?.kind === 'err') return { ok: false, code: e.code, message: e.message, ...(e.field && { field: e.field }) }
+  if (e?.kind === 'goto') return { ok: true, goto: e.url }
+  return { ok: true, ...(e?.result !== undefined && { result: e.result }) }
+}
+
+export function registerWebMcp(opts: { header?: string; agent?: string } = {}): () => void {
   const header = opts.header ?? 'x-tvine'
   const url = () => { const l = (globalThis as any).location; return l.pathname + l.search }
-  const send = async (init: RequestInit & { headers: Record<string, string> }) => {
-    let text: string
+  const post = async (body: object): Promise<string> => {
     try {
-      const res = await fetch(url(), { ...init, headers: { [header]: '1', ...init.headers }, credentials: 'same-origin' })
-      text = await res.text()
+      const res = await fetch(url(), {
+        method: 'POST', credentials: 'same-origin',
+        headers: { [header]: '1', 'content-type': 'application/json', accept: 'application/tvine+json' },
+        body: JSON.stringify(body),
+      })
+      return await res.text()
     } catch (e) {
       // Thrown messages never reach the agent; return the error as a value.
-      text = `err internal "network error: ${(e instanceof Error ? e.message : String(e)).replace(/"/g, "'")}"`
+      return `err internal "network error: ${(e instanceof Error ? e.message : String(e)).replace(/"/g, "'")}"`
     }
-    return { content: [{ type: 'text' as const, text }] }
   }
-  return provideTools([
+
+  // The pill: "Agent connected · Stop" from the first tool call; Stop ↔ Resume. Name is never verified.
+  const who = opts.agent ? `${opts.agent} (unverified)` : 'Agent'
+  const overlay = getOverlay()
+  const connected = () => overlay.setPill({ text: `${who} connected`, button: 'Stop', onClick: () => { setStopped(true); blocked() } })
+  const blocked = () => overlay.setPill({ text: `${who} stopped`, button: 'Resume', onClick: () => { setStopped(false); connected() } })
+  const guard = <A,>(fn: (a: A) => Promise<Text>) => async (a: A): Promise<Text> => {
+    if (isStopped()) { blocked(); return errOut('domain', 'the human pressed Stop; agent control is blocked in this tab', { reason: 'stopped' }) }
+    connected()
+    return fn(a ?? ({} as A))
+  }
+
+  const off = provideTools([
     {
-      name: 'read_page',
-      description:
-        'Read the current page as a structured agent snapshot (JSON). Call this first, before do, and again after actions to see the new state. Responses carry structured ok/err lines.',
-      inputSchema: { type: 'object', properties: {} },
-      execute: () => send({ headers: { accept: 'application/tvine+json' } }),
+      name: 'read_page', description: DESCRIPTIONS.read_page,
+      inputSchema: { type: 'object', properties: { view: { type: 'string', enum: ['auto', 'L0', 'L1', 'full'] } } },
+      execute: guard(async ({ view }: { view?: 'auto' | 'L0' | 'L1' | 'full' }) =>
+        reply({ rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) })),
     },
     {
-      name: 'do',
-      description:
-        'Run an action on the current page. Call read_page first to see available actions and their params. Retries with the same cmdId are safe. Responses carry structured ok/err lines.',
+      name: 'expand', description: DESCRIPTIONS.expand,
+      inputSchema: { type: 'object', properties: { id: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['id'] },
+      execute: guard(async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }) => {
+        const r = expand(tree(), String(id), { offset, limit })
+        return r ? reply(r) : errOut('unknown_action', `no node ${id}; ids come from read_page`)
+      }),
+    },
+    {
+      name: 'ui', description: DESCRIPTIONS.ui,
       inputSchema: {
         type: 'object',
         properties: {
-          action: { type: 'string' },
-          params: { type: 'object' },
-          cmdId: { type: 'string', description: 'optional idempotency key' },
+          target: { type: 'string' }, control: { type: 'string' }, args: { type: 'object' },
+          steps: { type: 'array', items: { type: 'object', properties: { target: { type: 'string' }, control: { type: 'string' }, args: { type: 'object' } }, required: ['target', 'control'] } },
+          cmdId: { type: 'string', description: 'idempotency key; a retry with the same cmdId returns the same result' },
+          rev: { type: 'number' },
         },
+      },
+      annotations: { destructiveHint: true },
+      execute: guard(async (cmd: UiCommand) => {
+        const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
+          outcome(await post({ action: h.id, params, bind: h.bind, cmdId }))
+        const { result, error } = await runUi(cmd, { via: 'webmcp', run })
+        return reply(error ? { kind: 'err', ...error, result } : { kind: 'ok', action: 'ui', result })
+      }),
+    },
+    {
+      name: 'do', description: DESCRIPTIONS.do,
+      inputSchema: {
+        type: 'object',
+        properties: { action: { type: 'string' }, params: { type: 'object' }, cmdId: { type: 'string', description: 'optional idempotency key' } },
         required: ['action'],
       },
-      execute: ({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) =>
-        send({
-          method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/tvine+json' },
-          body: JSON.stringify({ action, params, cmdId: cmdId ?? newId() }),
-        }),
+      annotations: { destructiveHint: true },
+      execute: guard(async ({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) =>
+        reply(await post({ action, params, cmdId: cmdId ?? newId() }))),
     },
   ])
+  return () => { off(); overlay.setPill(null) }
 }
