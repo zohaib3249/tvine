@@ -91,14 +91,24 @@ function cookieOf(r: Request, s: Settings): string | undefined {
 function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
-  const host = (s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host')
+  const host = ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase()
   try { return new URL(origin).host !== host } catch { return true }
 }
 
-// One command at a time per sid: rev bumps and session.data writes never interleave.
+// One command at a time per sid: rev bumps and session.data writes never interleave. The queue depth
+// per sid is capped, so one session cannot pile up waiters (each would otherwise age past handlerMs).
+export const MAX_QUEUE = 16
 const chains = new Map<Sid, Promise<unknown>>()
-function serial<T>(sid: Sid, fn: () => Promise<T>): Promise<T> {
-  const next = (chains.get(sid) ?? Promise.resolve()).then(fn)
+const depth = new Map<Sid, number>()
+const rateLimited = (ms: number) => ev.err('rate_limited', `rate limited: retry after ${ms}ms`, { retryAfterMs: ms })
+function serial(sid: Sid, fn: () => Promise<Event[]>): Promise<Event[]> {
+  const n = depth.get(sid) ?? 0
+  if (n >= MAX_QUEUE) return Promise.resolve([rateLimited(1000)])
+  depth.set(sid, n + 1)
+  const next = (chains.get(sid) ?? Promise.resolve()).then(fn).finally(() => {
+    const m = depth.get(sid)! - 1
+    if (m) depth.set(sid, m); else depth.delete(sid)
+  })
   const tail = next.catch(() => undefined)
   chains.set(sid, tail)
   void tail.then(() => { if (chains.get(sid) === tail) chains.delete(sid) })
@@ -129,7 +139,17 @@ function redirectUrl(e: unknown): string | undefined {
 // ---- pipeline ------------------------------------------------------------------------------
 async function run(cmd: Command, server: ServerCtx, request: Request): Promise<Event[]> {
   const { settings, sessions } = server
-  if (crossOrigin(request, settings)) return [ev.err('domain', 'forbidden: cross-origin request')]
+  if (crossOrigin(request, settings)) return [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })]
+  // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
+  const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
+  const known = cmd.cmdId && sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) })
+  if (known) {
+    const r = server.idempotency.replay(known.sid, cmd.cmdId!, hash)
+    if (r.hit === true) return r.events
+  }
+  // 3a. ip + default sid bucket first: abusive traffic never creates sessions or queues (3b, an action's own rate, runs later)
+  const rl = server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
   // 1. session
   const session = sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
   if (!session) {
@@ -137,18 +157,21 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<E
     return [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })]
   }
   const { sid } = session
-  if (!cmd.cmdId) return serial(sid, () => pipeline(cmd, server, request, session, ''))
+  const hold: Hold = {}
+  if (!cmd.cmdId) return serial(sid, () => pipeline(cmd, server, request, session, '', hold))
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
-  const hash = hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind })
   const key = `${sid}:${cmd.cmdId}`
   const running = inFlight.get(key)
   if (running) {
     const r = await running
     return r.hash === hash ? r.events : [conflict()]
   }
-  const p = serial(sid, () => pipeline(cmd, server, request, session, hash)).then((events) => ({ hash, events }))
+  const p = serial(sid, () => pipeline(cmd, server, request, session, hash, hold)).then((events) => ({ hash, events }))
   inFlight.set(key, p)
-  try { return (await p).events } finally { inFlight.delete(key) }
+  try { return (await p).events } finally {
+    // held until the handler itself settles (not the timeout): a retry never runs it a second time
+    void Promise.resolve(hold.settled).catch(() => undefined).then(() => { if (inFlight.get(key) === p) inFlight.delete(key) })
+  }
 }
 
 async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {
@@ -156,7 +179,9 @@ async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snap
   catch (e) { server.log('error', 'snapshot render failed', { page: pageOf(request), error: errStr(e) }); return undefined }
 }
 
-async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string): Promise<Event[]> {
+type Hold = { settled?: Promise<unknown> }   // the handler's own promise, which may outlive the timeout
+
+async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string, hold: Hold): Promise<Event[]> {
   const { settings } = server, { sid } = session
   // 2b. idempotency replay
   if (cmd.cmdId) {
@@ -164,10 +189,12 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (r.hit === 'conflict') return [conflict()]
     if (r.hit) return r.events
   }
-  // 3. rate limit (an action's own rate gets a bucket keyed by its id)
+  // 3b. an action's own rate: a bucket keyed by sid + action id
   const def = server.actions.get(cmd.action)
-  const rl = server.limiter.check({ sid, ip: request.ip, action: def?.id }, def?.rules?.rate)
-  if (!rl.ok) return [ev.err('rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`)]
+  if (def?.rules?.rate) {
+    const rl = server.limiter.check({ sid, action: def.id }, def.rules.rate)
+    if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
+  }
   // 4. resolve action
   if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid) })]
 
@@ -179,6 +206,8 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     // 4.5 permissions (agent identity from request.agent; a throwing permission denies)
     await runPermissions(def.rules?.permissions ?? [], permissionCtx(ctx, def.id))
     // 5. bind: valid MAC, issued for THIS action; $action never reaches the handler
+    const bindKeys = def.rules?.bind ?? []
+    if (bindKeys.length && cmd.bind === undefined) return [ev.err('stale_bind', 'this action needs the bind from its action ref; re-read the page')]
     let bound: Record<string, unknown> = {}
     if (cmd.bind !== undefined) {
       const v = verifyBind(cmd.bind, settings)
@@ -191,14 +220,17 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (cmd.rev !== undefined && cmd.rev !== session.rev) {
       return [ev.err('stale_rev', `rev ${cmd.rev} is stale (current ${session.rev})`, { snapshot: await snap(server, request, sid) })]
     }
-    // 7. validate: signed bind values win over agent-supplied params
-    const params = validate(def.schema, { ...cmd.params, ...bound })
+    // 7. validate: bind-only keys may not arrive as params; signed bind values win; class views validate themselves
+    const smuggled = bindKeys.find((k) => Object.hasOwn(cmd.params ?? {}, k))
+    if (smuggled) return [ev.err('invalid_param', `${smuggled} comes from the signed bind, not from params`, { field: smuggled })]
+    const input = { ...cmd.params, ...bound }
+    const params = def.rawParams ? input : validate(def.schema, input)
     // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
-    const out = await execute(def, params, ctx, server)
+    const out = await execute(def, params, ctx, server, hold)
     // 9. committed: apply staged session data, bump rev, flush channel events
     try {
       session.data = staged.data
-      server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
+      if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
       for (const [g, e] of outbox) server.channels.group(g).send(e)
     } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
     // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
@@ -213,7 +245,8 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   } catch (e) {
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]
     if (e instanceof DomainError) {
-      return [ev.err(e.code === 'invalid_param' ? 'invalid_param' : 'domain', e.message, { field: e.field })]
+      const code = e.code === 'invalid_param' || e.code === 'internal' ? e.code : 'domain'
+      return [ev.err(code, e.message, { field: e.field, reason: e.code })]
     }
     server.log('error', 'action failed', { action: def.id, error: errStr(e) })
     return [ev.err('internal', 'internal error')]
@@ -222,25 +255,31 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
 
 type Outcome = { result: unknown } | { goto: string }
 
-async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx): Promise<Outcome> {
+async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
     try { return { result: await def.run(params, ctx) } }
     catch (e) { const url = redirectUrl(e); if (url !== undefined) return { goto: url }; throw e }   // goto commits
   }
+  // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing
   const tx = server.settings.db.atomicRequests && !def.rules?.readOnly && def.rules?.atomic !== false
   const ac = new AbortController()
+  const work = tx ? atomic(call, { signal: ac.signal, lazy: true }) : call()
+  hold.settled = work
+  work.catch(() => undefined)
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, rej) => {
-    timer = setTimeout(() => {
-      // leak guard: the transaction's connection was held past handlerMs; abort marks it dead
-      if (tx) server.log('warn', 'db connection held past handlerMs; transaction aborted', { action: def.id, handlerMs })
-      const e = new HandlerTimeout()
-      ac.abort(e)
-      rej(e)
-    }, handlerMs)
-  })
-  const work = tx ? atomic(call, { signal: ac.signal }) : call()
-  work.catch(() => undefined)   // settles after a timeout already answered
-  try { return await Promise.race([work, timeout]) } finally { clearTimeout(timer) }
+  const timedOut = new Promise<true>((r) => { timer = setTimeout(() => r(true), handlerMs) })
+  try {
+    if (!tx) return await Promise.race([work, timedOut.then((): never => { throw new HandlerTimeout() })])
+    if (await Promise.race([work.then(() => false, () => false), timedOut])) {
+      // leak guard: the transaction outlived handlerMs. Abort marks it dead, then wait for the real
+      // outcome: a COMMIT already in flight may still succeed, and then the request DID commit.
+      server.log('warn', 'handler timeout; transaction aborted', { action: def.id, handlerMs })
+      ac.abort(new HandlerTimeout())
+      // second, generous cap: a hung COMMIT must not hang the request (the block is already marked dead)
+      const capped = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new HandlerTimeout()), 3 * handlerMs) })
+      try { return await Promise.race([work, capped]) } catch { throw new HandlerTimeout() }
+    }
+    return await work
+  } finally { clearTimeout(timer) }
 }
