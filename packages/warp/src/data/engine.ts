@@ -108,15 +108,22 @@ function wrapErr(def: ModelDef, e: unknown): never {
 }
 
 // ---- atomic ----------------------------------------------------------------------------------
-// One connection, so transactions are serialized by a queue; queries made outside a transaction
-// wait for any open one (otherwise they would run inside it). Nested atomic() reuses the open one.
+// One connection, one serial queue: EVERY operation (atomic or not) waits its turn, and whether it
+// sits inside a transaction is decided when it runs, never when it was called. Operations made from
+// inside an atomic() callback skip the queue (they already own the connection); nested atomic reuses.
 const inTx = new AsyncLocalStorage<true>()
 let tail: Promise<unknown> = Promise.resolve()
-const gate = async () => { if (!inTx.getStore()) await tail }
 
-export async function atomic<R>(fn: () => Promise<R>): Promise<R> {
+function exec<R>(fn: () => R | Promise<R>): Promise<R> {
+  if (inTx.getStore()) return Promise.resolve().then(fn)
+  const run = tail.then(fn)
+  tail = run.catch(() => undefined)
+  return run
+}
+
+export function atomic<R>(fn: () => Promise<R>): Promise<R> {
   if (inTx.getStore()) return fn()
-  const run = tail.then(async () => {
+  return exec(async () => {
     const { sqlite } = getConn()
     sqlite.exec('BEGIN IMMEDIATE')
     try {
@@ -128,8 +135,6 @@ export async function atomic<R>(fn: () => Promise<R>): Promise<R> {
       throw e
     }
   })
-  tail = run.catch(() => undefined)
-  return run
 }
 
 // ---- QuerySpec → SQL -------------------------------------------------------------------------
@@ -137,7 +142,7 @@ const unwrap = (f: F | undefined, v: unknown) =>
   f?.kind === 'money' && v && typeof v === 'object' ? (v as { value: number }).value : v
 
 const like = (col: unknown, term: string) =>
-  sql`lower(coalesce(${col}, '')) LIKE ${'%' + term.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'} ESCAPE '\\'`
+  sql`tv_lower(coalesce(${col}, '')) LIKE ${'%' + term.toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'} ESCAPE '\\'`
 
 function positive(col: any, op: Op, v: unknown): SQL {
   switch (op) {
@@ -148,7 +153,7 @@ function positive(col: any, op: Op, v: unknown): SQL {
     case 'lt': return lt(col, v)
     case 'lte': return lte(col, v)
     case 'in': return Array.isArray(v) && v.length ? inArray(col, v) : sql`0`
-    case 'contains': return sql`${col} IS NOT NULL AND ${like(col, String(v))}`
+    case 'contains': return and(isNotNull(col), like(col, String(v)))!
   }
 }
 
@@ -182,8 +187,7 @@ function after(def: ModelDef, order: NonNullable<QuerySpec['order']>, cv: unknow
 export function engineSource(def: ModelDef): DataSource<any> {
   const pk = pkField(def)[0]
   return {
-    async query(spec) {
-      await gate()
+    query: spec => exec(async () => {
       try {
         const { orm } = getConn(); const t = tableFor(def)
         const w = whereOf(def, spec.where, spec.search)
@@ -200,16 +204,14 @@ export function engineSource(def: ModelDef): DataSource<any> {
         q = q.where(cw).orderBy(...order.map(o => (o.dir === 'desc' ? desc : asc)(resolve(def, o.field).col))).limit(spec.limit)
         return { items: q.all().map((r: any) => fromRow(def, r)), total }
       } catch (e) { return wrapErr(def, e) }
-    },
-    async get(id) {
-      await gate()
+    }),
+    get: id => exec(async () => {
       try {
         const r = getConn().orm.select().from(tableFor(def)).where(eq(tableFor(def)[pk], id)).get()
         return r ? fromRow(def, r) : undefined
       } catch (e) { return wrapErr(def, e) }
-    },
-    async update(ws, patch) {
-      await gate()
+    }),
+    update: (ws, patch) => exec(async () => {
       try {
         const set: Record<string, unknown> = {}
         const t = tableFor(def)
@@ -227,20 +229,20 @@ export function engineSource(def: ModelDef): DataSource<any> {
         if (!Object.keys(set).length) return 0
         return getConn().orm.update(t).set(set).where(whereOf(def, ws)).run().changes as number
       } catch (e) { return wrapErr(def, e) }
-    },
-    async delete(ws) {
-      await gate()
+    }),
+    delete: ws => exec(async () => {
       try {
         return getConn().orm.delete(tableFor(def)).where(whereOf(def, ws)).run().changes as number
       } catch (e) { return wrapErr(def, e) }
-    },
+    }),
   }
 }
 
-export async function insertRow(def: ModelDef, data: Record<string, unknown>): Promise<any> {
-  await gate()
-  try {
-    const r = getConn().orm.insert(tableFor(def)).values(toRow(def, data)).returning().get()
-    return fromRow(def, r)
-  } catch (e) { return wrapErr(def, e) }
+export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise<any> {
+  return exec(async () => {
+    try {
+      const r = getConn().orm.insert(tableFor(def)).values(toRow(def, data)).returning().get()
+      return fromRow(def, r)
+    } catch (e) { return wrapErr(def, e) }
+  })
 }

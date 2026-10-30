@@ -8,7 +8,6 @@ import { pathToFileURL } from 'node:url'
 import { generateSQLiteDrizzleJson, generateSQLiteMigration } from 'drizzle-kit/api'
 import { tableFor } from './engine.js'
 import { openConn } from './db.js'
-import { modelRegistry } from './model.js'
 import type { Model } from './model.js'
 
 const SNAP = 'meta/snapshot.json'
@@ -19,12 +18,13 @@ export async function discoverModels(appsDir: string): Promise<Model<any, any>[]
   const out: Model<any, any>[] = []
   for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
     const file = ['models.ts', 'models.js'].map(f => join(appsDir, app, f)).find(existsSync)
-    if (!file) continue
+    if (!file) continue                     // an app without models is fine; the empty-result check below guards the rest
     const mod = await import(pathToFileURL(file).href)
     for (const v of Object.values(mod)) {
       if (v && typeof v === 'object' && 'fields' in v && 'objects' in v && 'name' in v) out.push(v as Model<any, any>)
     }
   }
+  if (!out.length) throw new Error(`no models found under ${appsDir} (expected apps/<app>/models.ts); refusing to treat this as "all models removed"`)
   return out
 }
 
@@ -37,23 +37,59 @@ async function diff(models: Model<any, any>[], outDir: string) {
   const cur = await snapshotOf(models)
   const snapFile = join(outDir, SNAP)
   const prev = existsSync(snapFile) ? JSON.parse(readFileSync(snapFile, 'utf8')) : await snapshotOf([])
+  assertNoRename(prev, cur)
   return { cur, statements: await generateSQLiteMigration(prev, cur) }
+}
+
+// drizzle-kit asks on the terminal when a table/column is both added and removed (a possible rename).
+// We never prompt: detect it first and stop with a clear message.
+function assertNoRename(prev: any, cur: any): void {
+  const pt = Object.keys(prev.tables ?? {}), ct = Object.keys(cur.tables ?? {})
+  const addedT = ct.filter(t => !pt.includes(t)), removedT = pt.filter(t => !ct.includes(t))
+  if (addedT.length && removedT.length) {
+    throw new Error(`rename detected for ${removedT[0]} -> ${addedT[0]}: v1 treats renames as drop+add — rerun with allowDrop or split the change`)
+  }
+  for (const t of ct.filter(t => pt.includes(t))) {
+    const pc = Object.keys(prev.tables[t].columns), cc = Object.keys(cur.tables[t].columns)
+    const added = cc.filter(c => !pc.includes(c)), removed = pc.filter(c => !cc.includes(c))
+    if (added.length && removed.length) {
+      throw new Error(`rename detected for ${t}.${removed[0]}: v1 treats renames as drop+add — rerun with allowDrop or split the change`)
+    }
+  }
+}
+
+// Real drops only: a rebuild (CREATE __new_x ... DROP x ... RENAME __new_x TO x) is not destructive.
+function drops(statements: string[]): string[] {
+  const sqlText = statements.join('\n')
+  const out: string[] = []
+  for (const m of sqlText.matchAll(/DROP TABLE `([^`]+)`/g)) {
+    if (!sqlText.includes(`RENAME TO \`${m[1]}\``)) out.push(m[1])
+  }
+  for (const m of sqlText.matchAll(/ALTER TABLE `([^`]+)` DROP COLUMN `([^`]+)`/g)) out.push(`${m[1]}.${m[2]}`)
+  return out
 }
 
 const files = (dir: string) =>
   existsSync(dir) ? readdirSync(dir).filter(f => /^\d{4}_.*\.sql$/.test(f)).sort() : []
 
-export async function makeMigrations(appsDir: string, outDir: string, name?: string): Promise<{ file?: string; message: string }> {
+export async function makeMigrations(
+  appsDir: string, outDir: string, name?: string, opts: { allowDrop?: boolean } = {},
+): Promise<{ file?: string; message: string }> {
   const models = await discoverModels(appsDir)
   const { cur, statements } = await diff(models, outDir)
   if (!statements.length) return { message: 'no changes detected' }
+  const dropped = drops(statements)
+  if (dropped.length && !opts.allowDrop) {
+    throw new Error(`refusing to write a migration that drops ${dropped.join(', ')} (models removed or changed?); pass allowDrop to confirm`)
+  }
   const existing = files(outDir)
   const n = String(existing.length + 1).padStart(4, '0')
   const file = `${n}_${name ?? (existing.length ? 'auto' : 'init')}.sql`
   mkdirSync(join(outDir, 'meta'), { recursive: true })
-  writeFileSync(join(outDir, file), statements.join(`\n${BREAK}\n`) + '\n')
+  const header = dropped.length ? `-- DESTRUCTIVE: drops ${dropped.join(', ')}\n` : ''
+  writeFileSync(join(outDir, file), header + statements.join(`\n${BREAK}\n`) + '\n')
   writeFileSync(join(outDir, SNAP), JSON.stringify(cur, null, 2))
-  return { file, message: `created ${file}` }
+  return { file, message: dropped.length ? `WARNING: ${file} is DESTRUCTIVE and drops ${dropped.join(', ')}` : `created ${file}` }
 }
 
 const JOURNAL = '__tvine_migrations'
@@ -71,24 +107,28 @@ export async function migrate(dbUrl: string, migrationsDir: string): Promise<{ a
         if (done.get(f) !== hash) throw new Error(`migration ${f} was edited after it was applied`)
         continue
       }
-      sqlite.transaction(() => {
-        for (const s of body.split(BREAK)) if (s.trim()) sqlite.exec(s)
-        sqlite.prepare(`INSERT INTO ${JOURNAL} VALUES (?, ?, ?)`).run(f, hash, Date.now())
-      })()
+      // table rebuilds need FK enforcement off, and the pragma is a no-op inside a transaction
+      sqlite.pragma('foreign_keys = OFF')
+      try {
+        sqlite.transaction(() => {
+          for (const s of body.split(BREAK)) if (s.trim()) sqlite.exec(s)
+          if ((sqlite.pragma('foreign_key_check') as unknown[]).length) throw new Error(`migration ${f} would leave rows pointing at missing records`)
+          sqlite.prepare(`INSERT INTO ${JOURNAL} VALUES (?, ?, ?)`).run(f, hash, Date.now())
+        })()
+      } finally { sqlite.pragma('foreign_keys = ON') }
       applied.push(f)
     }
     return { applied }
   } finally { sqlite.close() }
 }
 
-// true = clean. false = migrations pending, or registered models differ from the last migration.
-export async function migrateCheck(dbUrl: string, migrationsDir: string): Promise<boolean> {
+// true = clean. false = migrations pending, or the models under appsDir differ from the last migration.
+export async function migrateCheck(dbUrl: string, migrationsDir: string, appsDir: string): Promise<boolean> {
   const { sqlite } = openConn(dbUrl)
   try {
     const has = sqlite.prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`).get(JOURNAL)
     const done = new Set(has ? (sqlite.prepare(`SELECT name FROM ${JOURNAL}`).all() as { name: string }[]).map(r => r.name) : [])
     if (files(migrationsDir).some(f => !done.has(f))) return false
   } finally { sqlite.close() }
-  const models = modelRegistry()
-  return !models.length || !(await diff(models, migrationsDir)).statements.length
+  return !(await diff(await discoverModels(appsDir), migrationsDir)).statements.length
 }

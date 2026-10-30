@@ -27,6 +27,8 @@ export function openConn(url: string): Conn {
   sqlite.pragma('journal_mode = WAL')
   sqlite.pragma('busy_timeout = 5000')
   sqlite.pragma('foreign_keys = ON')
+  // sqlite lower() is ASCII-only; contains/search need full Unicode case folding
+  sqlite.function('tv_lower', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toLowerCase()))
   return { sqlite, orm: drizzle(sqlite) }
 }
 

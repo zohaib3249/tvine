@@ -25,7 +25,7 @@ export function defineModel<const F extends Fields>(name: string, fields: F): Mo
   pkField(def)
   const schema = rowSchema(def)
   const source = engineSource(def)
-  const objects = new QuerySet<any>(source)
+  const objects = new QuerySet<any>(source, undefined, Object.entries(fields).filter(([, f]) => f.opts.searchable).map(([n, f]) => keyOf(n, f)))
   const input = z.object(Object.fromEntries(Object.entries(fields).map(([n, f]) => {
     const k = keyOf(n, f)
     return [k, hasDefault(f) ? schema.shape[k].optional() : schema.shape[k]]

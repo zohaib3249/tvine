@@ -71,10 +71,11 @@ export class QuerySet<T extends object> {
   constructor(
     private readonly source: DataSource<T>,
     private readonly state: State = { where: [], order: [] },
+    private readonly defaultSearch: string[] = [],   // a model's `searchable` fields
   ) {}
 
   private with(patch: Partial<State>): QuerySet<T> {
-    return new QuerySet(this.source, { ...this.state, ...patch })
+    return new QuerySet(this.source, { ...this.state, ...patch }, this.defaultSearch)
   }
 
   filter(where: Partial<Record<keyof T & string, unknown>> | Where[]): QuerySet<T> {
@@ -97,8 +98,10 @@ export class QuerySet<T extends object> {
     })
   }
 
-  search(term: string, fields: (keyof T & string)[]): QuerySet<T> {
-    return this.with({ search: { fields, term } })
+  search(term: string, fields?: (keyof T & string)[]): QuerySet<T> {
+    const f = fields ?? this.defaultSearch
+    if (!f.length) throw new Error('search() needs fields: pass them, or mark model fields searchable')
+    return this.with({ search: { fields: f, term } })
   }
 
   // Ties are broken by id so the cursor is always unique.
