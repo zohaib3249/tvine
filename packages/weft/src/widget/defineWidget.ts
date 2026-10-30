@@ -1,8 +1,7 @@
 'use client'
-import { useState } from 'react'
-import { getRegistry, shallowChanged } from '../runtime/registry.client.js'
+import { useCallback, useRef, useState } from 'react'
 import { applyOverrides } from './hooks.js'
-import type { Control, ControlOverrides, HeadlessMap, Json, PresenceOptions, Widget, WidgetHooks, WidgetKind } from './types.js'
+import type { Control, ControlOverrides, HeadlessMap, Json, PresenceOptions, Widget, WidgetHooks, WidgetKind, WidgetSpec } from './types.js'
 import { useWidget } from './useWidget.js'
 
 export interface WidgetDef<P, S extends Json, C extends Record<string, Control<any, any>>> {
@@ -11,6 +10,8 @@ export interface WidgetDef<P, S extends Json, C extends Record<string, Control<a
   controls(api: { props: P; state: S; set(next: Partial<S>): void; el(): HTMLElement | null }): C
   headless?(props: P): Partial<Record<keyof C, HeadlessMap>>
   describe?(props: P): { label: string; summary?: string[] }
+  // Extra spec fields: sensitive (password Input), personal, data, entity, hidden, …
+  spec?(props: P): Partial<Omit<WidgetSpec, 'kind' | 'state' | 'controls' | 'hooks'>>
 }
 export type DefinedProps<P, C> = P & {
   id?: string; name?: string; label?: string; disabled?: boolean; presence?: false | PresenceOptions
@@ -25,24 +26,27 @@ export function defineWidget<P, S extends Json, C extends Record<string, Control
     const [own, setOwn] = useState(derived)
     const [seen, setSeen] = useState(derived)
     let state = own
-    if (shallowChanged(seen, derived)) { setSeen(derived); setOwn(derived); state = derived }
+    // By value: state is JSON, and props often build fresh arrays/objects every render.
+    if (JSON.stringify(seen) !== JSON.stringify(derived)) { setSeen(derived); setOwn(derived); state = derived }
 
-    let id = ''
+    const el = useRef<HTMLElement | null>(null)
     let controls: Record<string, Control<any, any>> = def.controls({
       props, state,
       set: (next) => setOwn((s) => ({ ...(s as object), ...next }) as S),
-      el: () => getRegistry().get(id)?.el ?? null,
+      el: () => el.current,
     })
     const maps = def.headless?.(props)
     if (maps) controls = Object.fromEntries(Object.entries(controls).map(([k, c]) => [k, maps[k] ? { ...c, headless: maps[k] } : c]))
     const desc = def.describe?.(props)
 
     const w = useWidget({
+      ...def.spec?.(props),
       kind: def.kind, id: props.id, name: props.name, disabled: props.disabled, presence: props.presence,
       label: props.label ?? desc?.label ?? '', ...(desc?.summary && { summary: desc.summary }),
       state, controls: applyOverrides(controls, props.controls), hooks: props.hooks,
     })
-    id = w.id
-    return { ...w, state }
+    const wref = w.ref
+    const ref = useCallback((node: HTMLElement | null) => { el.current = node; wref(node) }, [wref])
+    return { ...w, ref, state }
   }
 }
