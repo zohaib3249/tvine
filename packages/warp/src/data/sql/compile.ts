@@ -227,9 +227,32 @@ export class Scope {
   // ---- conditions -------------------------------------------------------------------------------------
   q(node: QNode, safe = false): Expr {
     const inner = safe || node.negated
-    const parts = node.children.map(c => c instanceof QNode ? this.q(c, inner)
-      : c instanceof Expression ? this.expr(c).e
-      : this.leaf(c[0], c[1], inner))
+    // Django: inside one filter() / one AND node, lookups through the SAME to-many relation must hold
+    // for ONE related row — they share one subquery (chained filter() calls stay separate)
+    const groups = new Map<string, [string, unknown][]>()
+    if (node.conn === 'and') {
+      for (const c of node.children) {
+        if (c instanceof QNode || c instanceof Expression) continue
+        const head = c[0].split('__')[0], rel = relationOf(this.t as ModelDef, head)
+        if ((rel?.kind === 'reverse' || rel?.kind === 'm2m') && !/__isnull$/.test(c[0])) groups.set(head, [...(groups.get(head) ?? []), c])
+      }
+    }
+    for (const [k, v] of [...groups]) if (v.length < 2) groups.delete(k)
+    const done = new Set<string>()
+    const parts = node.children.flatMap(c => {
+      if (c instanceof QNode) return [this.q(c, inner)]
+      if (c instanceof Expression) return [this.expr(c).e]
+      const head = c[0].split('__')[0], g = groups.get(head)
+      if (!g) return [this.leaf(c[0], c[1], inner)]
+      if (done.has(head)) return []
+      done.add(head)
+      const rel = relationOf(this.t as ModelDef, head)!
+      const restKey = (k: string) => {
+        const rest = k.split('__').slice(1)
+        return rest.length && !LOOKUPS.has(rest[0]) ? rest.join('__') : [pkCol(rel.target), ...rest].join('__')
+      }
+      return [this.relIn(rel, s => s.q(new QNode('and', g.map(([k, v]) => [restKey(k), v] as [string, unknown]))))]
+    })
     const e = parts.length ? (node.conn === 'and' ? and(...parts) : or(...parts)) : raw('1')
     return node.negated ? not(e) : e
   }
@@ -259,11 +282,12 @@ export class Scope {
     if (rel && (parts.length > 1 || rel.kind !== 'fk')) {
       if (op === 'isnull' && parts.length === 1) {
         if (rel.kind === 'fk') return { e: value ? isNull(this.field(name).col) : isNotNull(this.field(name).col), nullAware: true }
-        const has = this.relIn(rel, [pkCol(rel.target)], 'isnull', false, key, true)
+        const has = this.relIn(rel)
         return { e: value ? not(has) : has, nullAware: true }
       }
       const rest = parts.length > 1 ? parts.slice(1) : [pkCol(rel.target)]
-      const e = this.relIn(rel, rest, op, value, key)
+      const restKey = [...rest, ...(op === 'eq' ? [] : [op])].join('__')
+      const e = this.relIn(rel, s => s.leaf(restKey, value))
       // Django: `rel__x__isnull=True` also matches rows with no related row at all (LEFT JOIN semantics)
       if (rel.kind === 'fk' && op === 'isnull' && value) return { e: or(isNull(this.field(name).col), e), nullAware: true }
       return { e, subject: rel.kind === 'fk' ? this.field(name).col : undefined }
@@ -279,26 +303,26 @@ export class Scope {
     return this.compare(c, f, op, value, key)
   }
 
-  // `local IN (SELECT …)` through one relation hop; the rest of the path is a lookup inside
-  // any: no lookup inside, just "has a related row" (reverse / m2m __isnull)
-  private relIn(rel: Relation, rest: string[], op: LeafOp, value: unknown, key: string, any = false): Expr {
+  // `local IN (SELECT …)` through one relation hop; `cond` is the lookup inside, on the related table's
+  // scope (absent: just "has a related row" — reverse / m2m __isnull)
+  private relIn(rel: Relation, cond?: (s: Scope) => Expr): Expr {
     const inner = this.child(rel.kind === 'm2m' ? rel.through.def : rel.kind === 'reverse' ? rel.source : rel.target)
-    const restKey = [...rest, ...(op === 'eq' ? [] : [op])].join('__')
+    const any = !cond
     const local = (c: string) => this.q8(c)
     if (rel.kind === 'fk') {
-      const w = any ? undefined : inner.leaf(restKey, value)
+      const w = any ? undefined : cond(inner)
       return { t: 'inSub', e: local(rel.col), q: this.wrapW({ t: 'select', from: rel.target.name, as: inner.alias, cols: [inner.field(pkCol(rel.target)).col], where: w }) }
     }
     if (rel.kind === 'reverse') {
       const c = inner.field(rel.field).col
-      const w = any ? isNotNull(c) : and(inner.leaf(restKey, value), isNotNull(c))
+      const w = any ? isNotNull(c) : and(cond(inner), isNotNull(c))
       return { t: 'inSub', e: local(pkCol(this.t as ModelDef)), q: this.wrapW({ t: 'select', from: rel.source.name, as: inner.alias, cols: [c], where: w }) }
     }
     // m2m: pk IN (SELECT src FROM through WHERE dst IN (SELECT pk FROM target WHERE …))
     const tgt = inner.child(rel.target)
     const dst = qcol(rel.dstCol, inner.alias)
     const w = any ? undefined
-      : { t: 'inSub' as const, e: dst, q: { t: 'select' as const, from: rel.target.name, as: tgt.alias, cols: [tgt.field(pkCol(rel.target)).col], where: tgt.leaf(restKey, value) } }
+      : { t: 'inSub' as const, e: dst, q: { t: 'select' as const, from: rel.target.name, as: tgt.alias, cols: [tgt.field(pkCol(rel.target)).col], where: cond(tgt) } }
     return { t: 'inSub', e: local(pkCol(this.t as ModelDef)), q: this.wrapW({ t: 'select', from: rel.through.def.name, as: inner.alias, cols: [qcol(rel.srcCol, inner.alias)], where: w }) }
   }
 
