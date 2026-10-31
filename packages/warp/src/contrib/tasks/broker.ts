@@ -44,10 +44,11 @@ export interface Broker {
   // success + its follow-ups in ONE transaction: the next chain link; for a chord member, the count-down and (once)
   // the callback built by `callback(sig, results)` (undefined = canvas broken there)
   succeed(job: JobRow, token: string, o: { result: unknown; purgeAt: number; next?: NewJob; callback?: (sig: SigJSON, results: unknown[]) => NewJob | undefined }): Promise<boolean>
-  // a final status (+ unique lock released, a chord whose member did not succeed failed)
-  finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number }): Promise<boolean>
+  // a final status (+ unique lock released, a chord whose member did not succeed failed). expiredBefore (the reaper):
+  // only while the lease is still past it — a worker that heartbeat meanwhile keeps its job (no second run)
+  finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number; expiredBefore?: number }): Promise<boolean>
   // back to queued (retry / release / rate limit); refund = the attempt does not count
-  requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean }): Promise<boolean>
+  requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean; expiredBefore?: number }): Promise<boolean>
   expired(now: number, limit: number): Promise<JobRow[]>
   cancel(id: string, ttlMs: number): Promise<JobStatus | undefined>   // queued → cancelled; running → cancel flag
   retry(id: string): Promise<JobStatus | 'requeued' | undefined>      // ops: dead / expired / cancelled → queued
@@ -165,8 +166,9 @@ class DbBroker implements Broker {
     return ok
   }
 
-  private settle(id: string, token: string, patch: Record<string, unknown>) {
-    return Job.objects.filter({ id, token, status: 'running' }).update({ ...patch, updatedAt: Date.now() }).then((n) => n === 1)
+  private settle(id: string, token: string, patch: Record<string, unknown>, expiredBefore?: number) {
+    const qs = Job.objects.filter({ id, token, status: 'running' })
+    return (expiredBefore === undefined ? qs : qs.filter([{ field: 'leaseUntil', op: 'lt', value: expiredBefore }])).update({ ...patch, updatedAt: Date.now() }).then((n) => n === 1)
   }
 
   async succeed(job: JobRow, token: string, o: Parameters<Broker['succeed']>[2]) {
@@ -194,9 +196,9 @@ class DbBroker implements Broker {
     if (cb) await Job.create(cb as never)
   }
 
-  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number }) {
+  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number; expiredBefore?: number }) {
     const ok = await atomic(async () => {
-      if (!(await this.settle(job.id, token, { status, finishedAt: Date.now(), purgeAt: o.purgeAt, leaseUntil: null, ...(o.error !== undefined && { error: o.error }) }))) return false
+      if (!(await this.settle(job.id, token, { status, finishedAt: Date.now(), purgeAt: o.purgeAt, leaseUntil: null, ...(o.error !== undefined && { error: o.error }) }, o.expiredBefore))) return false
       await this.afterFinal(job, status, o.purgeAt)
       return true
     })
@@ -209,11 +211,11 @@ class DbBroker implements Broker {
     if (job.groupId && status !== 'success') await Group.objects.filter({ id: job.groupId, status: 'pending' }).update({ status: 'failed', purgeAt })
   }
 
-  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean }) {
+  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean; expiredBefore?: number }) {
     const ok = await this.settle(id, token, {
       status: 'queued', runAt: o.runAt, worker: null, token: null, leaseUntil: null,
       ...(o.error !== undefined && { error: o.error }), ...(o.refund && { attempts: dec(1) }),
-    })
+    }, o.expiredBefore)
     if (ok) { later('moved'); if (o.runAt <= Date.now()) later('enqueued') }
     return ok
   }
