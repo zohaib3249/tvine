@@ -17,9 +17,12 @@ import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } f
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
+import { cspReportHandler, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
 import { defineSettings, merge, type SettingsInput } from './settings.js'
 import { channelTransport } from './transport/channel.js'
+import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
+import { corsLayer } from './transport/cors.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
@@ -170,7 +173,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
   }
+  // security/headers + transport/cors + transport/compress (server/security-headers.md): boot-checked here
+  const sec = securityHeaders(settings, { isDev })
+  const cors = corsLayer(settings)
   const chain: Handler[] = [
+    ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
     discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size }), startedAt: Date.now() }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
@@ -198,10 +205,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
+    let unhook = () => {}
     const step = () => {
       const h = chain[i++]
       if (h) h(req, res, step)
-      else if (done) done()
+      else if (done) { unhook(); done() }   // the host app's response: its own headers
       else frontend(req, res)
     }
     // nothing a client sends may throw out of here (a throw in a 'request' listener kills the process)
@@ -211,6 +219,20 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      if (cors.preflight(req, res)) return
+      const allowed = cors.request(req)
+      const plan = sec.begin(req, httpsOf(req, settings))
+      weakIfNoneMatch(req)
+      unhook = hookResponse(req, res, {
+        compression: settings.compression,
+        onHeaders: () => {
+          sec.apply(res, plan)
+          if (allowed) {
+            for (const [k, v] of Object.entries(allowed.headers)) res.setHeader(k, v)
+            addVary(res, 'Origin')
+          }
+        },
+      })
       step()
     } catch (e) { fail(res)(e) }
   }
