@@ -108,9 +108,10 @@ export const Subquery = (qs: QueryLike) => new SubqueryExpr(qs)
 export const Exists = (qs: QueryLike) => new ExistsExpr(qs)
 
 // Prefetch('tags', Tag.objects.filter(...)) — prefetchRelated with a custom queryset
-export class Prefetch {
+export class PrefetchNode {
   constructor(readonly path: string, readonly queryset?: QueryLike & object) {}
 }
+export const Prefetch = (path: string, queryset?: QueryLike & object) => new PrefetchNode(path, queryset)
 
 // ---- Meta constraints ------------------------------------------------------------------------------
 // QData: a QNode as plain data, so a CHECK lives in migration files and in the replayed state.

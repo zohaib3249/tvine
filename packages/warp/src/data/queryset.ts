@@ -1,7 +1,7 @@
 // QuerySet: internal chain API over a DataSource. Devs reach it only as Model.objects.
 // Spec: docs/design/conventions/orm-queryset.md
 import { DomainError } from '../core/errors.js'
-import { Expression, OrderBy, Prefetch, QNode, toQ, type Lookups } from './expressions.js'
+import { Expression, OrderBy, PrefetchNode, QNode, toQ, type Lookups } from './expressions.js'
 import type { ForUpdate } from './sql/ast.js'
 import type { ModelDef } from './fields/index.js'
 
@@ -80,7 +80,7 @@ export function decodeCursor(cursor: string): unknown[] {
 export interface EngineExt {
   aggregate(spec: QuerySpec, aggs: [string, Expression][]): Promise<Record<string, unknown>>
   exists(spec: QuerySpec): Promise<boolean>
-  prefetch(items: object[], lookups: (string | Prefetch)[]): Promise<void>
+  prefetch(items: object[], lookups: (string | PrefetchNode)[]): Promise<void>
   atomic<R>(fn: () => Promise<R>): Promise<R>
   prepare(data: Record<string, unknown>): Record<string, unknown>          // validated create row (defaults filled)
   insert(row: Record<string, unknown>, ignoreConflicts?: boolean): Promise<any>
@@ -91,7 +91,7 @@ export interface EngineExt {
 interface State {
   where: Where[]; order: Order[]; ordered?: boolean; search?: QuerySpec['search']
   q?: QNode[]; annotate?: [string, Expression][]; values?: string[]; list?: 'tuple' | 'flat'
-  distinct?: true | string[]; related?: string[]; prefetch?: (string | Prefetch)[]; forUpdate?: QuerySpec['forUpdate']
+  distinct?: true | string[]; related?: string[]; prefetch?: (string | PrefetchNode)[]; forUpdate?: QuerySpec['forUpdate']
 }
 
 export const MAX_IN = 1000          // every value is a bound param; engines cap params per statement
@@ -109,11 +109,13 @@ function toWhere(w: Partial<Record<string, unknown>> | Where[]): Where[] {
 const SIMPLE_OPS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains'])
 // a lookup object → flat Where (plain `field` / `field__op`) and Q leaves (relation paths, expressions,
 // other lookups). Flat Where keeps the memory source and the exact SQL of plain filters.
-function split(obj: Lookups): { where: Where[]; q?: QNode } {
+function split(obj: Lookups, def?: ModelDef): { where: Where[]; q?: QNode } {
   const where: Where[] = [], rest: [string, unknown][] = []
+  // a name that is not a column (a reverse relation / m2m accessor) is a Q leaf
+  const plain = (n: string) => !def || Object.entries(def.fields).some(([x, f]) => f.kind !== 'm2m' && (x === n || f.key(x) === n))
   for (const [k, v] of Object.entries(obj)) {
     const parts = k.split('__')
-    if (v instanceof Expression) rest.push([k, v])
+    if (v instanceof Expression || (parts.length <= 2 && !plain(parts[0]))) rest.push([k, v])
     else if (parts.length === 1) where.push({ field: k, op: 'eq', value: v })
     else if (parts.length === 2 && SIMPLE_OPS.has(parts[1])) where.push(...toWhere([{ field: parts[0], op: parts[1] as Op, value: v }]))
     else if (parts.length === 2 && parts[1] === 'isnull') where.push({ field: parts[0], op: v ? 'eq' : 'ne', value: null })
@@ -155,7 +157,7 @@ export class QuerySet<T extends object> {
   filter(where: Partial<Record<keyof T & string, unknown>> | Lookups | Where[] | QNode | Expression): QuerySet<T> {
     if (where instanceof QNode || where instanceof Expression) return this.with({ q: [...(this.state.q ?? []), toQ(where)] })
     if (Array.isArray(where)) return this.with({ where: [...this.state.where, ...toWhere(where)] })
-    const { where: ws, q } = split(where as Lookups)
+    const { where: ws, q } = split(where as Lookups, this.source.def)
     return this.with({ where: [...this.state.where, ...ws], ...(q ? { q: [...(this.state.q ?? []), q] } : {}) })
   }
 
@@ -166,7 +168,7 @@ export class QuerySet<T extends object> {
     if (!Array.isArray(where)) {
       const keys = Object.keys(where)
       if (keys.length > 1) throw new Error('exclude() takes one condition; use chained .exclude() calls or exclude(Q({...}))')
-      const { where: ws, q } = split(where as Lookups)
+      const { where: ws, q } = split(where as Lookups, this.source.def)
       if (q) return this.with({ q: [...(this.state.q ?? []), q.not()] })
       return this.with({ where: [...this.state.where, ...ws.map(w => ({ ...w, not: true }))] })
     }
@@ -206,7 +208,7 @@ export class QuerySet<T extends object> {
   }
   distinct(...fields: string[]): QuerySet<T> { return this.with({ distinct: fields.length ? fields : true }) }
   selectRelated(...paths: string[]): QuerySet<T> { return this.with({ related: [...(this.state.related ?? []), ...paths] }) }
-  prefetchRelated(...lookups: (string | Prefetch)[]): QuerySet<T> { return this.with({ prefetch: [...(this.state.prefetch ?? []), ...lookups] }) }
+  prefetchRelated(...lookups: (string | PrefetchNode)[]): QuerySet<T> { return this.with({ prefetch: [...(this.state.prefetch ?? []), ...lookups] }) }
   selectForUpdate(opts: { nowait?: boolean; skipLocked?: boolean; of?: string[] } = {}): QuerySet<T> {
     if (opts.nowait && opts.skipLocked) throw new Error('selectForUpdate: nowait and skipLocked are exclusive')
     return this.with({ forUpdate: opts })

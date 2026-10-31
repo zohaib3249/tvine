@@ -1,8 +1,8 @@
 // Relations at run time: prefetchRelated (one extra query per hop, IN batched at MAX_IN — no N+1) and
 // the m2m / reverse-fk managers behind Model.related(). orm-advanced.md §3–4.
 import { DomainError } from '../core/errors.js'
-import { engineSource } from './engine.js'
-import { Prefetch, Subquery } from './expressions.js'
+import { engineSource, insertMany } from './engine.js'
+import { PrefetchNode, Subquery } from './expressions.js'
 import type { ModelDef } from './fields/index.js'
 import type { Model } from './model.js'
 import { MAX_IN, QuerySet } from './queryset.js'
@@ -20,7 +20,7 @@ function rel(def: ModelDef, name: string, path: string): Relation {
   return r
 }
 
-export async function prefetch(def: ModelDef, items: object[], lookups: (string | Prefetch)[]): Promise<void> {
+export async function prefetch(def: ModelDef, items: object[], lookups: (string | PrefetchNode)[]): Promise<void> {
   for (const l of lookups) {
     const path = typeof l === 'string' ? l : l.path
     await hop(def, items as Row[], path.split('__'), path, typeof l === 'string' ? undefined : l.queryset as QuerySet<any> | undefined)
@@ -99,7 +99,7 @@ export function related(def: ModelDef, name: string, id: string | number, atomic
     for (const c of chunks(uniq(ids))) {
       const have = new Set(await mine().filter([{ field: t.dst, op: 'in', value: c }]).valuesList(dk, { flat: true }).fetchAll())
       const missing = c.filter(x => !have.has(x))
-      if (missing.length) await through.bulkCreate(missing.map(x => ({ [sk]: id, [dk]: x })))
+      if (missing.length) await insertMany(t.def, missing.map(x => ({ [sk]: id, [dk]: x })))
     }
   }
   const remove = async (ids: (string | number)[]) => {

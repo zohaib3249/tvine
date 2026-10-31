@@ -88,7 +88,15 @@ export class Scope {
         if (last) return this.colOut(def, pkCol(j.def), alias)
         continue
       }
-      if (!last) throw invalid(`unknown relation "${p}" on ${def.name} (in "${path}")`, path)
+      if (!last) {
+        // `price__currency`: a money field's currency column
+        const m = def.fields[p]
+        if (m?.kind === 'money' && i === parts.length - 2 && parts[i + 1] === 'currency') {
+          const c = m.columns(p)[1]
+          return { e: alias ? qcol(c, alias) : this.q8(c, force), f: OUT.text, agg: false }
+        }
+        throw invalid(`unknown relation "${p}" on ${def.name} (in "${path}")`, path)
+      }
       const r = resolve(def, p)
       return this.colOut(def, r.field, alias, force)
     }
@@ -251,12 +259,17 @@ export class Scope {
     if (rel && (parts.length > 1 || rel.kind !== 'fk')) {
       if (op === 'isnull' && parts.length === 1) {
         if (rel.kind === 'fk') return { e: value ? isNull(this.field(name).col) : isNotNull(this.field(name).col), nullAware: true }
-        const has = this.relIn(rel, [pkCol(rel.target)], 'isnull', false, key)
+        const has = this.relIn(rel, [pkCol(rel.target)], 'isnull', false, key, true)
         return { e: value ? not(has) : has, nullAware: true }
       }
       const rest = parts.length > 1 ? parts.slice(1) : [pkCol(rel.target)]
       const e = this.relIn(rel, rest, op, value, key)
+      // Django: `rel__x__isnull=True` also matches rows with no related row at all (LEFT JOIN semantics)
+      if (rel.kind === 'fk' && op === 'isnull' && value) return { e: or(isNull(this.field(name).col), e), nullAware: true }
       return { e, subject: rel.kind === 'fk' ? this.field(name).col : undefined }
+    }
+    if (parts.length === 2 && parts[1] === 'currency' && this.t.fields[name]?.kind === 'money') {
+      return this.compare(this.q8(this.t.fields[name].columns(name)[1]), OUT.text, op, value, key)
     }
     if (parts.length > 1) {
       if (this.t.fields[name] || Object.entries(this.t.fields).some(([n, f]) => f.key(n) === name)) throw invalid(`unsupported lookup "${parts.slice(1).join('__')}" on ${this.t.name}.${name}`, key)
@@ -267,23 +280,24 @@ export class Scope {
   }
 
   // `local IN (SELECT …)` through one relation hop; the rest of the path is a lookup inside
-  private relIn(rel: Relation, rest: string[], op: LeafOp, value: unknown, key: string): Expr {
+  // any: no lookup inside, just "has a related row" (reverse / m2m __isnull)
+  private relIn(rel: Relation, rest: string[], op: LeafOp, value: unknown, key: string, any = false): Expr {
     const inner = this.child(rel.kind === 'm2m' ? rel.through.def : rel.kind === 'reverse' ? rel.source : rel.target)
     const restKey = [...rest, ...(op === 'eq' ? [] : [op])].join('__')
     const local = (c: string) => this.q8(c)
     if (rel.kind === 'fk') {
-      const w = op === 'isnull' ? undefined : inner.leaf(restKey, value)
+      const w = any ? undefined : inner.leaf(restKey, value)
       return { t: 'inSub', e: local(rel.col), q: this.wrapW({ t: 'select', from: rel.target.name, as: inner.alias, cols: [inner.field(pkCol(rel.target)).col], where: w }) }
     }
     if (rel.kind === 'reverse') {
       const c = inner.field(rel.field).col
-      const w = op === 'isnull' ? isNotNull(c) : and(inner.leaf(restKey, value), isNotNull(c))
+      const w = any ? isNotNull(c) : and(inner.leaf(restKey, value), isNotNull(c))
       return { t: 'inSub', e: local(pkCol(this.t as ModelDef)), q: this.wrapW({ t: 'select', from: rel.source.name, as: inner.alias, cols: [c], where: w }) }
     }
     // m2m: pk IN (SELECT src FROM through WHERE dst IN (SELECT pk FROM target WHERE …))
     const tgt = inner.child(rel.target)
     const dst = qcol(rel.dstCol, inner.alias)
-    const w = op === 'isnull' ? undefined
+    const w = any ? undefined
       : { t: 'inSub' as const, e: dst, q: { t: 'select' as const, from: rel.target.name, as: tgt.alias, cols: [tgt.field(pkCol(rel.target)).col], where: tgt.leaf(restKey, value) } }
     return { t: 'inSub', e: local(pkCol(this.t as ModelDef)), q: this.wrapW({ t: 'select', from: rel.through.def.name, as: inner.alias, cols: [qcol(rel.srcCol, inner.alias)], where: w }) }
   }
@@ -462,7 +476,9 @@ function buildSelect(s: Scope, def: ModelDef, spec: QuerySpec, limit?: number): 
       outs.push({ key: name, alias: name, f: c.f, round: c.round })
       outCols(c, name)
     }
-    for (const path of spec.related ?? []) related.push(selectRelated(s, def, path, related.length, push))
+    // Django: selectRelated('a__b') selects a too
+    const paths = [...new Set((spec.related ?? []).flatMap(p => p.split('__').map((_, i, xs) => xs.slice(0, i + 1).join('__'))))]
+    for (const path of paths) related.push(selectRelated(s, def, path, related.length, push))
   }
   const grouped = !!having || aggs.some(Boolean)
   // order: annotation names, fields, relation paths; aggregates in a grouped query order by alias

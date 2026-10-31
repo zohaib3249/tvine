@@ -211,7 +211,7 @@ function outValue(o: Out, r: Record<string, unknown>, d: Dialect): unknown {
   cols.forEach((c, i) => { sub[c] = i === 0 ? num(r[c], o.f!) : r[c] })
   if (o.round && typeof sub[cols[0]] === 'number') sub[cols[0]] = Math.round(sub[cols[0]] as number)
   if (o.f.kind === 'money' && sub[cols[0]] != null && sub[cols[1]] == null) {
-    throw new DomainError('invalid_param', `${o.key} mixes currencies: filter on one currency or group by its currency field`, o.key)
+    throw new DomainError('invalid_param', `${o.key} mixes currencies: filter on one currency (<field>__currency) or group by it`, o.key)
   }
   return o.f.fromDb(sub, o.alias, d)
 }
