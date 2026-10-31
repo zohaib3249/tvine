@@ -1,6 +1,7 @@
 // settings.guards for every entry that names a page (HTTP, MCP, the human <Form>): path globs →
 // permissions. Any deny or throwing permission → forbidden.
 import type { Permission, Request, Session, Settings } from '../core/types.js'
+import { authenticate } from '../core/auth.js'
 import { runPermissions } from '../security/permissions.js'
 
 export const FORBIDDEN_ROUTE = 'forbidden: agents may not access this route'
@@ -20,6 +21,7 @@ export function guardCheck(settings: Settings): Check {
   check = async (path, request, session) => {
     const perms: Permission[] = guards.filter((g) => g.re.test(path)).flatMap((g) => g.permissions)
     if (!perms.length) return true
+    await authenticate(settings, request, session)   // the session's user (tvine.auth), only when a guard needs it
     const s = session ?? { sid: '', rev: 0, data: new Map(), createdAt: 0, lastSeen: 0 }
     try {
       await runPermissions(perms, { sid: s.sid, session: s, route: request.route, user: request.user, agent: request.agent, ip: request.ip })

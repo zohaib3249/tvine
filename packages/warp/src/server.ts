@@ -12,6 +12,7 @@ import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
+import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
@@ -346,7 +347,10 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
       const base = request.headers
       request.headers = { get: (n) => (n.toLowerCase() === 'cookie' ? header : base.get(n)) }
     }
-    return formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
+    const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
+    const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
+    if (rotated) jar.set(name, sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    return out
   }
 }
 
@@ -405,6 +409,8 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       const request = await buildRequest({ url, route: route(path) ?? path, headers: shown, ip: st.ip || 'unknown', via: 'human' }, settings)
       // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
+      const cookie = sid === undefined ? (await src.cookies()).get(settings.session.cookieName)?.value : undefined
+      await authenticate(settings, request, sessions.peek({ sid, cookie }))   // request.user of the page's session
       return request
     },
   }

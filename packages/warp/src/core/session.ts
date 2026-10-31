@@ -140,6 +140,18 @@ export class SessionStore {
 
   get size(): number { return this.byId.size }
 
+  // Session fixation (Django cycle_key): the same Session object (data, rev) under a fresh sid. The old sid is
+  // evicted like an expired one (cookies, channel group, snapshots, limiter/idempotency via onEvict), so neither
+  // it nor its cookies ever resolve again. The caller hands out the new sid / cookie.
+  rotate(s: Session): void {
+    if (!this.byId.has(s.sid)) throw new Error(`rotate: unknown sid ${s.sid}`)
+    this.evict(s.sid)
+    s.sid = nanoid()
+    s.lastSeen = Date.now()
+    this.byId.set(s.sid, s)
+    for (const w of this.watchers) w(s.sid, 'created')
+  }
+
   // Drop a session now (e.g. one created for a render that was then refused): the normal evict path.
   delete(sid: Sid): void { if (this.byId.has(sid)) this.evict(sid) }
 

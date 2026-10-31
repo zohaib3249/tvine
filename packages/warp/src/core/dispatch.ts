@@ -1,6 +1,7 @@
 // core/dispatch — the single mutation path (docs/design/server/core-dispatch.md). Every command
 // (HTTP, MCP, channel, WebMCP, human <Form>) runs this pipeline; first failure → one `err` event.
 import type { ActionManifest } from './actions.js'
+import { authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
 import { siteRedirect } from './redirect.js'
@@ -99,7 +100,7 @@ export async function collect(events: AsyncIterable<Event>): Promise<Event[]> {
 
 // {sid, rev, page} for serialize render(): err events without a snapshot carry none themselves.
 export function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, request: Request): Ctx {
-  const s = server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
+  const s = rotatedSession(request) ?? server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
   return { sid: s?.sid ?? cmd.sid ?? '', rev: s?.rev ?? 0, page: pageOf(request) }
 }
 
@@ -201,6 +202,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     return { sid: fresh.sid, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })] }
   }
   const { sid } = session
+  await authenticate(settings, request, session)   // request.user from this session (core/auth.ts; no-op without an auth app)
   const hold: Hold = {}
   if (!cmd.cmdId) return { sid, events: await serial(sid, () => pipeline(cmd, server, request, session, '', hold)) }
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
@@ -254,7 +256,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     const staged: Session = { ...session, data: structuredClone(session.data) }
     const ctx: ActionCtx = { request, session: staged, sid, settings, channels: staging(server.channels, outbox) }
     // 4.5 permissions (agent identity from request.agent; a throwing permission denies)
-    await runPermissions(def.rules?.permissions ?? [], permissionCtx(ctx, def.id))
+    await runPermissions(def.rules?.permissions ?? [], { ...permissionCtx(ctx, def.id), readOnly: !!def.rules?.readOnly })
     // 5. bind: valid MAC, issued for THIS action; $action never reaches the handler
     const bindKeys = def.rules?.bind ?? []
     if (bindKeys.length && cmd.bind === undefined) return [ev.err('stale_bind', 'this action needs the bind from its action ref; re-read the page')]
@@ -288,11 +290,13 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
         session.data = staged.data
         if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
         for (const [g, e] of outbox) server.channels.group(g).send(e)
+        // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
+        if (wantsCycle(staged)) { server.sessions.rotate(session); markRotated(request, session) }
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
       if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
-      const s = await snap(server, request, sid)
+      const s = await snap(server, request, session.sid)   // the new sid when the session was rotated
       return (committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))])
     }
     const inner = async function* (): AsyncIterable<Event> {
