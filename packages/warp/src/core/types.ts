@@ -99,7 +99,7 @@ export interface Request {
   id: string                            // request id (x-request-id / traceparent trace-id)
   agent: {
     is: boolean
-    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'human'
+    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'inspector' | 'human'   // inspector: dev gallery try-it (dev only)
     client?: string                     // UA string or MCP clientInfo.name
     verified?: { directory: string; keyid: string }   // v1.1: Web Bot Auth
   }

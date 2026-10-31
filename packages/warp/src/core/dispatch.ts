@@ -228,7 +228,9 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
 function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Request {
   const forced = server.tabs?.forcedAgent(sid) === true
   if (!forced && cmd.agentCmd === undefined) return request
-  const via = forced ? 'channel' : cmd.agentCmd?.via === 'webmcp' ? 'webmcp' : 'channel'
+  const claim = cmd.agentCmd?.via
+  // 'inspector' = the dev gallery's try-it (weft dev/Gallery.tsx); meaningless in production (no gallery there)
+  const via = forced ? 'channel' : claim === 'webmcp' ? 'webmcp' : claim === 'inspector' && process.env.NODE_ENV !== 'production' ? 'inspector' : 'channel'
   const out: Request = { ...request, agent: { ...request.agent, is: true, via } }
   if (quiet.has(request)) quiet.add(out)
   return out

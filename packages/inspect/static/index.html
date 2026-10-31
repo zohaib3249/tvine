@@ -136,21 +136,29 @@ es.addEventListener('note', (m) => logLi(el('li', 'note', JSON.parse(m.data).mes
 // ---- Widgets tab: rows from the framed dev page (weft dev/Gallery.tsx → /tvine/dev/widgets → this stream).
 // Read-only. "Try it" never runs from here: it shows the exact ui command and where to run it (the page's own
 // gallery, Alt+Shift+W), so an inspector can't drive a tab without a human in that tab.
-let wrow = null
+// One tab at a time: the first tab seen is pinned (two framed tabs never overwrite each other); a picker switches.
+const trees = new Map()
+let pinned = null, wrow = null
 const acts = []
 const help = el('pre', 'mute')   // kept across re-renders
 function renderWidgets() {
   const box = $('widgets'); box.replaceChildren()
   if (!wrow) { box.append(el('div', 'mute', 'Live widget tree of the page in the left pane (dev only; sensitive values masked). Waiting for the page…')); return }
+  if (trees.size > 1) {
+    const pick = el('select'); pick.setAttribute('aria-label', 'tab')
+    for (const [id, r] of trees) { const o = el('option', '', 'tab ' + id + ' · ' + r.page); o.value = id; o.selected = id === pinned; pick.append(o) }
+    pick.onchange = () => { pinned = pick.value; wrow = trees.get(pinned); renderWidgets() }
+    box.append(pick)
+  }
   box.append(el('div', 'mute', 'tab ' + wrow.tab + ' · ' + wrow.page + ' · ' + new Date(wrow.t).toTimeString().slice(0, 8)))
   box.append(help)
   const ul = el('ul'); ul.id = 'acts'; ul.style.paddingLeft = '1em'
-  for (const a of acts) {
+  for (const a of acts.filter((x) => x.tab === pinned)) {
     const li = el('li', a.ok ? '' : 'err', new Date(a.t).toTimeString().slice(0, 8) + ' agent@' + a.via + (a.source ? '/' + a.source : '') + ' ')
     li.append((a.steps || []).map((s) => s.target + '.' + s.control + '(' + JSON.stringify(s.args || {}) + ')').join(' → ') + ' → ' + (a.ok ? 'ok' : a.code + ': ' + a.message) + ' ' + a.ms + 'ms')
     ul.append(li)
   }
-  if (acts.length) box.append(el('div', '', 'Agent actions'), ul)
+  if (ul.children.length) box.append(el('div', '', 'Agent actions'), ul)
   const walk = (nodes, depth) => {
     for (const n of nodes || []) {
       const d = el('div', 'w'); d.style.paddingLeft = depth * 14 + 'px'
@@ -173,7 +181,7 @@ function renderWidgets() {
   walk(wrow.tree, 0)
 }
 function widgetRow(r) {
-  if (r.kind === 'widgets') { wrow = r; renderWidgets(); return true }
+  if (r.kind === 'widgets') { trees.delete(r.tab); trees.set(r.tab, r); if (trees.size > 20) trees.delete(trees.keys().next().value); pinned ??= r.tab; wrow = trees.get(pinned); renderWidgets(); return true }
   if (r.kind === 'agent') { acts.unshift(r); acts.length = Math.min(acts.length, 50); renderWidgets(); return true }
   return false
 }

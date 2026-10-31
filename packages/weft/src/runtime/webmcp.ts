@@ -158,7 +158,8 @@ export async function withNav<T>(fn: () => Promise<T>): Promise<T | Obj> {
 // agent's forwarded command (via 'tab'), and the dev gallery's "try it as agent" (via 'inspector',
 // source 'gallery': same executor, hooks and presence). Results are plain JSON values.
 export function pageTools(via: 'webmcp' | 'tab' | 'inspector', header?: string, source?: 'gallery') {
-  const agentVia = via === 'webmcp' ? 'webmcp' : 'channel'
+  // the server tells a dev try-it apart from a real agent (still agent-marked; Warp honors 'inspector' in dev only)
+  const agentVia = via === 'webmcp' ? 'webmcp' : via === 'inspector' ? 'inspector' : 'channel'
   const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
     outcome(await agentPost({ action: h.id, params, bind: h.bind, cmdId, agentCmd: { cmdId, via: agentVia } }, header))
   return {

@@ -93,25 +93,21 @@ const feedOn = () => {
   try { return w.top !== w.self && LOCAL.has(w.location.hostname) } catch { return false }
 }
 
-// An agent command as one row: targets, controls, args (sensitive widgets' and secret params' values masked), outcome.
+// An agent command as one row. Args come pre-masked from the executor (ExecSeen.steps), decided while each widget
+// was still mounted.
 export function agentRow(e: ExecSeen): Record<string, unknown> {
-  const reg = getRegistry()
-  const steps = e.cmd.steps ?? (e.cmd.target ? [{ target: e.cmd.target, control: e.cmd.control ?? '', args: e.cmd.args }] : [])
-  const mask = (target: string, control: string, args: Record<string, unknown> = {}) => {
-    const spec = reg.get(target)?.spec
-    const ps = (spec?.controls?.[control]?.params ?? {}) as Record<string, ParamSpec>
-    return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, spec?.sensitive || ps[k]?.secret ? '[sensitive]' : v]))
-  }
   return {
     kind: 'agent', via: e.via, ...(e.source && { source: e.source }), ms: e.ms,
-    steps: steps.slice(0, 20).map((s) => ({ target: String(s.target), control: String(s.control), args: mask(String(s.target), String(s.control), s.args) })),
+    steps: e.steps.slice(0, 20),
     ok: !e.out.error, ...(e.out.error && { code: e.out.error.code, message: e.out.error.message }),
   }
 }
 
 function startFeed(): () => void {
   if (!feedOn()) return () => {}
-  const tab = newId()
+  // stable across reloads of this frame (sessionStorage is per frame), so the inspector's pinned tab survives a reload
+  let tab = newId()
+  try { const s = globalThis.sessionStorage, k = 'tvine.dev.tab'; tab = s.getItem(k) ?? (s.setItem(k, tab), tab) } catch { /* private mode: per mount */ }
   let dead = false, timer: ReturnType<typeof setTimeout> | undefined
   const post = (row: Record<string, unknown>) => {
     if (dead) return
