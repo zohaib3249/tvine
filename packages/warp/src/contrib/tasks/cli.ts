@@ -1,4 +1,5 @@
 // tvine worker / tvine tasks (docs/design/contrib/tasks.md §Worker, §Ops). Called from the main CLI.
+import { getLogger } from '../../log.js'
 import { snapshotCacheFor } from '../../backends/index.js'
 import { connections } from '../../data/db.js'
 import { dataVersion } from '../../data/engine.js'
@@ -15,12 +16,10 @@ import { Worker, type Log } from './worker.js'
 export interface Io { out(s: string): void; err(s: string): void; exit(code: number): void }
 type Flags = Record<string, string | boolean | undefined>
 
-export function logger(mode: Settings['logging']): Log {
-  if (mode === 'none') return () => {}
-  return (level, msg, data = {}) => {
-    const line = mode === 'json' ? JSON.stringify({ level, msg, ...data }) : `${level} ${msg} ${Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ')}`
-    console.error(line)
-  }
+// the worker's log: tvine.tasks (settings.logging configures it, like every logger)
+export function logger(_mode?: Settings['logging']): Log {
+  const l = getLogger('tvine.tasks')
+  return (level, msg, data) => l[level](msg, data)
 }
 
 // broker 'memory' lives inside ONE process: a separate worker / CLI would see an empty, private store

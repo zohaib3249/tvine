@@ -166,6 +166,8 @@ function lazyAtomic<R>(fn: () => Promise<R>, signal?: AbortSignal): Promise<R> {
 }
 
 // true inside an open atomic() block (selectForUpdate requires one, like Django)
+// fn runs outside any atomic() block (its writes commit on their own, even if the caller's block rolls back)
+export const outsideAtomic = <R>(fn: () => R): R => bound.exit(fn)
 export function inAtomic(): boolean { const tx = bound.getStore(); return !!tx && !tx.closed }
 
 // Inside atomic(): run fn after the outermost commit (dropped on rollback). Outside atomic(), or

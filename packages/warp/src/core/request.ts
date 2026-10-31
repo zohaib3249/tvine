@@ -80,6 +80,7 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
     headers,
     ip: isHttp ? clientIp(headers.get('x-forwarded-for'), remote, settings.trustProxy) : normalizeIp(remote),
     id: requestId(headers),
+    ...(headers.get('x-tvine-locale') && { locale: headers.get('x-tvine-locale')! }),
     agent: isHttp
       ? { is: src.isAgent, via: src.isAgent ? 'http' : 'human', client: headers.get('user-agent') ?? undefined }
       : src.via === 'human' ? { is: false, via: 'human', client: headers.get('user-agent') ?? undefined }

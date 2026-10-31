@@ -2,6 +2,7 @@
 // configure() registers an alias without opening anything; get() builds the driver lazily (and the
 // pg / mysql pool connects on its first query). sqlite: WAL + busy_timeout, one connection per alias;
 // postgres / mysql: a pool sized from settings.db.pool.
+import { getLogger } from '../log.js'
 import type Database from 'better-sqlite3'
 import { mysqlDriver, pgDriver, sqliteDriver, type Driver, type PoolOpts, type PoolStats } from './driver.js'
 import { sqlite as sqliteDialect } from './sql/dialects/sqlite.js'
@@ -39,11 +40,30 @@ export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAUL
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
 }
 
+// tvine.db: a statement slower than ms is a warn line with its SQL (never its params: they may hold secrets)
+const dbLog = getLogger('tvine.db')
+function timed(d: Driver, ms: number, alias: string): Driver {
+  const watch = <T>(sql: string, p: Promise<T>): Promise<T> => {
+    const t0 = performance.now()
+    return p.finally(() => {
+      const took = performance.now() - t0
+      if (took >= ms) dbLog.warn('slow query', { alias, ms: Math.round(took), sql: sql.slice(0, 2000) })
+    })
+  }
+  const wrap = (x: Driver): Driver => Object.assign(Object.create(x) as Driver, {
+    query: (sql: string, params: unknown[]) => watch(sql, x.query(sql, params)),
+    exec: (sql: string, params: unknown[]) => watch(sql, x.exec(sql, params)),
+    transaction: <T>(fn: (tx: Driver) => Promise<T>, o?: { signal?: AbortSignal }) => x.transaction((tx) => fn(wrap(tx)), o),
+    ...(x.session && { session: <T>(fn: (dd: Driver) => Promise<T>) => x.session!((dd) => fn(wrap(dd))) }),
+  })
+  return wrap(d)
+}
+
 class ConnectionHandler {
-  private dbs = new Map<string, { url: string; pool?: PoolOpts }>()
+  private dbs = new Map<string, { url: string; pool?: PoolOpts; slowQueryMs?: number }>()
   private open = new Map<string, Connection>()
 
-  configure(settings: { db: { url: string; pool?: PoolOpts } }): void {
+  configure(settings: { db: { url: string; pool?: PoolOpts; slowQueryMs?: number } }): void {
     void this.closeAll()
     this.dbs.set('default', settings.db)
   }
@@ -53,7 +73,9 @@ class ConnectionHandler {
     if (!c) {
       const db = this.dbs.get(alias) ?? (alias === 'default' ? { url: resolveDbUrl() } : undefined)
       if (!db?.url) throw new Error(`database "${alias}" is not configured`)
-      this.open.set(alias, (c = openConn(db.url, alias, db.pool)))
+      c = openConn(db.url, alias, db.pool)
+      if (db.slowQueryMs) c.driver = timed(c.driver, db.slowQueryMs, alias)
+      this.open.set(alias, c)
     }
     return c
   }

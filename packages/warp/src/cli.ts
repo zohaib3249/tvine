@@ -19,6 +19,9 @@ import { mcpEnabled } from './transport/mcp.js'
 import { backendTable } from './backends/index.js'
 import { redisUsers } from './settings.js'
 import { redis } from './redis/index.js'
+import type { AddressInfo } from 'node:net'
+import { defaultEnv, defaultNodeEnv, env, envReport, isProduction, loadDotenv } from './env.js'
+import { describeMiddleware } from './middleware/index.js'
 
 export interface Io {
   out(s: string): void; err(s: string): void; exit(code: number): void
@@ -34,9 +37,9 @@ async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promis
 }
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
-  start [--port 3000] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
+  start [--port 3000] [--host h] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
                                 --api-only: no frontend (Next runs separately with TVINE_API_URL)
-  dev [--port 3000]             runserver: in-process next dev (needs next installed)
+  dev [--port 3000] [--host h]  runserver: in-process next dev (needs next installed)
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
   check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
@@ -61,8 +64,8 @@ type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
-  start: { options: { port: str, 'api-only': bool }, args: [0, 0] },
-  dev: { options: { port: str }, args: [0, 0] },
+  start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
+  dev: { options: { port: str, host: str }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
@@ -83,9 +86,11 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
 
 class Usage extends Error {}
 
-// .env.local beats .env; real environment variables beat both (loadEnvFile never overrides).
-function loadEnv() {
-  for (const f of ['.env.local', '.env']) if (existsSync(f)) process.loadEnvFile(f)
+// .env files (env.md): real environment variables beat them all (loadEnvFile never overrides)
+const loadEnv = () => { loadDotenv() }
+// the address the server really listens on (not a guess): http://127.0.0.1:3000, http://[::]:3000, …
+export function boundUrl(a: AddressInfo): string {
+  return `http://${a.family === 'IPv6' || a.family === (6 as never) ? `[${a.address}]` : a.address}:${a.port}`
 }
 
 // a built Next app in cwd is served; otherwise API-only
@@ -141,15 +146,17 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     switch (cmd) {
       case 'start':
       case 'dev': {
-        const port = o.port === undefined ? Number(process.env.PORT ?? 3000) : Number(o.port)
+        const port = o.port === undefined ? env.int('PORT', 3000) : Number(o.port)
+        const host = (o.host as string | undefined) ?? (env.has('HOST') ? env.str('HOST') : undefined)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const dev = cmd === 'dev'
         // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
-        if (!dev) process.env.NODE_ENV ||= 'production'   // empty (NODE_ENV=) counts as unset
-        if (dev && process.env.NODE_ENV === 'production') throw new Usage('tvine dev is for development; use tvine start in production')
+        if (!dev) defaultNodeEnv('production')   // empty (NODE_ENV=) counts as unset
+        if (dev && isProduction()) throw new Usage('tvine dev is for development; use tvine start in production')
+        if (dev) defaultEnv('TVINE_DEBUG', '1')   // runserver = DEBUG on (dev CSP, inspector feed), unless TVINE_DEBUG says no
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
-        await srv.listen(port).catch(async (e) => { await srv.close(); throw e })
-        io.out(`listening on http://127.0.0.1:${(srv.server.address() as { port: number }).port}`)
+        await srv.listen(port, host).catch(async (e) => { await srv.close(); throw e })
+        io.out(`listening on ${boundUrl(srv.server.address() as AddressInfo)}`)
         const regen = dev ? devWatch(apps, io) : undefined
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
@@ -190,7 +197,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (!existsSync(join(dir, 'node_modules/@tvine/inspect'))) throw new Error('@tvine/inspect is not installed in this app: pnpm add -D @tvine/inspect')
         const url = pathToFileURL(createRequire(join(dir, 'package.json')).resolve('@tvine/inspect')).href
         const { startInspector } = (await import(url)) as { startInspector(o: { target: string; port: number }): Promise<{ url: string; close(): Promise<void> }> }
-        const target = args[0] ?? `http://localhost:${process.env.PORT ?? 3000}`
+        const target = args[0] ?? `http://localhost:${env.int('PORT', 3000)}`
         const ins = await startInspector({ target, port })
         io.out(`inspector on ${ins.url} -> ${target}`)
         const stop = () => {
@@ -203,6 +210,10 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'check': {
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         // which backend each subsystem runs on (one settings file drives them all), and every redis alias in use answers
+        // Django MIDDLEWARE as it will run, outermost first; which env vars are set (names only, never values)
+        io.out(`middleware: ${describeMiddleware(srv.ctx.middleware as never).join(' > ') || '(none)'}`)
+        io.out(`action middleware: ${srv.ctx.settings.actionMiddleware.length} global`)
+        io.out(`env set: ${envReport().filter((e) => e.set).map((e) => e.name).join(', ') || '(none)'}`)
         for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
         let down = false
         for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
@@ -350,7 +361,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     }
   } catch (e) {
     const err = e as Error
-    io.err(`tvine ${cmd}: ${process.env.TVINE_DEBUG === '1' ? err.stack ?? err.message : err.message}`)
+    io.err(`tvine ${cmd}: ${/^(1|true|yes|on)$/i.test(env.str('TVINE_DEBUG', '')) ? err.stack ?? err.message : err.message}`)
     if (e instanceof Usage) io.err(`run 'tvine' for usage`)
     return 1
   }

@@ -3,7 +3,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
-import { audited, auditRow, writeAudit } from './audit.js'
+import { audited, auditRow, securityEvent, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
@@ -23,11 +23,14 @@ import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
 import { cachedRun } from '../cache/index.js'
+import { getLogger } from '../log.js'
+const tvineLog = getLogger('tvine')
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 
 export interface ServerCtx {
   actions: ActionManifest
+  middleware?: { name: string }[]  // the active HTTP middleware, outermost first (server.ts; tvine check prints it)
   sessions: SessionStore
   snapshot: (route: string, sid: Sid) => Promise<Snapshot>
   settings: Settings
@@ -67,7 +70,7 @@ const watching = new WeakMap<SessionStore, WeakSet<Hooks>>()   // one session wa
 // ponytail: setOnCommitErrorHandler is process-global, so the last ServerCtx built owns it (single-process v1).
 export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'> & Partial<ServerCtx>): ServerCtx {
   const { settings } = o
-  const log: Log = o.log ?? (settings.logging === 'none' ? () => {} : (level, msg, data) => console[level](JSON.stringify({ level, msg, ...data })))
+  const log: Log = o.log ?? ((level, msg, data) => tvineLog[level](msg, data))
   // backends from settings (backends/index.ts): memory by default, 'redis' shares them across servers
   const channels = o.channels ?? channelsFor(settings, log)
   const closers: (() => unknown)[] = []
@@ -118,6 +121,7 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   const hold: Hold = { req: request }
   const { sid, events } = await run(cmd, server, request, hold)
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
+  securityOutcome(server, cmd, sid, events, hold.req!)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
   yield* events
 }
@@ -133,6 +137,16 @@ async function auditFailure(server: ServerCtx, cmd: Command, sid: Sid | undefine
   const code = err.reason && err.reason !== err.code ? `${err.code}:${err.reason}` : err.code
   try { await writeAudit(auditRow(server.settings, { action: cmd.action, params, request: hold.req!, sid, cmdId: cmd.cmdId, ms, code })) }
   catch (e) { server.log('error', 'audit write failed', { action: cmd.action, error: errStr(e) }) }
+}
+
+// tvine.security: every refusal a command can meet (core/audit.ts securityEvent)
+function securityOutcome(server: ServerCtx, cmd: Command, sid: Sid | undefined, events: Event[], request: Request): void {
+  const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+  if (!err) return
+  const event = err.code === 'rate_limited' ? 'rate_limited' : err.code === 'human_only' ? 'human_only' : err.code === 'confirm_required' ? 'confirm_required'
+    : err.reason === 'forbidden' ? (/cross-origin/.test(err.message) ? 'origin_refused' : 'permission_denied') : undefined
+  // rate limits / confirms are routine: logged, not audited (the audit trail already has the command's own row)
+  if (event) securityEvent(event, { action: String(cmd.action).slice(0, 100) }, { settings: server.settings, request, sid, audit: event === 'origin_refused' })
 }
 
 // Hooks fire once run() settled (an ok is always after its commit), on a frozen copy: a hook can alter
@@ -343,7 +357,7 @@ async function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: S
   if (!forced && cmd.agentCmd === undefined) return request
   const claim = cmd.agentCmd?.via
   // 'inspector' = the dev gallery's try-it (weft dev/Gallery.tsx); meaningless in production (no gallery there)
-  const via = forced ? 'channel' : claim === 'webmcp' ? 'webmcp' : claim === 'inspector' && process.env.NODE_ENV !== 'production' ? 'inspector' : 'channel'
+  const via = forced ? 'channel' : claim === 'webmcp' ? 'webmcp' : claim === 'inspector' && server.settings.debug ? 'inspector' : 'channel'
   const out: Request = { ...request, agent: { ...request.agent, is: true, via } }
   if (quiet.has(request)) quiet.add(out)
   return out
@@ -468,7 +482,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       try { out = await steps() } finally { busy = false }
       yield* out
     }
-    const chain = [...settings.middleware, ...(server.appMiddleware.get(def.id.slice(0, def.id.indexOf('.'))) ?? [])]
+    const chain = [...settings.actionMiddleware, ...(server.appMiddleware.get(def.id.slice(0, def.id.indexOf('.'))) ?? [])]
     const mwCmd = deepFreeze({ ...cmd, params: structuredClone(cmd.params) })
     const drained = (async () => {   // drained in full (not collect()), so code after `yield* next()` runs
       const out: Event[] = []

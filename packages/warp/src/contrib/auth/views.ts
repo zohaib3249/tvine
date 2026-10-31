@@ -1,4 +1,5 @@
 // tvine.auth actions (docs/design/contrib/auth.md §3): every flow runs through dispatch — permissions, rate
+import { securityEvent } from '../../core/audit.js'
 // limits, one transaction. Secrets are only ever returned once, by the action that creates them.
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
@@ -51,8 +52,13 @@ async function reauth(ctx: ActionCtx, u: AuthUser, password: string | undefined)
 }
 
 async function locked(ctx: ActionCtx, username: string): Promise<void> {
-  if (await throttleOf(ctx.settings).locked(username, ctx.request.ip)) throw new DomainError('locked', 'too many failed attempts; try again later')
+  if (await throttleOf(ctx.settings).locked(username, ctx.request.ip)) {
+    securityEvent('lockout', { username: username.slice(0, 150) }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
+    throw new DomainError('locked', 'too many failed attempts; try again later')
+  }
 }
+const loginFailed = (ctx: ActionCtx, username: string, why: string) =>
+  securityEvent('login_failed', { username: username.slice(0, 150), why }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
 
 export const loginAction = defineAction('login', z.object({
   username: z.string().min(1).max(150),
@@ -63,12 +69,13 @@ export const loginAction = defineAction('login', z.object({
   await locked(ctx, username)
   const row = await User.objects.filter({ username: username.normalize('NFKC') }).first()
   const { ok, upgrade } = row?.isActive ? await checkPassword(password, row.password, ctx.settings) : { ok: await dummyCheck(password, ctx.settings), upgrade: false }
-  if (!row || !ok) { await t.fail(username, ip); throw INVALID() }
+  if (!row || !ok) { await t.fail(username, ip); loginFailed(ctx, username, 'password'); throw INVALID() }
   if (await hasSecondFactor(row.id)) {
     if (!otp) throw new DomainError('otp_required', 'enter the code from your authenticator app (or a recovery code) as otp')
-    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { await t.fail(username, ip); throw INVALID() }
+    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { await t.fail(username, ip); loginFailed(ctx, username, 'otp'); throw INVALID() }
   }
   await t.succeed(username, ip)
+  securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
   return safeUser(await login(ctx, current))
 }, { rate: { limit: 10, windowMs: 60_000 } })

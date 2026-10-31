@@ -3,6 +3,8 @@
 import { createHash } from 'node:crypto'
 import { redactSecrets } from './redact.js'
 import type { ActionDef, Request, Settings } from './types.js'
+import { getLogger } from '../log.js'
+import { outsideAtomic } from '../data/engine.js'
 
 export type AuditVia = 'human' | 'agent' | 'api-token' | 'job' | 'webmcp' | 'tab'
 export interface AuditRow {
@@ -57,3 +59,21 @@ export function auditRow(settings: Settings, o: { action: string; params: unknow
 }
 
 export const writeAudit = (row: AuditRow): Promise<void> => slot.write ? slot.write(row) : Promise.resolve()
+
+// THE security channel (docs/design/conventions/logging.md §tvine.security): login ok/fail, lockout, permission
+// denied, human_only, confirm, origin / host / ip refusals, rate-limit hits. Logged on `tvine.security` (redacted);
+// with settings.audit on, also one audit row (action `security.<event>`), written outside the caller's transaction
+// so a refused command's rollback keeps it. audit: false for floods (rate limits, scanners).
+const security = getLogger('tvine.security')
+export function securityEvent(event: string, fields: Record<string, unknown>, o: { settings?: Settings; request?: Request; sid?: string; level?: 'info' | 'warn'; audit?: boolean } = {}): void {
+  const r = o.request
+  const f = { event, ...(r && { ip: r.ip, requestId: r.id, path: r.path, userId: r.user.isAuthenticated ? r.user.id ?? null : null, via: viaOf(r) }), ...(o.sid && { sidHash: sidHash(o.sid) }), ...fields }
+  security[o.level ?? (event === 'login_ok' ? 'info' : 'warn')](event, f)
+  if (o.audit === false || !o.settings?.audit.enabled || !slot.write) return
+  const row: AuditRow = {
+    userId: f.userId == null ? null : String(f.userId), via: r ? viaOf(r) : 'human', agent: r?.agent.is ? (r.agent.client ?? null) : null,
+    agentVerified: !!r?.agent.verified, action: `security.${event}`, outcome: event === 'login_ok' ? 'ok' : 'error', code: event,
+    params: redactParams(o.settings, fields), ip: String(f.ip ?? ''), sidHash: sidHash(o.sid), ms: 0, requestId: String(f.requestId ?? ''), cmdId: null,
+  }
+  void outsideAtomic(() => writeAudit(row)).catch((e: unknown) => security.error('audit write failed', { event, error: String(e) }))
+}

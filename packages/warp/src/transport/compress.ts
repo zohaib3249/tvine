@@ -66,7 +66,7 @@ const buf = (c: unknown, enc?: BufferEncoding) => (typeof c === 'string' ? Buffe
 export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookOptions): () => void {
   type Fn = (this: unknown, ...a: unknown[]) => unknown
   const orig = { writeHead: res.writeHead, write: res.write, end: res.end, flushHeaders: res.flushHeaders, on: res.on } as unknown as Record<'writeHead' | 'write' | 'end' | 'flushHeaders' | 'on', Fn>
-  const c = o.compression && o.compression.enabled ? o.compression : undefined
+  let c: CompressionSettings | undefined   // read when the headers are decided: the GZip middleware may turn it on until then
   let state: 'open' | 'held' | 'sent' = 'open'
   let enc: Enc | undefined
   let z: Gzip | BrotliCompress | undefined
@@ -137,6 +137,7 @@ export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookO
   // The headers are decided here, once: security/CORS headers first, then whether to compress.
   const decide = () => {
     o.onHeaders()
+    c = o.compression && o.compression.enabled ? o.compression : undefined
     const type = res.getHeader('content-type')
     const s = res.statusCode
     const eligible = !!c && compressible(typeof type === 'string' ? type : undefined) && !res.hasHeader('content-encoding') &&

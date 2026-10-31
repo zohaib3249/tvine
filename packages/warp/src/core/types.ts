@@ -1,3 +1,4 @@
+import type { LoggingSetting } from '../log.js'
 import type { IncomingMessage } from 'node:http'
 import type { z } from 'zod'
 import type { WidgetFrag } from '../shape/disclose.js'
@@ -119,6 +120,7 @@ export interface Request {
   headers: ReadonlyHeaders
   ip: string                            // derived via settings.trustProxy; never raw XFF
   id: string                            // request id (x-request-id / traceparent trace-id)
+  locale?: string                       // the Locale middleware's pick from Accept-Language
   agent: {
     is: boolean
     via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'inspector' | 'human'   // inspector: dev gallery try-it (dev only)
@@ -242,7 +244,12 @@ export interface Settings {
   }
   socket: boolean
   mcp: { tools: 'both' | 'generic' | 'typed'; exclude: string[]; maxTools: number }
-  middleware: Middleware[]
+  // HTTP middleware (Django MIDDLEWARE), outermost first: 'tvine.middleware.<Name>', a defineMiddleware({...}), a class,
+  // or [one of those, options] (middleware/index.ts). Only listed ones run. Action middleware: actionMiddleware.
+  middleware: unknown[]
+  actionMiddleware: Middleware[]    // around dispatch (core/middleware.ts); settings.middleware functions land here
+  allowedHosts: string[]            // Django ALLOWED_HOSTS ('*', '.example.com'); required in production
+  debug: boolean                    // Django DEBUG: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string }
   snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
@@ -251,8 +258,9 @@ export interface Settings {
     url: string
     pool: { max: number; acquireMs: number; idleMs: number }
     atomicRequests: boolean         // Django ATOMIC_REQUESTS: each non-readOnly action = one transaction
+    slowQueryMs: number             // a statement slower than this is logged on tvine.db (warn); 0 = off
   }
-  logging: 'json' | 'pretty' | 'none'
+  logging: LoggingSetting           // 'json' | 'pretty' | 'none' or Django LOGGING (log.ts)
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
   // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }

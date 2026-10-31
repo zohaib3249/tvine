@@ -7,6 +7,8 @@ import { collect, dispatch, rateLimited, renderCtx, type ServerCtx } from '../co
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
+import { getLogger } from '../log.js'
+const requestLog = getLogger('tvine.request')
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
@@ -109,10 +111,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     return settings.formats.default
   }
 
-  const log = (line: Record<string, unknown>) => {
-    if (settings.logging === 'json') console.log(JSON.stringify(line))
-    else if (settings.logging === 'pretty') console.log(`${line.status} ${line.route} ${line.action ?? ''} ${line.ms}ms ${line.id}`)
-  }
+  // one line per agent request on tvine.request (sid only as a hash)
+  const log = (line: Record<string, unknown>) => requestLog.info('agent request', line)
 
   async function handle(req: IncomingMessage, res: ServerResponse, forced: Format | undefined) {
     const t0 = performance.now()

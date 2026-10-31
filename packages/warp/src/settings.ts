@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
+import { env, isProduction } from './env.js'
+import { LEVELS } from './log.js'
 import type { AuthSettings, CacheSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
 
 // Canonical shape: docs/design/conventions/settings.md. Validated at boot.
@@ -29,6 +31,11 @@ export function redisFromEnv(): Settings['redis'] {
   return { default: { url: env } }
 }
 
+// Django MIDDLEWARE defaults: secure without configuring anything (middleware/index.ts has the catalog)
+export const DEFAULT_MIDDLEWARE = ['RequestId', 'AllowedHosts', 'Security', 'Cors', 'GZip'].map((n) => `tvine.middleware.${n}`)
+// Django's DEBUG ALLOWED_HOSTS: what dev (and tests) accept when settings.allowedHosts is empty
+export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
+
 export const CACHE_DEFAULTS: CacheSettings = { backend: 'memory', redis: 'default', timeout: 300, keyPrefix: '', version: 1, maxEntries: 300 }
 
 export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
@@ -49,13 +56,16 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   },
   socket: true,
   mcp: { tools: 'both', exclude: [], maxTools: 40 },
-  middleware: [],
+  middleware: DEFAULT_MIDDLEWARE,
+  actionMiddleware: [],
+  allowedHosts: [],
+  debug: false,
   guards: [],
   media: { dir: './media', route: '/media' },
   snapshotCache: { ttlMs: 60_000, backend: 'memory', redis: 'default' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
   // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
-  db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
+  db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true, slowQueryMs: 500 },
   logging: 'json',
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
@@ -123,7 +133,11 @@ const schema: z.ZodType<Settings> = z.object({
   }),
   socket: z.boolean(),
   mcp: z.object({ tools: z.enum(['both', 'generic', 'typed']), exclude: z.array(z.string()), maxTools: posInt }),
-  middleware: z.array(fn<Middleware>()),
+  middleware: z.array(z.custom<unknown>((v) => typeof v === 'string' || typeof v === 'function' || (Array.isArray(v) && v.length === 2 && (typeof v[0] === 'string' || typeof v[0] === 'object' || typeof v[0] === 'function') && isPlain(v[1])) || isPlain(v),
+    { message: "a middleware entry is 'tvine.middleware.<Name>', defineMiddleware({...}), a class, or [one of those, options]" })),
+  actionMiddleware: z.array(fn<Middleware>()),
+  allowedHosts: z.array(z.string().regex(/^(\*|\.?[a-z0-9.-]+|\[[0-9a-f:.]+\])$/i, "a host name, '.example.com' (with subdomains), an [ipv6] or '*'")),
+  debug: z.boolean(),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
   media: z.object({ dir: z.string(), route: z.string() }),
   snapshotCache: z.object({ ttlMs: posInt, backend, redis: alias }),
@@ -132,8 +146,19 @@ const schema: z.ZodType<Settings> = z.object({
     url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),
     pool: z.object({ max: posInt, acquireMs: posInt, idleMs: posInt }),
     atomicRequests: z.boolean(),
+    slowQueryMs: posInt,
   }),
-  logging: z.enum(['json', 'pretty', 'none']),
+  logging: z.union([z.enum(['json', 'pretty', 'none']), z.object({
+    level: z.enum(LEVELS), format: z.enum(['json', 'pretty']),
+    handlers: z.array(z.discriminatedUnion('type', [
+      z.object({ type: z.literal('console'), level: z.enum(LEVELS).optional(), format: z.enum(['json', 'pretty']).optional(), stream: z.enum(['stdout', 'stderr']).optional() }).strict(),
+      z.object({ type: z.literal('file'), path: z.string().min(1), level: z.enum(LEVELS).optional(), format: z.enum(['json', 'pretty']).optional(),
+        maxBytes: z.number().int().positive().optional(), daily: z.boolean().optional(), keep: z.number().int().min(0).optional() }).strict(),
+      z.object({ type: z.literal('custom'), level: z.enum(LEVELS).optional(), write: fn<(r: never) => void>() }).strict(),
+    ])),
+    loggers: z.record(z.string(), z.enum([...LEVELS, 'off'])),
+    redact: z.array(z.string()),
+  }).partial().strict()]),
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.object({ enabled: z.boolean(), actions: z.enum(['writes', 'all']), retentionDays: z.number().int().positive(), redact: z.array(z.string()) }),
@@ -212,6 +237,18 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   // every named cache (not only `default`) is completed from the cache defaults
   if (isPlain(merged.caches)) merged.caches = Object.fromEntries(Object.entries(merged.caches).map(([k, c]) => [k, { ...CACHE_DEFAULTS, ...(c as object) }]))
+  // back compat: functions in settings.middleware are action middleware (the old form); strings / objects / classes
+  // are HTTP middleware. A list of only functions keeps the default HTTP list.
+  if (Array.isArray(rest.middleware)) {
+    const action = rest.middleware.filter((m) => typeof m === 'function' && !/^class[\s{]/.test(Function.prototype.toString.call(m)))
+    const http = rest.middleware.filter((m) => !action.includes(m as never))
+    merged.actionMiddleware = [...((rest.actionMiddleware as unknown[] | undefined) ?? []), ...action]
+    merged.middleware = http.length || !action.length ? http : DEFAULT_MIDDLEWARE
+  }
+  if (rest.allowedHosts === undefined && env.has('TVINE_ALLOWED_HOSTS')) merged.allowedHosts = env.list('TVINE_ALLOWED_HOSTS')
+  if (rest.debug === undefined) merged.debug = env.has('TVINE_DEBUG') ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
+  // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
+  if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
   const settings = schema.parse(merged)
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
   // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
@@ -237,6 +274,12 @@ export function redisUsers(s: Settings): { key: string; alias: string }[] {
   if (s.tasks.broker === 'redis') out.push({ key: 'settings.tasks.broker', alias: s.tasks.redis })
   return out
 }
+// AllowedHosts on, production, no hosts: every request would be a 400 — fail at boot instead (Django check --deploy)
+export function checkHosts(s: Settings): void {
+  const on = s.middleware.some((m) => m === 'tvine.middleware.AllowedHosts' || (Array.isArray(m) && m[0] === 'tvine.middleware.AllowedHosts'))
+  if (on && isProduction() && !s.allowedHosts.length) throw new Error("settings.allowedHosts is empty in production: list your domains (e.g. ['shop.example.com', '.example.com']) or set TVINE_ALLOWED_HOSTS=shop.example.com")
+}
+
 export function checkBackends(s: Settings): void {
   for (const u of redisUsers(s)) {
     if (!s.redis[u.alias]) {

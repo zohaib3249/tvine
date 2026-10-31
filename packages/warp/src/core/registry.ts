@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isProduction } from '../env.js'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
 import { DomainError, Goto } from './errors.js'
@@ -17,7 +18,7 @@ type Body = Omit<Snapshot, 'sid' | 'rev'>
 const TVINE = /(?<=^|[\s/])type\s*=\s*(["'])text\/tvine\1/i
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v: unknown): v is string => typeof v === 'string'
-const dev = () => process.env.NODE_ENV !== 'production'
+const dev = () => !isProduction()
 
 // Collects every real <script type="text/tvine"> fragment in document order (incl. streamed
 // Suspense chunks). Text inside other scripts (RSC payload strings) is never parsed. JSON.parse

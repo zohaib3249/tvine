@@ -21,12 +21,15 @@ import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
-import { checkBackends, defineSettings, merge, type SettingsInput } from './settings.js'
+import { checkBackends, checkHosts, defineSettings, merge, type SettingsInput } from './settings.js'
+import { configureLogging, getLogger } from './log.js'
+import { env, isProduction, loadDotenv } from './env.js'
+import { buildMiddleware, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
 import { closeRedis, configureRedis } from './redis/index.js'
 import { configureCaches } from './cache/index.js'
 import { configureMail } from './mail/index.js'
 import { channelTransport } from './transport/channel.js'
-import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
+import { hookResponse, weakIfNoneMatch } from './transport/compress.js'
 import { corsLayer } from './transport/cors.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
@@ -65,7 +68,7 @@ export interface AgentServerOptions {
   cookies?: () => CookieJar | Promise<CookieJar>               // default next/headers cookies()
 }
 export interface AgentServer {
-  listen(port: number): Promise<void>
+  listen(port: number, host?: string): Promise<void>   // host: the bind address (default: every interface)
   handler: (req: IncomingMessage, res: ServerResponse, next?: () => void) => void
   ctx: ServerCtx
   urls?: UrlTable                                  // the project's urls.ts, resolved (undefined: none)
@@ -107,10 +110,13 @@ async function fromApp<T>(spec: string): Promise<T> {
 }
 
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
+  loadDotenv()   // .env files when present (env.md), never over the real environment; before settings.ts reads env
   const file = appModule(process.cwd(), 'settings')
   const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
   const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
+  checkHosts(settings)   // AllowedHosts in production needs settings.allowedHosts
+  configureLogging(settings.logging)   // Django LOGGING: getLogger(name) everywhere from here on
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
   configureMail(settings)
@@ -119,16 +125,16 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
 
 export async function createAgentServer(opts: AgentServerOptions = {}): Promise<AgentServer> {
   // next dev in production = unoptimized builds, HMR and dev error overlays served to real users
-  if (opts.dev && process.env.NODE_ENV === 'production') throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
+  if (opts.dev && isProduction()) throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
   // 1. settings (zod; missing TVINE_SECRET in prod throws). Boot lines go to stderr (stdout stays CLI output).
   const settings = await loadSettings(opts.settings)
-  const say = (msg: string, level: 'info' | 'warn' = 'info') => {
-    if (settings.logging !== 'none') console.error(settings.logging === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
-  }
+  const boot = getLogger('tvine.server')
+  const say = (msg: string, level: 'info' | 'warn' = 'info') => boot[level](msg)
   say('settings ok')
-  if (process.env.NODE_ENV === 'production' && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
+  if (settings.debug && isProduction()) say('WARNING: settings.debug is on with NODE_ENV=production (dev CSP, inspector feed): set TVINE_DEBUG=0', 'warn')
+  if (isProduction() && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
   const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
-  if ((process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) && local.length) {
+  if ((env.has('NODE_APP_INSTANCE') || env.has('pm_id') || env.int('WEB_CONCURRENCY', 1) > 1) && local.length) {
     say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
   }
 
@@ -147,7 +153,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
   if (fe && !opts.dev) for (const w of nextBuildWarnings(fe.nextDir, settings)) say(`WARNING: ${w}`, 'warn')
-  if (!actions.all().length && process.env.NODE_ENV === 'production') {
+  if (!actions.all().length && isProduction()) {
     say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
   }
 
@@ -212,7 +218,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
   const admin = adminBase ? await adminMount(settings, nextRoute) : undefined
-  const isDev = process.env.NODE_ENV !== 'production'
+  const isDev = settings.debug   // dev-only features need debug on, never just an unset NODE_ENV
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
   const tabs = new TabHub(ctx)
@@ -227,6 +233,18 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // security/headers + transport/cors + transport/compress (server/security-headers.md): boot-checked here
   const sec = securityHeaders(settings, { isDev })
   const cors = corsLayer(settings)
+  // settings.middleware (Django MIDDLEWARE): only the listed ones run, around every request, outermost first
+  const mws: HttpMiddleware[] = buildMiddleware(settings.middleware, { settings, debug: isDev, production: isProduction(), sec, cors,
+    userOf: async (req) => {
+      const cookie = String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
+      const session = cookie === undefined ? undefined : await ctx.sessions.peek({ cookie })
+      if (!session) return undefined
+      const request = await buildRequest({ req, route: pathOf(req), isAgent: false }, settings)
+      await authenticate(settings, request, session)
+      return request.user
+    } })
+  ctx.middleware = mws
+  const reqLog = getLogger('tvine.request')
   const chain: Handler[] = [
     ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
     discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
@@ -277,26 +295,20 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
       // embedded: CORS only for paths this server answers; the host app's own paths are the host's business
-      const ours = !done || ownPath(pathOf(req))
-      if (ours && cors.preflight(req, res)) return
-      const corsPlan = ours ? cors.request(req) : undefined
-      const plan = sec.begin(req, httpsOf(req, settings))
+      const https = httpsOf(req, settings)
+      const headerFns: (() => void)[] = []
+      const st: MwRequest['tvine'] = {
+        path: pathOf(req), https, start: performance.now(), ours: !done || ownPath(pathOf(req)), compression: false,
+        ip: clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy), onHeaders: (fn) => { headerFns.push(fn) }, log: reqLog,
+      }
+      ;(req as MwRequest).tvine = st
+      delete req.headers['x-tvine-locale']   // only the Locale middleware sets it
       weakIfNoneMatch(req)
       // a real node response only (a test double without header methods is passed through untouched)
-      if (typeof res.getHeader === 'function') {
-        unhook = hookResponse(req, res, {
-          compression: settings.compression,
-          onHeaders: () => {
-            sec.apply(res, plan)
-            if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
-              for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
-              if (corsPlan.dropSetCookie) res.removeHeader('set-cookie')   // no cookie went in: none comes back
-              addVary(res, 'Origin')
-            }
-          },
-        })
-      }
-      step()
+      const hookOpts = { compression: false as typeof st.compression, onHeaders: () => { for (let k = headerFns.length - 1; k >= 0; k--) headerFns[k]!() } }
+      if (typeof res.getHeader === 'function') unhook = hookResponse(req, res, hookOpts)
+      runMiddleware(mws, req as MwRequest, res, () => { hookOpts.compression = st.compression; step() }, fail(res))
+      return
     } catch (e) { fail(res)(e) }
   }
 
@@ -334,11 +346,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   return {
     ctx, urls, server, handler,
-    async listen(port) {
+    async listen(port, host) {
       if (fe) await startNext()
       await new Promise<void>((ok, bad) => {
         server.once('error', bad)
-        server.listen(port, () => { server.off('error', bad); ok() })
+        server.listen(port, host, () => { server.off('error', bad); ok() })
       })
       if (fe && !fe.origin) snapshot = renderer(`http://127.0.0.1:${(server.address() as { port: number }).port}`)
     },
