@@ -29,7 +29,7 @@ export interface AgentSpec {
 // TODO(W1): derive from @tvine/warp's Event/envelope types.
 export interface TvineEvent {
   status: string
-  source?: 'human' | 'agent'
+  source?: 'human' | 'agent' | 'job'
   code?: string
   message?: string
   [k: string]: unknown

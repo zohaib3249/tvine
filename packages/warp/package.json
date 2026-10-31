@@ -35,6 +35,10 @@
       "types": "./dist/types/api.d.ts",
       "import": "./dist/types/api.js"
     },
+    "./tasks": {
+      "types": "./dist/contrib/tasks/index.d.ts",
+      "import": "./dist/contrib/tasks/index.js"
+    },
     "./contrib/*": {
       "types": "./dist/contrib/*.d.ts",
       "import": "./dist/contrib/*.js"
