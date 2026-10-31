@@ -85,17 +85,19 @@ export function AppIndex({ app }: { app: string }) {
 }
 
 export function DeleteTree({ preview }: { preview: DeletePreview }) {
+  const { site } = useAdmin()
+  const name = (k: string) => cap(site.apps.flatMap((a) => a.models).find((m) => m.key === k)?.name ?? k.split('.')[1]!)
   const node = (n: DeleteNode, i: number) => (
     <li key={i} className="mt-1">
-      <span className={cx(n.protected && 'font-medium text-danger')}>{n.label}</span>
+      <span className={cx(n.field && 'font-medium text-danger')}>{name(n.model)}: {n.repr}</span>
       {n.children?.length ? <ul className="ml-4 border-l border-line pl-3">{n.children.map(node)}</ul> : null}
     </li>
   )
   return (
     <div className="text-sm">
       {preview.protected?.length ? <div role="alert" className="mb-3 rounded-md bg-danger/10 p-3 text-danger">Deleting would require deleting these protected related objects: <ul className="ml-4 list-disc">{preview.protected.map(node)}</ul></div> : null}
-      {preview.counts && <p className="mb-2 flex flex-wrap gap-2">{Object.entries(preview.counts).map(([k, c]) => <span key={k} className="tva-chip">{k}: {c}</span>)}</p>}
-      <ul>{preview.tree.map(node)}</ul>
+      {preview.summary && <p className="mb-2 flex flex-wrap gap-2">{Object.entries(preview.summary).map(([k, c]) => <span key={k} className="tva-chip">{name(k)}: {c}</span>)}</p>}
+      <ul>{preview.objects.map(node)}</ul>
     </div>
   )
 }
@@ -128,6 +130,20 @@ export function DeleteView({ meta, obj, preview, error, pk }: { meta: ModelMeta;
   )
 }
 
+// Django LogEntry.get_change_message, in words
+export function changeText(m: unknown, action: string): string {
+  if (typeof m === 'string') return m
+  if (!Array.isArray(m) || !m.length) return action === 'add' ? 'Added.' : action === 'delete' ? 'Deleted.' : 'No fields changed.'
+  const out: string[] = []
+  for (const x of m as Record<string, any>[]) {
+    if (x.added) out.push(x.added.object ? `Added ${x.added.name} “${x.added.object}”.` : 'Added.')
+    else if (x.changed) out.push(x.changed.object ? `Changed ${(x.changed.fields ?? []).join(', ')} for ${x.changed.name} “${x.changed.object}”.` : `Changed ${(x.changed.fields ?? []).join(', ') || 'nothing'}.`)
+    else if (x.deleted) out.push(`Deleted ${x.deleted.name} “${x.deleted.object}”.`)
+    else if (x.action) out.push(`Ran action “${x.action}”.`)
+  }
+  return out.join(' ')
+}
+
 export function HistoryView({ meta, obj, rows, pk }: { meta: ModelMeta; obj?: ObjectData; rows?: LogEntry[] | { rows: LogEntry[] }; pk: string }) {
   const list = Array.isArray(rows) ? rows : rows?.rows
   return (
@@ -139,9 +155,9 @@ export function HistoryView({ meta, obj, rows, pk }: { meta: ModelMeta; obj?: Ob
             {list.map((e) => (
               <li key={e.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3">
                 <time className="w-44 shrink-0 text-sm text-muted tabular-nums" dateTime={e.actionTime}>{new Date(e.actionTime).toLocaleString()}</time>
-                <span className="font-medium">{e.user}</span>
+                <span className="font-medium">{e.user.name}</span>
                 <span className="tva-chip">{e.action}</span>
-                <span className="min-w-0 flex-1 text-muted">{e.changeMessage ?? e.message ?? ''}</span>
+                <span className="min-w-0 flex-1 text-muted">{changeText(e.changeMessage, e.action)}</span>
               </li>
             ))}
           </ol>
