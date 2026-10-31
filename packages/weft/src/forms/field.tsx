@@ -66,7 +66,8 @@ function controlsFor(m: FieldMeta, value: any, apply: (v: any) => void, seen: Ma
     clear: { kind: 'clear', run: () => apply(fromApi(m, null)) },
   }
   if (m.kind === 'choice') c.choose = { kind: 'select', params: { value: paramFor(m) }, run: (a: { value: string | string[] }) => commit(fromApi(m, a.value)) }
-  if ((m.kind === 'fk' || m.kind === 'm2m') && search) {
+  const listed = m.relation && !m.relation.autocomplete && m.choices   // a <select>: choose from the listed rows, no search
+  if ((m.kind === 'fk' || m.kind === 'm2m') && search && !listed) {
     c.search = { kind: 'input', params: { q: { type: 'string' }, page: { type: 'number', min: 1, optional: true } },
       run: async (a: { q: string; page?: number }) => {
         const r = await search(a.q ?? '', a.page ?? 1)
@@ -74,11 +75,12 @@ function controlsFor(m: FieldMeta, value: any, apply: (v: any) => void, seen: Ma
         return r as unknown as Json
       } }
   }
-  const ref = (pk: string): SearchResult => seen.get(String(pk)) ?? { pk: String(pk), text: String(pk) }
-  if (m.kind === 'fk') c.choose = { kind: 'select', params: { value: { type: 'string' } }, run: (a: { value: string }) => commit(ref(a.value)) }
+  const ref = (pk: string): SearchResult => seen.get(String(pk)) ?? { pk: String(pk), text: m.choices?.find((x) => x.value === String(pk))?.label ?? String(pk) }
+  const relParam = { type: 'string' as const, ...(listed && { enum: m.choices!.map((x) => x.value) }) }
+  if (m.kind === 'fk') c.choose = { kind: 'select', params: { value: relParam }, run: (a: { value: string }) => commit(ref(a.value)) }
   if (m.kind === 'm2m') {
     const cur = (value ?? []) as SearchResult[]
-    c.add = { kind: 'select', params: { value: { type: 'string' } }, run: (a: { value: string }) => { if (!cur.some((x) => x.pk === String(a.value))) commit([...cur, ref(a.value)]) } }
+    c.add = { kind: 'select', params: { value: relParam }, run: (a: { value: string }) => { if (!cur.some((x) => x.pk === String(a.value))) commit([...cur, ref(a.value)]) } }
     if (cur.length) c.remove = { kind: 'clear', params: { value: { type: 'string', enum: cur.map((x) => x.pk) } }, run: (a: { value: string }) => commit(cur.filter((x) => x.pk !== String(a.value))) }
   }
   if (m.kind === 'file' || m.kind === 'image') {

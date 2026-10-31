@@ -88,6 +88,19 @@ function formMeta(a: Base): Record<string, FieldMeta> {
   return out
 }
 
+// Django ModelChoiceField: an fk / m2m that is neither autocomplete nor raw-id is a <select> of the related rows
+// ponytail: first 500 rows; use autocompleteFields for a big related table (Django loads them all)
+const RELATED_CHOICES = 500
+async function withChoices(a: Base, ctx: Ctx, fields: Record<string, FieldMeta>): Promise<Record<string, FieldMeta>> {
+  for (const m of Object.values(fields)) {
+    if (!m.relation || m.relation.autocomplete || m.relation.rawId || m.readOnly) continue
+    const t = a.model.fields[m.name]!.target!(), ta = adminOfDef(t)
+    const qs = ta ? ta.getQueryset(ctx).order(...(ta.ordering ?? ['id'])) : modelNamed<AnyModel>(t.name)!.objects.order('id')
+    m.choices = (await qs.all(RELATED_CHOICES)).map((r: Row) => ({ value: String(r.id), label: repr(ta, t, r) }))
+  }
+  return fields
+}
+
 // stored row → form values (never a hidden field, so never a password hash)
 async function valuesOf(a: Base, obj: Row): Promise<Row> {
   const out: Row = {}
@@ -457,14 +470,14 @@ export const siteAction = defineAction('site', z.object({}), async (_p, ctx) => 
 export const meta = defineAction('meta', z.object({ model: modelKey }), async ({ model }, ctx) => {
   const a = await gate(ctx, model, 'module')
   const [, short] = a._key.split('.') as [string, string]
-  const fields = formMeta(a)
+  const fields = await withChoices(a, ctx, formMeta(a))
   const inlines = []
   for (const i of site.inlinesOf(a)) {
     const fk = fkTo(i, a.model)!
     inlines.push({
       name: inlineName(i), verboseName: i.verboseName ?? labelOf(i._key.split('.')[1]!), verboseNamePlural: i.verboseNamePlural ?? `${i.verboseName ?? labelOf(i._key.split('.')[1]!)}s`, kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum ?? 1000, min: i.minNum,   // Django's default max_num is 1000
      
-      canDelete: i.canDelete, meta: Object.fromEntries(Object.entries(formMeta(i)).filter(([n]) => n !== fk)), perms: await perms(i, ctx),
+      canDelete: i.canDelete, meta: await withChoices(i, ctx, Object.fromEntries(Object.entries(formMeta(i)).filter(([n]) => n !== fk))), perms: await perms(i, ctx),
     })
   }
   const specs = filterSpecs(a)
@@ -661,6 +674,7 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
   const src = site.admins().flatMap((a) => [a as Base, ...site.inlinesOf(a)]).find((a) => a._key === p.model)
   const f = src?.model.fields[p.field]
   if (!src || !f || (f.kind !== 'fk' && f.kind !== 'm2m')) throw bad('field', 'not a relation field of a registered model')
+  if (!src.autocompleteFields.includes(p.field)) throw bad('field', 'not in autocompleteFields')   // Django: only those fields get the endpoint
   const target = adminOfDef(f.target!())
   if (!target) throw bad('field', 'the related model has no admin')
   if (!(await target.hasViewPermission(ctx))) throw forbidden()
