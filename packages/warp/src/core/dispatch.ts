@@ -3,7 +3,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
-import { audited, auditRow, securityEvent, writeAudit } from './audit.js'
+import { audited, auditRow, securityEvent, viaOf, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
 import { forwardedHost } from './request.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
@@ -21,7 +21,7 @@ import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
 import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
-import { metrics } from './metrics.js'
+import { metrics, statTap, stats } from './metrics.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
 import { cachedRun } from '../cache/index.js'
@@ -125,6 +125,11 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   securityOutcome(server, cmd, sid, events, hold.req!)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
+  if (stats.tap) {   // tvine.admin's dashboard rollups (core/metrics stats tap): registered ids only, sid hashed there
+    const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+    statTap({ k: 'action', action: server.actions.get(cmd.action) ? cmd.action : '_unknown', outcome: err?.code ?? 'ok', via: viaOf(request),
+      ...(request.agent.is && request.agent.client && { agent: request.agent.client }), ...(request.user.scopes && { token: String(request.user.id ?? '?') }), sid, ms: performance.now() - t0 })
+  }
   if (metrics.enabled) {
     const outcome = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')?.code ?? 'ok'
     // only registered ids label a series (an unknown id is caller-chosen text: cardinality)

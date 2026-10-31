@@ -89,7 +89,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   },
   compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
   tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
-  admin: { path: '/admin', theme: { dark: 'auto' } },
+  admin: { path: '/admin', theme: { dark: 'auto' }, dashboard: { widgets: [], autoCharts: true }, stats: { enabled: true, retentionDays: 30, flushMs: 60_000 } },
   caches: { default: CACHE_DEFAULTS },
   // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
   email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
@@ -160,6 +160,7 @@ const schema: z.ZodType<Settings> = z.object({
       z.object({ type: z.literal('file'), path: z.string().min(1), level: z.enum(LEVELS).optional(), format: z.enum(['json', 'pretty']).optional(),
         maxBytes: z.number().int().positive().optional(), daily: z.boolean().optional(), keep: z.number().int().min(0).optional() }).strict(),
       z.object({ type: z.literal('custom'), level: z.enum(LEVELS).optional(), write: fn<(r: never) => void>() }).strict(),
+      z.object({ type: z.literal('memory'), level: z.enum(LEVELS).optional(), size: z.number().int().min(1).max(100_000).optional() }).strict(),
     ])),
     loggers: z.record(z.string(), z.enum([...LEVELS, 'off'])),
     redact: z.array(z.string()),
@@ -191,7 +192,9 @@ const schema: z.ZodType<Settings> = z.object({
   tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
-    theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }) }),
+    theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }),
+    dashboard: z.object({ widgets: z.array(z.string().max(100)).max(100), autoCharts: z.boolean() }),
+    stats: z.object({ enabled: z.boolean(), retentionDays: z.number().int().min(1).max(3650), flushMs: z.number().int().min(1000) }) }),
   caches: z.record(alias, z.object({
     backend: z.enum(['memory', 'redis', 'file', 'dummy']), redis: alias, location: z.string().min(1).optional(),
     timeout: z.number().min(0).nullable(), keyPrefix: z.string().max(64), version: z.number().int(), maxEntries: z.number().int().positive(),

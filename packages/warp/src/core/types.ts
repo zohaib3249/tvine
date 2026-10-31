@@ -294,7 +294,12 @@ export interface Settings {
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
-  admin: { path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' } }
+  admin: {
+    path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }
+    // dashboard: widget ids in display order (others follow) + the automatic per-model charts; stats: the hourly rollups
+    dashboard: { widgets: string[]; autoCharts: boolean }
+    stats: { enabled: boolean; retentionDays: number; flushMs: number }
+  }
   // BACKLOG #9: Prometheus text at `path`, off by default. Guard: a bearer `token`, or the client ip in `allowIps`;
   // neither set = loopback only. Never listed in agent discovery.
   metrics: { enabled: boolean; path: string; token?: string; allowIps: string[] }

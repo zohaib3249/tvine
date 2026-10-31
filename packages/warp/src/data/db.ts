@@ -10,7 +10,7 @@ import { postgres as pgDialect } from './sql/dialects/postgres.js'
 import { mysql as mysqlDialect } from './sql/dialects/mysql.js'
 import type { Dialect } from './sql/dialect.js'
 import { resolveDbUrl } from '../settings.js'
-import { metrics, since } from '../core/metrics.js'
+import { metrics, since, statTap, stats } from '../core/metrics.js'
 
 // `sqlite` is the raw handle, present only on sqlite connections (tests and the sqlite runner use it)
 export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite?: Database.Database }
@@ -48,11 +48,12 @@ const dbLog = getLogger('tvine.db')
 function timed<D extends Driver>(d: D, alias: string, slowMs = 0): D {
   const { query, exec, transaction, session } = d
   const time = <T>(op: string, sql: string, p: Promise<T>) => {
-    if (!metrics.enabled && !slowMs) return p
+    if (!metrics.enabled && !slowMs && !stats.tap) return p
     const t0 = performance.now()
     return p.finally(() => {
       if (metrics.enabled) metrics.observe('tvine_db_query_duration_seconds', { db: alias, op }, since(t0))
       const took = performance.now() - t0
+      if (stats.tap) statTap({ k: 'db', alias, sql, ms: took })
       if (slowMs && took >= slowMs) dbLog.warn('slow query', { alias, ms: Math.round(took), sql: sql.slice(0, 2000) })
     })
   }

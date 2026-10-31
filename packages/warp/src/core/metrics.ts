@@ -85,3 +85,15 @@ export const metrics = {
 
 // seconds since a performance.now() mark
 export const since = (t0: number) => (performance.now() - t0) / 1000
+
+// The in-process stats tap (tvine.admin's dashboard rollups, contrib/admin/stats.ts): one optional listener that
+// sees every HTTP request, dispatched action and DB statement, whether or not Prometheus metrics are on. Call sites
+// pass low-cardinality labels only (route PATTERNS, registered action ids); SQL text without its params, never values.
+// On globalThis: one tap however many copies of warp a process loads.
+export type Stat =
+  | { k: 'http'; transport: string; status: string; route: string; ms: number }
+  | { k: 'action'; action: string; outcome: string; via: string; agent?: string; token?: string; sid?: string; ms: number }
+  | { k: 'db'; alias: string; sql: string; ms: number }
+const TAP = Symbol.for('tvine.statsTap')
+export const stats: { tap?: (s: Stat) => void } = ((globalThis as { [TAP]?: { tap?: (s: Stat) => void } })[TAP] ??= {})
+export const statTap = (s: Stat): void => { try { stats.tap?.(s) } catch { /* a broken listener never breaks the caller */ } }

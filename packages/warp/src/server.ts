@@ -16,7 +16,7 @@ import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.
 import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp, forwardedHostOf, isLocalRequest, normalizePath } from './core/request.js'
 import { cookieOpts } from './core/session.js'
-import { metrics, since } from './core/metrics.js'
+import { metrics, since, statTap, stats } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
@@ -300,6 +300,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     : p.startsWith('/tvine/tab/') || p.startsWith('/tvine/agent/') ? 'tab' : p.startsWith('/tvine/api/') ? 'api'
     : urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })() ? 'urls'
     : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
+  // dashboard rollups: a route PATTERN or a registered action id, never the raw path (cardinality, personal data)
+  const routeLabel = (p: string, transport: string): string => {
+    if (transport === 'api') { const id = decodeURIComponent(p.slice(12).split('/')[0] ?? ''); return actions.get(id) ? id : '(unknown action)' }
+    if (transport !== 'page') return transport
+    try { return route(p.replace(/\/agent\.(json|txt)$/, '') || '/') ?? '(unmatched)' } catch { return '(unmatched)' }
+  }
   // req.tvine: what every HTTP middleware reads. path = the normalized path (what Next routes), so a path rule
   // can't be stepped around with /x/../staff, //staff or %2e%2e
   const stateOf = (req: IncomingMessage, ours: boolean, onHeaders: (fn: () => void) => void): MwRequest['tvine'] => {
@@ -356,9 +362,13 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       const st = stateOf(req, !done || ownPath(pathOf(req)), (fn) => { headerFns.push(fn) })
       delete req.headers['x-tvine-locale']   // only the Locale middleware sets it
       weakIfNoneMatch(req)
-      if (metrics.enabled) {
+      if (metrics.enabled || stats.tap) {
         const t0 = performance.now(), p = pathOf(req)
-        res.once('close', () => metrics.observe('tvine_http_request_duration_seconds', { transport: transportOf(p), status: res.headersSent ? `${Math.floor(res.statusCode / 100)}xx` : 'aborted' }, since(t0)))
+        res.once('close', () => {
+          const transport = transportOf(p), status = res.headersSent ? `${Math.floor(res.statusCode / 100)}xx` : 'aborted'
+          if (metrics.enabled) metrics.observe('tvine_http_request_duration_seconds', { transport, status }, since(t0))
+          if (stats.tap) statTap({ k: 'http', transport, status, route: routeLabel(p, transport), ms: performance.now() - t0 })
+        })
       }
       // a real node response only (a test double without header methods is passed through untouched)
       const hookOpts = { get compression() { return st.compression }, onHeaders: () => { for (let k = headerFns.length - 1; k >= 0; k--) headerFns[k]!() } }
