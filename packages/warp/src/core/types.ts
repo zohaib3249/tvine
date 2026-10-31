@@ -180,6 +180,9 @@ export interface ActionRules {
   secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanOnly?: true | string         // widgets/human-only.md: dispatch refuses every agent-marked request (human_only); no typed MCP tool
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
+  // Django cache_page (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
+  // varyOn default ['user']; 'session' | 'query' | a header name add to the key. Errors are never cached.
+  cache?: { timeout: number; varyOn?: string[]; cache?: string; tags?: string[] }   // tags: cache.invalidateTags([...]) drops them
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
@@ -253,6 +256,10 @@ export interface Settings {
   // SIGTERM grace, how long final job rows are kept
   // broker: the job store (tvine.tasks picks the default: 'file'); redis: the settings.redis alias a 'redis' broker
   // uses; file / durable: the file broker's tasks.db path and power-cut durability; claimBatch: jobs per claim
+  // conventions/cache.md: named caches (Django CACHES). timeout in seconds (null = forever); location: the file
+  // backend's directory; redis: the settings.redis alias of a 'redis' cache
+  caches: Record<string, CacheSettings>
+  email: EmailSettings              // conventions/email.md (Django EMAIL_*)
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
@@ -263,6 +270,15 @@ export interface Settings {
 }
 
 export type Backend = 'memory' | 'redis'
+export interface CacheSettings {
+  backend: 'memory' | 'redis' | 'file' | 'dummy'; redis: string; location?: string
+  timeout: number | null; keyPrefix: string; version: number; maxEntries: number
+}
+export interface EmailSettings {
+  backend: 'console' | 'smtp' | 'file' | 'memory' | 'dummy'
+  host: string; port: number; user: string; password: string; useTls: boolean; useSsl: boolean; allowPlainAuth: boolean; timeoutMs: number
+  defaultFrom: string; serverEmail: string; admins: string[]; subjectPrefix: string; filePath: string
+}
 // settings.redis.<alias>. url: redis:// or rediss:// (TLS); prefix: every key this connection writes starts with it.
 export interface RedisConnection { url: string; tls?: boolean; prefix?: string; connectTimeoutMs?: number }
 
@@ -274,6 +290,7 @@ export interface AuthSettings {
   validators?: PasswordValidator[]
   login?: { maxFailures?: number; accountMaxFailures?: number; ipMaxFailures?: number; windowMs?: number; lockoutMs?: number }
   resetTimeoutMs?: number
+  resetUrl?: string                    // default reset mail link: '{uid}' and '{token}' are filled in
   sendPasswordReset?: (e: { user: { id: string; username: string; email: string }; email: string; uid: string; token: string; request: Request }) => unknown
   objectPermission?: (user: TvineUser, perm: string, obj: unknown) => boolean | Promise<boolean>
   tokens?: { defaultDays?: number; maxDays?: number }

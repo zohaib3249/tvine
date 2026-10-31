@@ -51,13 +51,14 @@ export function backendTable(settings: Settings): { subsystem: string; key: stri
     row('rate limits, idempotency, login throttle, tab agent marks', 'limits.backend', settings.limits.backend, settings.limits.redis),
     row('snapshot cache', 'snapshotCache.backend', settings.snapshotCache.backend, settings.snapshotCache.redis),
     row('tasks broker', 'tasks.broker', settings.tasks.broker ?? '(tvine.tasks default)', settings.tasks.redis),
+    ...Object.entries(settings.caches ?? {}).map(([a, c]) => row(`cache ${a}`, `caches.${a}.backend`, c.backend, c.redis)),
   ]
 }
 
 // /tvine/health section: backends + the state of the redis clients opened so far (never a url)
 export function backendHealth(settings: Settings): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const r of backendTable(settings)) out[r.key.split('.')[0]!] = r.redis ? `redis:${r.redis}` : r.backend
+  for (const r of backendTable(settings)) out[r.key.startsWith('caches.') ? r.key.slice(0, -'.backend'.length) : r.key.split('.')[0]!] = r.redis ? `redis:${r.redis}` : r.backend
   const conns = redis.health()
   if (Object.keys(conns).length) out.redis = conns
   return out

@@ -20,6 +20,7 @@ import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
+import { cachedRun } from '../cache/index.js'
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 
@@ -495,7 +496,9 @@ type Outcome = { result: unknown } | { goto: string }
 async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
-    try { return { result: await scope.run(ctx, () => def.run(params, ctx)) } }
+    // rules.cache (Django cache_page): a fresh stored result skips the handler; errors are never stored
+    const handler = () => scope.run(ctx, () => def.run(params, ctx))
+    try { return { result: await (def.rules?.cache ? cachedRun(def, params, ctx, handler) : handler()) } }
     catch (e) {
       const url = redirectUrl(e)
       if (url === undefined) throw e

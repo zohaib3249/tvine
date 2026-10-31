@@ -41,3 +41,9 @@ export { TabHub, tabTransport, TAB_LIMITS, type TabAnswer, type AgentState } fro
 export { routeMatcher } from './transport/routes.js'
 export { getRedis, getSubscriber, redisKey, configureRedis, closeRedis, redis, RedisConnections, type RedisClient } from './redis/index.js'
 export { path, re_path, include, reverse, SimpleRouter, DefaultRouter, NoReverseMatch, ImproperlyConfigured, type UrlEntry, type UrlTable } from './urls.js'
+export { cache, caches, Cache, configureCaches, type Store } from './cache/index.js'
+export {
+  sendMail, sendMassMail, sendMessages, mailAdmins, mail, configureMail, EmailMessage, EmailMultiAlternatives, BadHeaderError,
+  type SendMailOpts, type Attachment, type MailPending,
+} from './mail/index.js'
+export { SmtpError } from './mail/smtp.js'

@@ -5,6 +5,7 @@ import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, TvineUser } from '../../core/types.js'
 import { onCommit } from '../../data/engine.js'
+import { sendMail } from '../../mail/index.js'
 import { denyAgents, isAuthenticated } from '../../security/permissions.js'
 import {
   AuthUser, checkResetToken, checkSecondFactor, hasSecondFactor, INVALID, login, logout, makeResetToken, newRecoveryCodes,
@@ -106,9 +107,10 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
     .filter((r) => r.email?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
   if (!rows.length) return null
   const out = rows.map((r) => ({ user: { id: String(r.id), username: r.username, email: r.email! }, email: r.email!, uid: uidOf(r), token: makeResetToken(ctx.settings, r), request: ctx.request }))
+  // settings.auth.sendPasswordReset wins; otherwise the default mail through settings.email (sendMail)
+  const sender = send ?? ((e: (typeof out)[number]) => sendResetMail(e, ctx.settings.auth?.resetUrl))
   onCommit(() => {
-    if (!send) { console.warn('tvine.auth: password reset requested but settings.auth.sendPasswordReset is not set'); return }
-    setImmediate(() => { for (const e of out) void Promise.resolve().then(() => send(e)).catch(() => console.error('tvine.auth: sendPasswordReset failed')) })
+    setImmediate(() => { for (const e of out) void Promise.resolve().then(() => sender(e)).catch(() => console.error('tvine.auth: sending the password reset failed')) })
   })
   return null
 }, { rate: { limit: 5, windowMs: 60_000 } })
@@ -196,3 +198,11 @@ export const revokeToken = defineAction('revokeToken', z.object({ key: z.string(
   if (!n) throw new DomainError('not_found', 'no such token')
   return null
 }, { permissions: [isAuthenticated] })
+
+// Django PasswordResetForm's default mail: the link from settings.auth.resetUrl ('{uid}', '{token}'), else uid + token
+function sendResetMail(e: { email: string; uid: string; token: string; user: { username: string } }, resetUrl?: string) {
+  const link = resetUrl?.replaceAll('{uid}', encodeURIComponent(e.uid)).replaceAll('{token}', encodeURIComponent(e.token))
+  const how = link ? `Open this link to choose a new password:\n\n${link}` : `Reset code: uid ${e.uid}, token ${e.token}`
+  return sendMail({ subject: 'Password reset', to: e.email,
+    message: `You asked to reset the password of ${e.user.username}.\n\n${how}\n\nIf you did not ask for this, ignore this email.\n` })
+}

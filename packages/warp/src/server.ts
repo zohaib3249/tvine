@@ -23,6 +23,8 @@ import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security
 import { signBind } from './security/sign.js'
 import { checkBackends, defineSettings, merge, type SettingsInput } from './settings.js'
 import { closeRedis, configureRedis } from './redis/index.js'
+import { configureCaches } from './cache/index.js'
+import { configureMail } from './mail/index.js'
 import { channelTransport } from './transport/channel.js'
 import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
 import { corsLayer } from './transport/cors.js'
@@ -110,6 +112,8 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
+  configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
+  configureMail(settings)
   return settings
 }
 
@@ -122,6 +126,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (settings.logging !== 'none') console.error(settings.logging === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
+  if (process.env.NODE_ENV === 'production' && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
   const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
   if ((process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) && local.length) {
     say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
