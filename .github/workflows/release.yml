@@ -62,8 +62,16 @@ jobs:
         run: |
           if npm view "tvinejs@$VERSION" version >/dev/null 2>&1; then
             echo "::notice::tvinejs@$VERSION is already on npm; skipping publish"
+          elif ! out=$(npm publish --provenance --access public 2>&1); then
+            echo "$out"
+            # a version published moments ago is still being processed ("staged") and not yet visible to npm view
+            if grep -q "previously staged version\|cannot publish over the previously published" <<<"$out"; then
+              echo "::notice::tvinejs@$VERSION is already published (staged); skipping publish"
+            else
+              exit 1
+            fi
           else
-            npm publish --provenance --access public
+            echo "$out"
           fi
 
       - name: GitHub release
