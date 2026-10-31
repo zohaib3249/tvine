@@ -347,7 +347,7 @@ export const isViewClass = (v: unknown): v is new () => View =>
 
 function effectiveFilters(v: GenericView): string[] {
   return v.filters ?? Object.entries(v.model.fields as Record<string, AnyField>)
-    .filter(([, f]) => f.kind === 'enum' || f.opts.index).map(([n, f]) => f.key(n))
+    .filter(([, f]) => (f.kind === 'enum' || f.opts.index) && !f.opts.hidden && !f.opts.writeOnly).map(([n, f]) => f.key(n))   // never an oracle on a secret column
 }
 const effectiveSearch = (v: GenericView): string[] => v.searchFields ?? Object.entries(v.model.fields as Record<string, AnyField>)
   .filter(([, f]) => f.opts.searchable).map(([n, f]) => f.key(n))
@@ -439,6 +439,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const { field, op } = parseLookup(l)
       if (!op) fail(`filter "${l}": unknown lookup (use exact, __lt, __lte, __gt, __gte, __in, __contains, __ne)`)
       const f = need(`filter "${l}"`, field)
+      if (f.opts.hidden || f.opts.writeOnly) fail(`filter "${l}": "${field}" is hidden / writeOnly (a filter would be an exact-match oracle on it)`)
       if (op === 'contains' && !['text', 'email', 'url', 'slug'].includes(f.kind)) fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
       lookups[l] = lookupSchema(f, op!).optional()
     }
