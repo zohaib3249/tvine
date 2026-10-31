@@ -90,7 +90,13 @@ export class SessionStore {
   }
 
   protected alive(s: Session): boolean {
-    return Date.now() - s.lastSeen <= this.settings.ttlMs
+    return Date.now() - s.lastSeen <= this.settings.ttlMs && !this.tooOld(s.createdAt)
+  }
+  // settings.session.maxAgeMs: an absolute lifetime on top of the sliding idle ttl (a busy session still ends).
+  // Counted from the session's creation (a login rotation keeps it).
+  protected tooOld(createdAt: number): boolean {
+    const max = this.settings.maxAgeMs
+    return max !== undefined && max > 0 && Date.now() - createdAt > max
   }
 
   link(cookie: string, sid: Sid): void {

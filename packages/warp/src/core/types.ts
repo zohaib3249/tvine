@@ -235,7 +235,9 @@ export interface Settings {
     backend: Backend; redis: string
     // the cookie's Secure flag (default: true in production). On, the name gets the __Host- prefix (Path=/, no Domain).
     secure: boolean
-    sameSite: 'lax' | 'strict' | 'none' }
+    sameSite: 'lax' | 'strict' | 'none'
+    maxAgeMs: number                // absolute lifetime on top of the idle ttlMs (default 14 days; 0 = none)
+  }
   channels: { backend: Backend; redis: string }                 // pub/sub fan-out + Last-Event-ID replay
   limits: {
     bodyBytes: number

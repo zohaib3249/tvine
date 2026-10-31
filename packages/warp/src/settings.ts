@@ -37,7 +37,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   formats: { default: 'json', notationPath: true },
   trustProxy: 0,
   redis: {},
-  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default', secure: false, sameSite: 'lax' },
+  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default', secure: false, sameSite: 'lax', maxAgeMs: 1_209_600_000 },
   channels: { backend: 'memory', redis: 'default' },
   limits: {
     bodyBytes: 65_536,
@@ -114,7 +114,7 @@ const schema: z.ZodType<Settings> = z.object({
     connectTimeoutMs: z.number().int().positive().optional(),
   }).strict()),
   session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias,
-    secure: z.boolean(), sameSite: z.enum(['lax', 'strict', 'none']) }).refine((s) => s.sameSite !== 'none' || s.secure, 'session.sameSite none needs session.secure'),
+    secure: z.boolean(), sameSite: z.enum(['lax', 'strict', 'none']), maxAgeMs: z.number().min(0) }).refine((s) => s.sameSite !== 'none' || s.secure, 'session.sameSite none needs session.secure'),
   channels: z.object({ backend, redis: alias }),
   limits: z.object({
     bodyBytes: posInt,
