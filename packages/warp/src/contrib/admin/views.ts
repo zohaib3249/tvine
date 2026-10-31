@@ -321,21 +321,23 @@ async function deleteRows(a: ModelAdmin, ctx: Ctx, objs: Row[]): Promise<{ delet
 
 // ---- inlines ---------------------------------------------------------------------------------------------
 const inlineName = (i: InlineModelAdmin) => i.name ?? i._key.split('.')[1]!
-type InlineRow = { pk?: string | number; values?: Row; delete?: boolean }
-async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<string, { rows?: InlineRow[] }> | undefined, msg: unknown[]): Promise<void> {
+// contract: inlines = Record<inlineName, Row[]>, Row = { pk?, DELETE?: true, ...values }; errors keyed `<inline>.<i>.<field>`
+type InlineRow = Row & { pk?: string | number; DELETE?: boolean }
+async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<string, InlineRow[]> | undefined, msg: unknown[]): Promise<void> {
   const inl = site.inlinesOf(a)
-  for (const name of Object.keys(given ?? {})) if (!inl.some((i) => inlineName(i) === name)) throw bad(`inlines.${name}`, 'not an inline of this model')
+  for (const name of Object.keys(given ?? {})) if (!inl.some((i) => inlineName(i) === name)) throw bad(name, 'not an inline of this model')
   for (const i of inl) {
-    const name = inlineName(i), rows = given?.[name]?.rows
+    const name = inlineName(i), rows = given?.[name]
     if (!rows) continue
-    if (!Array.isArray(rows) || rows.length > MAX_PKS) throw bad(`inlines.${name}`, 'rows must be a list')
+    if (!Array.isArray(rows) || rows.length > MAX_PKS) throw bad(name, 'rows must be a list')
     const fk = fkTo(i, a.model)!, fkKey = i.model.fields[fk]!.key(fk)
     const own = i.model.objects.filter({ [fkKey]: parent.id })
     for (const [n, r] of rows.entries()) {
-      const at = `inlines.${name}.${n}.`
+      const at = `${name}.${n}.`
       const existing = r.pk !== undefined ? await own.filter({ id: coercePk(i.model, r.pk) ?? -1 }).first() : undefined
       if (r.pk !== undefined && !existing) throw bad(`${at}pk`, 'not a row of this object')
-      if (r.delete) {
+      const { pk: _pk, DELETE, ...vals } = r
+      if (DELETE) {
         if (!existing) continue
         if (!i.canDelete || !(await i.hasDeletePermission(ctx, parent))) throw forbidden()
         await i.model.delete(existing.id)
@@ -343,7 +345,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
         continue
       }
       if (!(await (existing ? i.hasChangePermission(ctx, parent) : i.hasAddPermission(ctx, parent)))) throw forbidden()
-      const c = clean(i, r.values ?? {}, !existing, formFields(i).filter((x) => x !== fk))
+      const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk))
       if (Object.keys(c.errors).length) throw fieldErrors(c.errors, at)
       const row = existing ? await i.model.update(existing.id, c.data) : await i.model.create({ ...c.data, [fkKey]: parent.id })
       for (const [m, ids] of Object.entries(c.m2m)) await i.model.related(m, row.id).set(ids as (string | number)[])
@@ -351,8 +353,8 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
       msg.push(existing ? { changed: { name: i.verboseName ?? labelOf(name), object: i.str(row), fields: c.changed } } : { added: { name: i.verboseName ?? labelOf(name), object: i.str(row) } })
     }
     const total = await own.count()
-    if (i.maxNum !== null && total > i.maxNum) throw bad(`inlines.${name}`, `at most ${i.maxNum} rows`)
-    if (total < i.minNum) throw bad(`inlines.${name}`, `at least ${i.minNum} rows`)
+    if (i.maxNum !== null && total > i.maxNum) throw bad(name, `at most ${i.maxNum} rows`)
+    if (total < i.minNum) throw bad(name, `at least ${i.minNum} rows`)
   }
 }
 
@@ -474,7 +476,7 @@ export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }
   return { pk: String(obj.id), values: await valuesOf(a, obj), display: a.str(obj), inlines, perms: await perms(a, ctx, obj) }
 }, read)
 
-const saveParams = z.object({ model: modelKey, pk: pkParam.optional(), values: z.record(z.unknown()).default({}), inlines: z.record(z.object({ rows: z.array(z.object({ pk: pkParam.optional(), values: z.record(z.unknown()).optional(), delete: z.boolean().optional() })) })).optional() })
+const saveParams = z.object({ model: modelKey, pk: pkParam.optional(), values: z.record(z.unknown()).default({}), inlines: z.record(z.array(z.object({ pk: pkParam.optional(), DELETE: z.boolean().optional() }).passthrough()).max(MAX_PKS)).optional() })
 async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) {
   const a = await gate(ctx, p.model, 'module')
   const obj = creating ? undefined : await objectOf(a, ctx, p.pk)
