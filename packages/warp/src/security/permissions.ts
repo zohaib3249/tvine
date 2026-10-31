@@ -87,7 +87,7 @@ export async function runPermissions(perms: Permission[], pctx: PermissionCtx): 
   }
   for (const p of perms) {
     let ok = false
-    try { ok = await p(pctx) } catch { /* deny */ }
+    try { ok = await p(pctx) } catch (e) { if (e instanceof DomainError) throw e /* a deliberate refusal keeps its reason */ }
     if (!ok) throw new DomainError('forbidden', `forbidden: not allowed: ${pctx.action}`)
   }
 }

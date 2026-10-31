@@ -192,7 +192,8 @@ const schema: z.ZodType<Settings> = z.object({
   tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
-    theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }) }),
+    theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }),
+    allowIps: z.array(z.string().regex(/^[0-9a-fA-F:.]+(\/\d{1,3})?$/, 'an address or CIDR')).optional(), require2fa: z.boolean().optional(), idleMs: z.number().int().positive().optional() }),
   caches: z.record(alias, z.object({
     backend: z.enum(['memory', 'redis', 'file', 'dummy']), redis: alias, location: z.string().min(1).optional(),
     timeout: z.number().min(0).nullable(), keyPrefix: z.string().max(64), version: z.number().int(), maxEntries: z.number().int().positive(),
@@ -267,6 +268,9 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   if (rest.debug === undefined) merged.debug = env.has('TVINE_DEBUG') ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
   // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
   if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
+  // settings.admin.allowIps also guards the panel's pages (the admin actions check it themselves: contrib/admin/hardening.ts)
+  const adminIps = (merged.admin as { allowIps?: string[]; path?: string } | undefined)
+  if (adminIps?.allowIps?.length && Array.isArray(merged.middleware)) merged.middleware = [...merged.middleware as unknown[], ['tvine.middleware.IpFilter', { paths: [adminIps.path ?? '/admin'], allow: adminIps.allowIps }]]
   const settings = schema.parse(merged)
   // secreview M2: a Secure cookie on Path=/ with no Domain is a __Host- cookie (a subdomain or http page cannot plant it)
   if (settings.session.secure && !settings.session.cookieName.startsWith('__')) settings.session.cookieName = `__Host-${settings.session.cookieName}`
