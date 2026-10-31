@@ -46,8 +46,34 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
   audit: false,
+  security: {
+    headers: {
+      enabled: true,
+      hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: false },
+      csp: { reportOnly: false, directives: {}, reportUri: '/tvine/csp-report', staticPages: 'relaxed' },
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      coop: 'same-origin',
+      corp: 'same-origin',
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [] },
+    },
+  },
+  cors: {
+    origins: [], methods: ['GET', 'POST'],
+    allowHeaders: ['content-type', 'authorization', 'x-tvine', 'x-tvine-sid', 'x-tvine-view', 'x-tvine-expand', 'x-tvine-offset', 'x-tvine-limit', 'mcp-protocol-version', 'mcp-session-id', 'last-event-id'],
+    exposeHeaders: ['x-request-id', 'etag', 'retry-after', 'mcp-session-id'],
+    credentials: false, maxAge: 600, routes: [],
+  },
+  compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
 }
 
+const corsPolicy = z.object({
+  origins: z.array(z.union([z.string(), z.instanceof(RegExp)])),
+  methods: z.array(z.string().regex(/^[A-Za-z]+$/)),
+  allowHeaders: z.array(z.string().regex(/^[\w-]+$/)),
+  exposeHeaders: z.array(z.string().regex(/^[\w-]+$/)),
+  credentials: z.boolean(),
+  maxAge: z.number().int().min(0),
+})
 const fn = <T>() => z.custom<T>((v) => typeof v === 'function', { message: 'must be a function' })
 const posInt = z.number().int().min(0)
 
@@ -79,6 +105,25 @@ const schema: z.ZodType<Settings> = z.object({
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
+  security: z.object({
+    headers: z.object({
+      enabled: z.boolean(),
+      hsts: z.union([z.literal(false), z.object({ maxAge: z.number().int().min(0), includeSubDomains: z.boolean(), preload: z.boolean() })
+        .refine((h) => !h.preload || (h.maxAge >= 31_536_000 && h.includeSubDomains), 'hsts.preload needs maxAge >= 31536000 and includeSubDomains')]),
+      csp: z.union([z.literal(false), z.object({
+        reportOnly: z.boolean(),
+        directives: z.record(z.string().regex(/^[a-z-]+$/, 'directive names are lowercase'), z.union([z.array(z.string().regex(/^[^;,\s]+$/, 'one source per entry, no ; , or spaces')), z.literal(false)])),
+        reportUri: z.union([z.string().regex(/^(\/|https:\/\/)[^;,\s]*$/, 'a path or an https URL'), z.literal(false)]),
+        staticPages: z.enum(['relaxed', 'strict']),
+      })]),
+      referrerPolicy: z.enum(['no-referrer', 'no-referrer-when-downgrade', 'origin', 'origin-when-cross-origin', 'same-origin', 'strict-origin', 'strict-origin-when-cross-origin', 'unsafe-url']),
+      coop: z.union([z.literal(false), z.enum(['same-origin', 'same-origin-allow-popups', 'unsafe-none'])]),
+      corp: z.union([z.literal(false), z.enum(['same-origin', 'same-site', 'cross-origin'])]),
+      permissionsPolicy: z.record(z.string().regex(/^[a-z-]+$/), z.union([z.array(z.string().regex(/^(self|\*|https?:\/\/[^\s"()]+)$/, "'self', '*' or an origin")), z.literal(false)])),
+    }),
+  }),
+  cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),
+  compression: z.object({ enabled: z.boolean(), threshold: posInt, brotli: z.boolean(), gzipLevel: z.number().int().min(1).max(9), brotliQuality: z.number().int().min(0).max(11) }),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({ user: fn<(req: Request) => Promise<TvineUser | null>>().optional() }).optional(),
 })
