@@ -34,7 +34,7 @@ export function ChangeForm({ meta, obj }: { meta: ModelMeta; obj?: ObjectData })
             {obj && <p className="truncate text-muted">{obj.display}</p>}
           </div>
           {obj && <div className="flex flex-wrap gap-2">
-            {objUrls.map((u) => link(urlFor(base, meta.key, u.path, { id: obj.pk, pk: obj.pk, object_id: obj.pk }), u.title, `url-${u.name}`, 'ext'))}
+            {objUrls.map((u) => <span key={u.name} className="contents">{link(urlFor(base, meta.key, u.path, { id: obj.pk, pk: obj.pk, object_id: obj.pk }), u.title, `url-${u.name}`, 'ext')}</span>)}
             {link(href(base, { name: 'history', model: meta.key, pk: obj.pk }), 'History', 'history', 'clock')}
           </div>}
         </div>
