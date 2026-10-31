@@ -83,6 +83,27 @@ pnpm exec tvine dev --port 4400  # Next dev server + Warp in one process
 The full walkthrough, from an empty folder to a working app with admin, agents and background jobs, is
 [getting-started.md](getting-started.md).
 
+## Local network & port forwarding
+
+`tvine dev` prints where the app is:
+
+```
+  Local:   http://localhost:3000
+  Network: http://192.168.1.20:3000
+```
+
+- **Port:** if 3000 is busy, `tvine dev` takes the next free one (up to +20) and says `port 3000 in use, using 3001`. `--port` or `PORT` means exactly that port: busy fails. `tvine start` never switches ports.
+- **Hosts (dev only):** localhost, 127.0.0.1, `[::1]`, this machine's LAN IPs and its hostname(`.local`) are accepted automatically, and Next's HMR (`allowedDevOrigins`) gets the same list, so a phone on the same Wi-Fi works.
+- **Port forwarding:** add the tunnel's domain in settings (or `TVINE_DEV_ALLOWED_HOSTS=a.example.com,*.b.dev`):
+
+```ts
+dev: { allowedHosts: ['*.devtunnels.ms'] },        // VS Code port forwarding
+dev: { allowedHosts: ['*.app.github.dev'] },       // GitHub Codespaces
+dev: { allowedHosts: ['*.ngrok-free.app'] },       // ngrok
+```
+
+None of this applies in production: `tvine start` still needs `allowedHosts` listed.
+
 ## Run the tests
 
 ```bash

@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 // Every variable the framework itself reads (docs/design/conventions/env.md has the table). `tvine check` prints
 // which are set — names only, never values.
 export const FRAMEWORK_ENV = [
-  'NODE_ENV', 'TVINE_SECRET', 'DATABASE_URL', 'REDIS_URL', 'TVINE_ALLOWED_HOSTS', 'TVINE_DEBUG', 'TVINE_TRUST_PROXY',
+  'NODE_ENV', 'TVINE_SECRET', 'DATABASE_URL', 'REDIS_URL', 'TVINE_ALLOWED_HOSTS', 'TVINE_DEV_ALLOWED_HOSTS', 'TVINE_DEBUG', 'TVINE_TRUST_PROXY',
   'TVINE_SESSION_SECURE', 'TVINE_LOAD_DOTENV', 'PORT', 'HOST', 'TVINE_API_URL', 'TVINE_COOKIE_NAME', 'TVINE_SESSION_TTL_S', 'TVINE_SUPERUSER_USERNAME',
   'TVINE_SUPERUSER_EMAIL', 'TVINE_SUPERUSER_PASSWORD', 'WEB_CONCURRENCY', 'NODE_APP_INSTANCE', 'pm_id',
 ] as const

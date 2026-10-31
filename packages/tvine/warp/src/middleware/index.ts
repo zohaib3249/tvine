@@ -5,6 +5,8 @@
 // the transports never run, and only the middleware it already passed see its headers.
 import { BlockList, isIP } from 'node:net'
 import { existsSync } from 'node:fs'
+import { hostname, networkInterfaces } from 'node:os'
+import { env } from '../env.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { forwardedHostOf, isLocalRequest, requestId } from '../core/request.js'
 import { securityEvent } from '../core/audit.js'
@@ -81,11 +83,19 @@ export function hostAllowed(host: string, allowed: readonly string[]): boolean {
   if (!host) return false
   const h = host.replace(/\.$/, '')
   return allowed.some((p) => {
-    const a = p.toLowerCase()
+    const a = p.toLowerCase().replace(/^\*\./, '.')   // '*.example.com' = '.example.com'
     return a === '*' || (a.startsWith('.') ? h === a.slice(1) || h.endsWith(a) : h === a)
   })
 }
 export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
+// this machine's non-internal IPv4 addresses (what a phone on the same Wi-Fi types)
+export const lanIps = (): string[] => Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i!.address)
+// debug only (never production): localhost, the LAN IPs, the hostname(.local), settings.dev.allowedHosts and
+// TVINE_DEV_ALLOWED_HOSTS (port forwarding: '*.devtunnels.ms'). AllowedHosts adds them; tvine dev gives Next the same list.
+export function devHosts(s: Settings): string[] {
+  const h = hostname().toLowerCase().replace(/\.local$/, '')
+  return [...DEV_HOSTS, ...lanIps(), h, `${h}.local`, ...(s.dev?.allowedHosts ?? []), ...env.list('TVINE_DEV_ALLOWED_HOSTS', [])]
+}
 
 function blockList(list: unknown, name: string): BlockList {
   const b = new BlockList()
@@ -118,7 +128,7 @@ export const CATALOG: Record<string, Factory> = {
 
   // Django ALLOWED_HOSTS: an unknown Host is a 400 (DNS rebinding, poisoned absolute URLs). Always runs first.
   AllowedHosts: (o, b) => {
-    const allowed = (o.hosts as string[] | undefined) ?? b.settings.allowedHosts
+    const allowed = [...(o.hosts as string[] | undefined) ?? b.settings.allowedHosts, ...(b.debug && !b.production ? devHosts(b.settings) : [])]
     return {
       name: 'AllowedHosts',
       processRequest(req, res) {

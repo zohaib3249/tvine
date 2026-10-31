@@ -26,7 +26,7 @@ import { signBind } from './security/sign.js'
 import { checkBackends, checkHosts, defineSettings, merge, type SettingsInput } from './settings.js'
 import { configureLogging, getLogger, loggingConfig } from './log.js'
 import { env, isProduction, loadDotenv } from './env.js'
-import { buildMiddleware, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
+import { buildMiddleware, devHosts, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
 import { closeRedis, configureRedis } from './redis/index.js'
 import { configureCaches } from './cache/index.js'
 import { configureMail } from './mail/index.js'
@@ -61,6 +61,18 @@ export interface NextApp {
   close?(): Promise<void>
 }
 export type NextFactory = (o: { dev: boolean; dir: string }) => NextApp
+
+// next dev blocks /_next/* (HMR) from any page host not in next.config allowedDevOrigins. A custom server's
+// next({ conf }) is ignored by prepare(), but Next caches the loaded config per (phase, dir): load it first and add
+// the dev hosts, so the copy Next's router reads already has them (merged with the app's own list).
+async function devOrigins(dir: string, hosts: string[]): Promise<void> {
+  const req = createRequire(join(dir, 'package.json'))
+  type Load = (phase: string, dir: string, o: object) => Promise<{ allowedDevOrigins?: string[] }>
+  const m = req('next/dist/server/config') as { default?: Load } & Load
+  const conf = await (m.default ?? m)('phase-development-server', dir, { silent: false })
+  const add = hosts.map((h) => h.replace(/^\./, '*.'))
+  conf.allowedDevOrigins = [...new Set([...conf.allowedDevOrigins ?? [], ...add])]
+}
 
 export interface AgentServerOptions {
   settings?: SettingsInput & { secret?: string | string[] }   // merged over ./settings.ts (cwd), then defaults
@@ -292,7 +304,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
   const startNext = () => (next ??= (async () => {
     const factory = fe!.next ?? ((m: { default?: NextFactory } & NextFactory) => m.default ?? m)(await fromApp('next'))
-    const app = factory({ dev: !!opts.dev, dir: dirname(resolve(fe!.nextDir)) })
+    const dir = dirname(resolve(fe!.nextDir))
+    if (opts.dev && !fe!.next) await devOrigins(dir, devHosts(settings))
+    const app = factory({ dev: !!opts.dev, dir })
     await app.prepare()
     return { app, handle: app.getRequestHandler(), upgrade: app.getUpgradeHandler?.() }
   })())

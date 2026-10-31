@@ -22,7 +22,7 @@ import { redisUsers } from './settings.js'
 import { redis } from './redis/index.js'
 import type { AddressInfo } from 'node:net'
 import { defaultEnv, defaultNodeEnv, env, envReport, isProduction, loadDotenv } from './env.js'
-import { describeMiddleware } from './middleware/index.js'
+import { describeMiddleware, lanIps } from './middleware/index.js'
 
 export interface Io {
   out(s: string): void; err(s: string): void; exit(code: number): void
@@ -136,6 +136,16 @@ export function boundUrl(a: AddressInfo): string {
   return a.address === '::' || a.address === '0.0.0.0' ? `http://localhost:${a.port} (bound to ${shown}, every interface)` : `http://${shown}:${a.port}`
 }
 
+// listen on port; auto: when it is busy try port+1 … port+20. Returns the port it got.
+export async function listenFree(listen: (port: number) => Promise<void>, port: number, auto: boolean): Promise<number> {
+  for (let at = port; ; at++) {
+    try { await listen(at); return at } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e
+      if (!auto || at === 0 || at >= port + 20) throw new Error(`port ${at} is in use${auto ? ` (tried ${port}-${at})` : ''}: stop what is using it or pass another --port`)
+    }
+  }
+}
+
 // a built Next app in cwd is served; otherwise API-only
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
@@ -235,8 +245,15 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (dev && isProduction()) throw new Usage('tvine dev is for development; use tvine start in production')
         if (dev) defaultEnv('TVINE_DEBUG', '1')   // runserver = DEBUG on (dev CSP, inspector feed), unless TVINE_DEBUG says no
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
-        await srv.listen(port, host).catch(async (e) => { await srv.close(); throw e })
-        io.out(`listening on ${boundUrl(srv.server.address() as AddressInfo)}`)
+        // dev, port not forced (--port / PORT): a busy port moves to the next free one, like next dev
+        const at = await listenFree((p) => srv.listen(p, host), port, dev && o.port === undefined && !env.has('PORT')).catch(async (e) => { await srv.close(); throw e })
+        if (at !== port) io.out(`port ${port} in use, using ${at}`)
+        const addr = srv.server.address() as AddressInfo
+        io.out(`listening on ${boundUrl(addr)}`)
+        if (dev && (host === undefined || host === '0.0.0.0' || host === '::')) {
+          io.out(`  Local:   http://localhost:${addr.port}`)
+          for (const ip of lanIps()) io.out(`  Network: http://${ip}:${addr.port}`)
+        }
         const regen = dev ? devWatch(apps, io) : undefined
         const stop = () => {
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
