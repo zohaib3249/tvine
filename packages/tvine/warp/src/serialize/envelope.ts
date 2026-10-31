@@ -4,14 +4,16 @@ import { toJson } from './json.js'
 import { toNotation, bare, cell, quote } from './notation.js'
 import { disclose, expand, kindOfWidget, level, toTree, type Shaped } from '../shape/disclose.js'
 import { HINT2, UNTRUSTED } from '../shape/notation.js'
+import { mdView, nodesMd, type MdPage } from '../shape/markdown.js'
 
-export type Format = 'json' | 'notation'
+export type Format = 'json' | 'notation' | 'md'   // md: Markdown of the page (snapshots); anything else prints as notation
 export type Shapers = Record<string /* node type */, (data: Record<string, unknown>) => Record<string, unknown>>
 export interface Ctx { sid: Sid; rev: Rev; page: string }
 export type ViewOpt = 'auto' | 'full' | 'L1' | 'L0'
 export interface ExpandOpt { id: string; offset?: number; limit?: number }
 // view: forced level (default auto: full → L1 → L0 by budget); expand: L2 of one node (unknown id → L0 map)
-export interface RenderOpts { ctx: Ctx; shapers?: Shapers; view?: ViewOpt; expand?: ExpandOpt }
+// md: offset (line) / limit (tokens) of the Markdown view; more(offset) words the continuation for this transport
+export interface RenderOpts { ctx: Ctx; shapers?: Shapers; view?: ViewOpt; expand?: ExpandOpt; md?: MdPage & { more?: (offset: number) => string } }
 
 const HINT = '#hint @type @id=node id then cols, rows=values in order, "-"=null | ! act name(p:type) bind=<b> -> POST {action,params,sid,bind}'
 
@@ -92,7 +94,12 @@ export function snapshotOf(e: Event): Snapshot | undefined {
 // head + status? + body. sid/rev come from the first snapshot/update in `events`; `ctx` fills the
 // gaps (ok/goto/err carry no sid themselves).
 // settings.agent.shape: 'v2' (default) → the snapshot goes through the shaper (budgeted view); 'v1' → today's bytes.
-export function render(events: Event[], format: Format, settings: Settings, { ctx, shapers, view, expand: x }: RenderOpts): string {
+export function render(events: Event[], format: Format, settings: Settings, { ctx, shapers, view, expand: x, md }: RenderOpts): string {
+  if (format === 'md') {
+    const s = events.length === 1 && events[0]!.kind === 'snapshot' ? events[0].snapshot : undefined
+    if (s) return markdown(s, ctx.page, md)
+    format = 'notation'   // errors, gotos, results: the notation status line (plain text too)
+  }
   const evs: Event[] = events.map(e => {
     if (e.kind === 'snapshot') return { kind: 'snapshot', snapshot: shape(e.snapshot, shapers) }
     if (e.kind === 'err' && e.snapshot) return { ...e, snapshot: shape(e.snapshot, shapers) }
@@ -114,4 +121,11 @@ export function render(events: Event[], format: Format, settings: Settings, { ct
   const hint = format === 'notation' && !!snap && (!v2 || (v2.nodes.some(n => n.rows || n.actions || n.links) || !!v2.links) && HINT2)
   const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint, view: v2?.view, data: !!snap })
   return format === 'json' ? toJson(evs, h, v2) : toNotation(evs, h, v2)
+}
+
+// view=md: `#tvine` + `#data` lines, title + url, then the page (widget markers resolved for this reader).
+function markdown(s: Snapshot, url: string, o: RenderOpts['md'] = {}): string {
+  const h = head({ sid: s.sid, rev: s.rev, page: s.page, format: 'notation', view: 'md', data: true })
+  const body = mdView(s.md ?? nodesMd(s), s.widgets, { headless: true, offset: o.offset, limit: o.limit, more: o.more ?? ((n) => `read again with x-tvine-offset: ${n}`) })
+  return `${h}\n# ${s.title.replace(/\s+/g, ' ')}\nurl: ${url}\n\n${body}\n`
 }

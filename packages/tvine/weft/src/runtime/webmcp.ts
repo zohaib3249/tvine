@@ -1,5 +1,5 @@
 'use client'
-import { disclose, expand, toTree, UNTRUSTED, UNTRUSTED_TOOL, type WidgetFrag } from '../../../warp/dist/shape/index.js'
+import { disclose, expand, htmlToMd, mdView, toTree, UNTRUSTED, UNTRUSTED_TOOL, type WidgetFrag } from '../../../warp/dist/shape/index.js'
 import type { ActionHandle, ActionOutcome } from '../widget/types.js'
 import { getOverlay } from '../presence/overlay.js'
 import { autoExcluded } from '../jsx/AutoEl.js'
@@ -77,7 +77,7 @@ const errOut = (code: string, message: string, extra: object = {}) => reply({ ki
 
 // Tool descriptions are versioned constants (transports.md). `ui` before `do`: agents act through the UI.
 export const DESCRIPTIONS = {
-  read_page: 'Read the current page as a structured snapshot (JSON): widgets with ids, state and controls. Call this first, and again after acting. view: auto|L0|L1|full.' + UNTRUSTED_TOOL,
+  read_page: 'Read the current page. view=md first: the page as compact Markdown with control ids inline ({id controls}), then ui to act. auto|L0|L1|full: JSON widgets with ids, state and controls. Read again after acting.' + UNTRUSTED_TOOL,
   expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.' + UNTRUSTED_TOOL,
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
   do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Page-level agent vetoes do not apply here; server permissions do. Call read_page first for actions and params. Retries with the same cmdId are safe.',
@@ -85,7 +85,12 @@ export const DESCRIPTIONS = {
 
 // The in-tab snapshot: the registry's widgets through the same shaper Warp uses (tvine/shape).
 function tree() {
-  const widgets: WidgetFrag[] = []
+  const l = (globalThis as any).location
+  return toTree({ page: l.pathname + l.search, title: globalThis.document?.title ?? '', nodes: [], links: [], widgets: widgetsNow().widgets }, { headless: false })
+}
+
+function widgetsNow(): { widgets: WidgetFrag[]; els: [string, HTMLElement][] } {
+  const widgets: WidgetFrag[] = [], els: [string, HTMLElement][] = []
   const walk = (n: RegistryNode, p: string) => {
     for (const c of n.children) {
       // Auto (plain-HTML) entries that are inert / hidden / aria-hidden / disabled: left out with their subtree.
@@ -97,13 +102,36 @@ function tree() {
         // Controls bound to an agent-off action are not shown (the executor refuses them alike).
         if (d.ctl) for (const [k, v] of Object.entries(d.ctl)) if ((v.h as { params?: ActionHandle } | undefined)?.params?.agent === false) delete d.ctl[k]
         widgets.push({ ...d, ...(c.spec.sensitive && { sensitive: true }) } as WidgetFrag)
+        if (c.el) els.push([c.id, c.el])
       }
       walk(c, c.id)
     }
   }
   walk(getRegistry().tree(), '')
+  return { widgets, els }
+}
+
+// view=md in the tab: a clone of <body> carrying what the live DOM knows and its HTML doesn't (current
+// values, CSS-hidden elements, every widget's id), through Warp's converter. The live page is never touched.
+function pageMd(o: { offset?: number; limit?: number }): Obj {
+  const d = (globalThis as any).document as Document
+  const { widgets, els } = widgetsNow()
+  const body = d.body, copy = body.cloneNode(true) as HTMLElement
+  const a = [body, ...body.querySelectorAll('*')], b = [copy, ...copy.querySelectorAll('*')]
+  const at = new Map<Element, number>(a.map((e, i) => [e, i]))
+  a.forEach((e, i) => {
+    const c = b[i] as HTMLElement | undefined
+    if (!c) return
+    if ((e as any).checkVisibility && !(e as any).checkVisibility()) c.setAttribute('hidden', '')
+    if (e instanceof HTMLInputElement) { c.setAttribute('value', e.value); c.toggleAttribute('checked', e.checked) }
+    else if (e instanceof HTMLTextAreaElement) c.textContent = e.value
+    else if (e instanceof HTMLOptionElement) c.toggleAttribute('selected', e.selected)
+  })
+  for (const [id, el] of els) { const i = at.get(el); if (i !== undefined) b[i]!.setAttribute('data-tvine-id', id) }
+  const md = htmlToMd(copy.outerHTML, widgets)
+  const text = mdView(md, widgets, { headless: false, ...o, more: (n) => `call read_page again with view "md", offset ${n}` })
   const l = (globalThis as any).location
-  return toTree({ page: l.pathname + l.search, title: globalThis.document?.title ?? '', nodes: [], links: [], widgets }, { headless: false })
+  return { '#data': UNTRUSTED, rev: getRegistry().rev, view: 'md', page: l.pathname + l.search, title: d.title, md: text }
 }
 
 // ponytail: tolerant read of the Warp reply (json envelope or bare event).
@@ -163,8 +191,9 @@ export function pageTools(via: 'webmcp' | 'tab' | 'inspector', header?: string, 
   const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
     outcome(await agentPost({ action: h.id, params, bind: h.bind, cmdId, agentCmd: { cmdId, via: agentVia } }, header))
   return {
-    read_page: async ({ view }: { view?: 'auto' | 'L0' | 'L1' | 'full' } = {}): Promise<Obj> =>
-      ({ '#data': UNTRUSTED, rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) }),
+    read_page: async ({ view, offset, limit }: { view?: 'md' | 'auto' | 'L0' | 'L1' | 'full'; offset?: number; limit?: number } = {}): Promise<Obj> =>
+      view === 'md' ? pageMd({ offset, limit })
+        : ({ '#data': UNTRUSTED, rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) }),
     expand: async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }): Promise<Obj> => {
       const x = expand(tree(), String(id), { offset, limit })
       return x ? { '#data': UNTRUSTED, ...x } : { kind: 'err', code: 'unknown_action', message: `no node ${id}; ids come from read_page` }
@@ -206,7 +235,7 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
   const off = provideTools([
     {
       name: 'read_page', description: DESCRIPTIONS.read_page,
-      inputSchema: { type: 'object', properties: { view: { type: 'string', enum: ['auto', 'L0', 'L1', 'full'] } } },
+      inputSchema: { type: 'object', properties: { view: { type: 'string', enum: ['md', 'auto', 'L0', 'L1', 'full'] }, offset: { type: 'number' }, limit: { type: 'number' } } },
       execute: guard(tools.read_page),
     },
     {

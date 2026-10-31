@@ -33,11 +33,27 @@ export interface HttpOptions {
 export function isAgent(req: IncomingMessage, settings: Settings): boolean {
   if (req.headers[settings.header.toLowerCase()] !== undefined) return true
   const a = req.headers.accept?.toLowerCase()   // media types are case-insensitive (RFC 9110 §8.3.1)
-  return a !== undefined && (a.includes('text/tvine') || a.includes('application/tvine+json'))
+  return a !== undefined && (a.includes('text/tvine') || a.includes('application/tvine+json') || wantsMarkdown(a))
+}
+
+// Accept: text/markdown (or text/x-markdown) ranked at least as high as text/html → the Markdown view.
+// Only the header decides (no URL form, no user-agent sniffing). Browsers never list markdown.
+export function wantsMarkdown(accept: string | undefined): boolean {
+  if (!accept) return false
+  let md = 0, html = 0
+  for (const part of accept.toLowerCase().split(',')) {
+    const [type, ...ps] = part.split(';').map((x) => x.trim())
+    const qp = ps.find((p) => p.startsWith('q='))
+    const q = qp ? Number(qp.slice(2)) : 1
+    if (!Number.isFinite(q)) continue
+    if (type === 'text/markdown' || type === 'text/x-markdown') md = Math.max(md, q)
+    else if (type === 'text/html' || type === 'application/xhtml+xml') html = Math.max(html, q)
+  }
+  return md > 0 && md >= html
 }
 
 const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, human_only: 403 }
-const TYPE: Record<Format, string> = { json: 'application/json; charset=utf-8', notation: 'text/plain; charset=utf-8' }
+const TYPE: Record<Format, string> = { json: 'application/json; charset=utf-8', notation: 'text/plain; charset=utf-8', md: 'text/markdown; charset=utf-8' }
 const BASE = 'http://tvine.local'
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const VIEWS = new Set(['auto', 'full', 'L1', 'L0'])
@@ -97,6 +113,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   const pickFormat = (req: IncomingMessage, q: URLSearchParams, forced?: Format): Format => {
     if (forced) return forced
+    if (req.headers['x-tvine-view'] === 'md' || wantsMarkdown(req.headers.accept)) return 'md'   // header-only
     const f = q.get('format')
     if (f === 'json' || f === 'notation') return f
     const a = req.headers.accept ?? ''
@@ -135,13 +152,14 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
     }
     let shape: { view?: ViewOpt; expand?: ExpandOpt } = {}
+    let md: { offset?: number; limit?: number } = {}
     const reply = async (status: number, events: Event[], headers: Record<string, string> = {}) => {
       for (const e of events) if (e.kind === 'snapshot') sessions.remember(e.snapshot)   // expand serves from it
       sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
       if (!named.has(sid)) await setCookie(req, res, sid).catch((e: unknown) => server.log('error', 'session cookie failed', { error: String(e) }))
       const shown = reveal ? events : events.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
-      res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape }))
+      res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape, md }))
       return status
     }
     let status = 0
@@ -176,7 +194,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
       await guard(raw, request, known)
       if (isGet) {
-        shape = getShape(req)
+        shape = format === 'md' ? {} : getShape(req)
+        if (format === 'md') md = mdShape(req)
         status = await agentGet(req, res, request, u, format, ctx, shape, (c) => { ctx = c }, reply)
       } else {
         const got = await readCommand(req, request, sidKey ?? undefined, upload)
@@ -229,6 +248,12 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     if (id) return { expand: { id: id.slice(0, 500), offset: num('x-tvine-offset', 0, 1e6), limit: num('x-tvine-limit', 1, 100) } }
     const v = h('x-tvine-view')
     return v && VIEWS.has(v) ? { view: v as ViewOpt } : {}
+  }
+
+  // view=md: x-tvine-offset = first line, x-tvine-limit = token budget (default MD_BUDGET)
+  const mdShape = (req: IncomingMessage): { offset?: number; limit?: number } => {
+    const num = (n: string, lo: number, hi: number) => { const v = Number(req.headers[n]); return Number.isInteger(v) && v >= lo && v <= hi ? v : undefined }
+    return { offset: num('x-tvine-offset', 0, 1e6), limit: num('x-tvine-limit', 100, 100_000) }
   }
 
   // POST {ui: UiCommand}: headless ui on this page (core/ui.ts); later steps may only change the query.
@@ -288,7 +313,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       }
       return reply(200, [ev.snapshot(snap)])
     }
-    const etag = `"${createHash('sha1').update(format).update(String(req.headers['x-tvine-view'] ?? '')).update(JSON.stringify(snap)).digest('base64url')}"`
+    const etag = `"${createHash('sha1').update(format).update(String(req.headers['x-tvine-view'] ?? '')).update(String(req.headers['x-tvine-offset'] ?? '')).update(String(req.headers['x-tvine-limit'] ?? '')).update(JSON.stringify(snap)).digest('base64url')}"`
     // an agent read the page (a 304 too: it has the content); after the reply, like the command hook
     const ms = Math.round(performance.now() - t0)
     if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page, via: 'http', sid: session.sid, rev: session.rev, ms }))
@@ -433,7 +458,14 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       void handle(req, res, alias[1] === 'json' ? 'json' : 'notation')
       return
     }
-    if ((req.method !== 'GET' && req.method !== 'POST') || !isAgent(req, settings)) return next()
+    if ((req.method !== 'GET' && req.method !== 'POST') || !isAgent(req, settings)) {
+      // a page answers html OR markdown by Accept: caches must key on it; Link tells agents it negotiates
+      if ((req.method === 'GET' || req.method === 'HEAD') && match(path) !== undefined) {
+        res.setHeader('link', `<${path}>; rel="alternate"; type="text/markdown"`)
+        varyAccept(res)
+      }
+      return next()
+    }
     void handle(req, res, undefined)
   }
 }
@@ -454,4 +486,14 @@ function readBody(req: IncomingMessage, cap: number): Promise<Buffer | null> {
     req.once('end', () => resolve(Buffer.concat(chunks)))
     req.once('error', reject)
   })
+}
+
+// Appends `Accept` to whatever Vary the page's renderer sets (Next sets its own just before writing).
+function varyAccept(res: ServerResponse): void {
+  const w = res.writeHead
+  res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
+    const v = String(res.getHeader('vary') ?? '')
+    if (!/(^|,)\s*accept\s*(,|$)/i.test(v)) res.setHeader('vary', v ? `${v}, Accept` : 'Accept')
+    return (w as (...a: unknown[]) => ServerResponse).apply(this, args)
+  } as ServerResponse['writeHead']
 }

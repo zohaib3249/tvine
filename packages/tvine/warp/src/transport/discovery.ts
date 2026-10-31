@@ -85,7 +85,7 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
   }
   // Built once at construction.
   const wellKnown = JSON.stringify({
-    tvine: '1', formats: ['json', 'notation'], header: settings.header, mcp: '/mcp', mcpAuth: 'none',
+    tvine: '1', formats: ['json', 'notation', 'md'], header: settings.header, mcp: '/mcp', mcpAuth: 'none',
     channel: '/tvine/channel', manifest: '/tvine/manifest',
   })
   const site = JSON.stringify(buildSiteManifest(manifest, routes))
@@ -97,6 +97,8 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
     '## Talking to this site as an agent',
     `- Send the header \`${settings.header}: 1\` (or \`Accept: text/tvine\`) on any page request to get a`,
     '  structured snapshot of the page and its actions instead of HTML.',
+    '- Send `Accept: text/markdown` on any page URL to read it as compact Markdown with control ids',
+    '  inline (`[Add](/x){button:add}`): the best first read. MCP: read_page with view "md".',
     '- MCP endpoint: /mcp (no authentication in v1; anonymous visitor scope).',
     '',
     '## Capabilities',
