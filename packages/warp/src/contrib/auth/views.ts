@@ -14,11 +14,12 @@ import { base32, sha256 } from './crypto.js'
 import { RecoveryCode, Token, Totp, User } from './models.js'
 import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
-import { RateLimiter } from '../../security/ratelimit.js'
+import type { Limiter } from '../../security/ratelimit.js'
+import { limiterFor } from '../../backends/index.js'
 import type { Settings } from '../../core/types.js'
 
-const resetRates = new WeakMap<Settings, RateLimiter>()
-const resetRate = (s: Settings) => { let r = resetRates.get(s); if (!r) resetRates.set(s, (r = new RateLimiter({ limit: 3, windowMs: 3_600_000 }))); return r }
+const resetRates = new WeakMap<Settings, Limiter>()
+const resetRate = (s: Settings) => { let r = resetRates.get(s); if (!r) resetRates.set(s, (r = limiterFor(s, { limit: 3, windowMs: 3_600_000 }))); return r }   // settings.limits.backend
 
 const pw = () => z.string().min(1).max(MAX_PASSWORD)
 const me = (ctx: ActionCtx) => ctx.request.user as AuthUser
@@ -40,16 +41,16 @@ async function reauth(ctx: ActionCtx, u: AuthUser, password: string | undefined)
     if (recentlyAuthenticated(ctx)) return
     throw new DomainError('reauth_required', 'confirm your password (send password) to do this', 'password')
   }
-  locked(ctx, u.username)
+  await locked(ctx, u.username)
   const row = (await User.get(Number(u.id)))!
   if (!(await checkPassword(password, row.password, ctx.settings)).ok) {
-    throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
+    await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the password is not correct', 'password')
   }
 }
 
-function locked(ctx: ActionCtx, username: string): void {
-  if (throttleOf(ctx.settings).locked(username, ctx.request.ip)) throw new DomainError('locked', 'too many failed attempts; try again later')
+async function locked(ctx: ActionCtx, username: string): Promise<void> {
+  if (await throttleOf(ctx.settings).locked(username, ctx.request.ip)) throw new DomainError('locked', 'too many failed attempts; try again later')
 }
 
 export const loginAction = defineAction('login', z.object({
@@ -58,15 +59,15 @@ export const loginAction = defineAction('login', z.object({
   otp: z.string().max(32).optional(),
 }), async ({ username, password, otp }, ctx): Promise<SafeUser> => {
   const t = throttleOf(ctx.settings), ip = ctx.request.ip
-  locked(ctx, username)
+  await locked(ctx, username)
   const row = await User.objects.filter({ username: username.normalize('NFKC') }).first()
   const { ok, upgrade } = row?.isActive ? await checkPassword(password, row.password, ctx.settings) : { ok: await dummyCheck(password, ctx.settings), upgrade: false }
-  if (!row || !ok) { t.fail(username, ip); throw INVALID() }
+  if (!row || !ok) { await t.fail(username, ip); throw INVALID() }
   if (await hasSecondFactor(row.id)) {
     if (!otp) throw new DomainError('otp_required', 'enter the code from your authenticator app (or a recovery code) as otp')
-    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { t.fail(username, ip); throw INVALID() }
+    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { await t.fail(username, ip); throw INVALID() }
   }
-  t.succeed(username, ip)
+  await t.succeed(username, ip)
   const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
   return safeUser(await login(ctx, current))
 }, { rate: { limit: 10, windowMs: 60_000 } })
@@ -80,10 +81,10 @@ export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promis
 
 export const changePassword = defineAction('changePassword', z.object({ oldPassword: pw(), newPassword: pw() }), async ({ oldPassword, newPassword }, ctx) => {
   const u = sessionOnly(ctx)
-  locked(ctx, u.username)
+  await locked(ctx, u.username)
   const row = (await User.get(Number(u.id)))!
   if (!(await checkPassword(oldPassword, row.password, ctx.settings)).ok) {
-    throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
+    await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the current password is not correct', 'oldPassword')
   }
   reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
@@ -99,7 +100,7 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
   const send = ctx.settings.auth?.sendPasswordReset
   const want = email.normalize('NFKC').trim().toLowerCase()
   // per-email cap (3/hour): silently nothing more — the answer stays the same, so it says nothing either
-  if (!resetRate(ctx.settings).check({ sid: `reset:${want}` }).ok) return null
+  if (!(await resetRate(ctx.settings).check({ sid: `reset:${want}` })).ok) return null
   // case-insensitive (Django get_users: email__iexact): contains narrows in SQL, the exact match is here
   const rows = (await User.objects.filter([{ field: 'email', op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
     .filter((r) => r.email?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
@@ -154,10 +155,10 @@ export const totpConfirm = defineAction('totpConfirm', z.object({ otp: z.string(
 
 export const totpDisable = defineAction('totpDisable', z.object({ password: pw() }), async ({ password }, ctx) => {
   const u = sessionOnly(ctx)
-  locked(ctx, u.username)
+  await locked(ctx, u.username)
   const row = (await User.get(Number(u.id)))!
   if (!(await checkPassword(password, row.password, ctx.settings)).ok) {
-    throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
+    await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the password is not correct', 'password')
   }
   await Totp.objects.filter({ userId: row.id }).delete()

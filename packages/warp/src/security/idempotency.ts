@@ -17,7 +17,16 @@ const canon = (v: unknown): unknown =>
 export const hashParams = (params: unknown): string =>
   createHash('sha1').update(JSON.stringify(canon(params)) ?? 'null').digest('hex')
 
-export class IdempotencyCache {
+// settings.limits.backend: 'memory' = IdempotencyCache, 'redis' = backends/redis.ts. A shared store also
+// claims a running sid:cmdId across servers (claim/release), so a retry on another server never runs it twice.
+export interface Idempotency {
+  replay(sid: Sid, cmdId: string, paramsHash: string): Replay | Promise<Replay>
+  remember(sid: Sid, cmdId: string, paramsHash: string, events: Event[]): void | Promise<void>
+  claim?(sid: Sid, cmdId: string, ttlMs: number): Promise<boolean>   // false: running on another server
+  release?(sid: Sid, cmdId: string): Promise<void>
+}
+
+export class IdempotencyCache implements Idempotency {
   private bySid = new Map<Sid, Map<string, Entry>>()
 
   constructor(private ttlMs: number) {}

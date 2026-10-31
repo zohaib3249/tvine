@@ -11,7 +11,8 @@ import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, typ
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
-import { makeSnapshotter, SnapshotCache } from './core/registry.js'
+import { makeSnapshotter } from './core/registry.js'
+import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
@@ -114,8 +115,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (settings.logging !== 'none') console.error(settings.logging === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
-  if (process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) {
-    say('WARNING: multi-instance run detected; sessions, limits and channels are in-process in v1 — run exactly one process', 'warn')
+  const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
+  if ((process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) && local.length) {
+    say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
   }
 
   // 2. discover: duplicate/invalid actions fail here, naming the file, never at request time
@@ -145,7 +147,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   for (const { app, fn } of signals.ready) {
     try { await (fn as (s: ServerCtx) => unknown)(ctx) } catch (e) { ctx.close(); throw new Error(`app ${app}: ready() failed: ${(e as Error).message}`, { cause: e }) }
   }
-  const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
+  const cache = snapshotCacheFor(settings, dataVersion, ctx.log)
+  if (cache.settle) ctx.settle = () => cache.settle!()
+  if (cache.close) ctx.onClose(() => cache.close!())
+  ctx.health.set('backends', () => backendHealth(settings))
+  // a shared channel layer must be subscribed before the first event it should deliver
+  if ('ready' in ctx.channels) await (ctx.channels as { ready: Promise<void> }).ready
   const nonce = randomBytes(16).toString('hex')
   // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
   // its fragments say: the page marks its per-render token in `touched`, the snapshotter checks it after extract.
@@ -244,7 +251,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   g[API] = api
 
   // 5. session sweep; 6. server hygiene (SSE sets its own socket timeout to 0)
-  const sweep = setInterval(() => ctx.sessions.sweep(), settings.session.ttlMs / 4)
+  const sweep = setInterval(() => void ctx.sessions.sweep().catch((e: unknown) => ctx.log('error', 'session sweep failed', { error: String(e) })), settings.session.ttlMs / 4)
   sweep.unref()
   const server = createServer((req, res) => handler(req, res))
   server.headersTimeout = 10_000
@@ -320,7 +327,7 @@ function manifestSnapshot(ctx: ServerCtx): (page: string, sid: string) => Promis
     byApp.set(app, [...(byApp.get(app) ?? []), { id: d.id, params: ctx.actions.paramSpecs(d.id), bind: '' }])
   }
   const nodes: Node[] = [...byApp].map(([app, refs]) => ({ id: `app:${app}`, type: 'app', data: { name: app }, actions: refs }))
-  return async (page, sid) => ({ page, title: ctx.settings.site.name, sid, rev: ctx.sessions.peek({ sid })?.rev ?? 0, nodes, links: [] })
+  return async (page, sid) => ({ page, title: ctx.settings.site.name, sid, rev: (await ctx.sessions.peek({ sid }))?.rev ?? 0, nodes, links: [] })
 }
 
 export interface FormSource {
@@ -352,14 +359,14 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     const jar = await src.cookies()
     let cookie = jar.get(name)?.value
     const request = await buildRequest({ url: path, route: pattern, headers: h, ip, via: 'human' }, settings)
-    if (!(await guardCheck(settings)(decodeURIComponent(path), request, sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
-    if (!sessions.peek({ cookie })) {
+    if (!(await guardCheck(settings)(decodeURIComponent(path), request, await sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
+    if (!(await sessions.peek({ cookie }))) {
       // a refused request creates no session and sets no cookie: dispatch's own origin + ip checks, run first.
       // ponytail: dispatch charges the ip bucket again, so a session's first submit costs 2 tokens
       if (crossOrigin(request, settings)) return formResult([ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })])
-      const rl = server.limiter.check({ ip: request.ip })
+      const rl = await server.limiter.check({ ip: request.ip })
       if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
-      cookie = sessions.cookieFor(sessions.create().sid)
+      cookie = await sessions.cookieFor((await sessions.create()).sid)
       // the same attributes as transport/http.ts sets on its session cookie
       jar.set(name, cookie, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
       const others = (h.cookie ?? '').split(';').map((p) => p.trim()).filter((p) => p && !p.startsWith(`${name}=`))
@@ -369,7 +376,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     }
     const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
     const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
-    if (rotated) jar.set(name, sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
     return out
   }
 }
@@ -430,7 +437,7 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
       const cookie = sid === undefined ? (await src.cookies()).get(settings.session.cookieName)?.value : undefined
-      await authenticate(settings, request, sessions.peek({ sid, cookie }))   // request.user of the page's session
+      await authenticate(settings, request, await sessions.peek({ sid, cookie }))   // request.user of the page's session
       return request
     },
   }
@@ -460,7 +467,7 @@ export function apiFor(server: ServerCtx, route: (path: string) => string | unde
     const action = h['next-action'] !== undefined
     return invoke(server, call, {
       request, cookie: jar.get(name)?.value, mode: action ? 'action' : 'render',
-      mint: (s) => { jar.set(name, sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
+      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
     })
   }
 }

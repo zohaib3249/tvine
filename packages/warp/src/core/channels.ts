@@ -1,9 +1,9 @@
-import type { ChannelLayer, Event } from './types.js'
+import type { ChannelLayer, Event, Replayed } from './types.js'
 
 // channels.md: named pub/sub groups. Last 64 events per group are kept for Last-Event-ID resume.
-const RING = 64
+export const RING = 64
 
-interface Entry { subs: Set<(e: Event) => void>; ring: { seq: number; e: Event }[] }
+interface Entry { subs: Set<(e: Event, seq: number) => void>; ring: Replayed[] }
 
 export class MemoryChannelLayer implements ChannelLayer {
   private groups = new Map<string, Entry>()
@@ -12,7 +12,7 @@ export class MemoryChannelLayer implements ChannelLayer {
 
   group(name: string) {
     return {
-      add: (subscriber: (e: Event) => void): (() => void) => {
+      add: (subscriber: (e: Event, seq: number) => void): (() => void) => {
         let entry = this.groups.get(name)
         if (!entry) this.groups.set(name, (entry = { subs: new Set(), ring: [] }))
         entry.subs.add(subscriber)
@@ -22,14 +22,14 @@ export class MemoryChannelLayer implements ChannelLayer {
       send: (e: Event): void => {
         let entry = this.groups.get(name)
         if (!entry) this.groups.set(name, (entry = { subs: new Set(), ring: [] }))
-        entry.ring.push({ seq: ++this.seq, e })
+        const seq = ++this.seq
+        entry.ring.push({ seq, e })
         if (entry.ring.length > RING) entry.ring.shift()
         // Copy first: a subscriber that (un)subscribes mid-send must not change this event's fan-out.
-        for (const sub of [...entry.subs]) sub(e)
+        for (const sub of [...entry.subs]) sub(e, seq)
       },
       size: (): number => this.groups.get(name)?.subs.size ?? 0,
-      since: (cursor: number): Event[] =>
-        (this.groups.get(name)?.ring ?? []).filter((r) => r.seq > cursor).map((r) => r.e),
+      since: (cursor: number): Replayed[] => (this.groups.get(name)?.ring ?? []).filter((r) => r.seq > cursor),
     }
   }
 

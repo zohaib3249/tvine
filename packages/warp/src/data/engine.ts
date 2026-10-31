@@ -178,7 +178,12 @@ const gv = globalThis as { [VERSION]?: number }
 export const dataVersion = (): number => gv[VERSION] ?? 0
 // ponytail: one counter for the whole process and every table, so a write-heavy app rarely hits the snapshot
 // cache; per-table versions (pages would declare what they read) if that cost shows up.
-const bump = () => { gv[VERSION] = dataVersion() + 1 }
+const WATCH = Symbol.for('tvine.dataVersionWatchers')
+const gw = globalThis as { [WATCH]?: Set<() => void> }
+const watchers = (gw[WATCH] ??= new Set())
+// called after every bump (a shared snapshot cache publishes it to the other servers); must not throw
+export function onDataVersion(fn: () => void): () => void { watchers.add(fn); return () => { watchers.delete(fn) } }
+const bump = () => { gv[VERSION] = dataVersion() + 1; for (const w of watchers) { try { w() } catch { /* a watcher's own problem */ } } }
 function wrote<R>(r: R): R {
   const tx = bound.getStore()
   if (tx && !tx.closed) { if (!tx.hooks.includes(bump)) tx.hooks.unshift(bump) }   // first: before app hooks read

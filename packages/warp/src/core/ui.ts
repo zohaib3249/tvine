@@ -82,7 +82,7 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
   const key = cmd.cmdId === undefined ? undefined : `ui:${cmd.cmdId}`
   const hash = key ? hashParams({ steps, rev: cmd.rev ?? null }) : ''
   if (key) {
-    const r = server.idempotency.replay(sid, key, hash)
+    const r = await server.idempotency.replay(sid, key, hash)
     if (r.hit === 'conflict') return { page, events: [ev.err('conflict', 'cmdId was already used with different steps; send a new cmdId')] }
     if (r.hit) return { page: pageOfEvents(r.events) ?? page, events: r.events }
   }
@@ -141,7 +141,7 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
     return { page, events: [ev.ok('ui', { steps: done, page }), ev.snapshot(await snapNow())] }
   }
   const out = await exec()
-  if (key) server.idempotency.remember(sid, key, hash, out.events)
+  if (key) await server.idempotency.remember(sid, key, hash, out.events)
   return out
 }
 

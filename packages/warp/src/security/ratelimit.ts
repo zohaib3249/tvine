@@ -9,7 +9,12 @@ type Bucket = { tokens: number; at: number }
 const CAP = 10_000           // LRU cap per map (ip buckets; sid buckets too, for now)
 const IP_WINDOW_MULT = 5     // IP bucket is stricter: same limit spread over 5× the window
 
-export class RateLimiter {
+export type RateResult = { ok: true } | { ok: false; retryAfterMs: number }
+export type RateKeys = { sid?: Sid; ip?: string; action?: string }
+// settings.limits.backend: 'memory' = RateLimiter (this file), 'redis' = backends/redis.ts (same algorithm, atomic Lua).
+export interface Limiter { check(keys: RateKeys, rules?: ActionRules['rate']): RateResult | Promise<RateResult> }
+
+export class RateLimiter implements Limiter {
   private ips = new Map<string, Bucket>()   // Map insertion order = LRU order
   private sids = new Map<string, Bucket>()
 
@@ -18,23 +23,11 @@ export class RateLimiter {
   // `action` (dispatch passes it once the action is known) gives an action-level rate its own
   // bucket per sid+action, so two actions with equal rates never share one.
   // No ip = only the sid bucket (dispatch checks ip + default sid bucket first, then the action's own).
-  check(keys: { sid?: Sid; ip?: string; action?: string }, rules?: ActionRules['rate']):
-    | { ok: true }
-    | { ok: false; retryAfterMs: number } {
+  check(keys: RateKeys, rules?: ActionRules['rate']): RateResult {
     const now = Date.now()
-    const picks: [Map<string, Bucket>, string, Rate][] = keys.ip === undefined ? [] : [[
-      this.ips, ipKey(keys.ip),
-      { limit: this.defaults.limit, windowMs: this.defaults.windowMs * IP_WINDOW_MULT },
-    ]]
-    if (keys.sid) {
-      // action-level rate gets its own bucket per sid, so other actions keep the default
-      picks.push(rules
-        ? [this.sids, `${keys.sid}|${keys.action ?? ''}|${rules.limit}/${rules.windowMs}`, rules]
-        : [this.sids, keys.sid, this.defaults])
-    }
     let retryAfterMs = 0
-    const buckets = picks.map(([map, key, rate]) => {
-      const b = this.refill(map, key, rate, now)
+    const buckets = bucketsFor(keys, rules, this.defaults).map(({ ip, key, rate }) => {
+      const b = this.refill(ip ? this.ips : this.sids, key, rate, now)
       if (b.tokens < 1) retryAfterMs = Math.max(retryAfterMs, Math.ceil((1 - b.tokens) * rate.windowMs / rate.limit))
       return b
     })
@@ -52,6 +45,20 @@ export class RateLimiter {
     if (map.size > CAP) map.delete(map.keys().next().value!)
     return b
   }
+}
+
+// The buckets one check takes a token from (shared by every backend, so both count the same keys):
+// the client ip's (same limit over IP_WINDOW_MULT x the window), and the sid's — default rate, or an action's own
+// rate in a bucket of its own per sid + action, so other actions keep the default.
+export function bucketsFor(keys: RateKeys, rules: ActionRules['rate'] | undefined, defaults: Rate): { ip: boolean; key: string; rate: Rate }[] {
+  const out: { ip: boolean; key: string; rate: Rate }[] = []
+  if (keys.ip !== undefined) out.push({ ip: true, key: ipKey(keys.ip), rate: { limit: defaults.limit, windowMs: defaults.windowMs * IP_WINDOW_MULT } })
+  if (keys.sid) {
+    out.push(rules
+      ? { ip: false, key: `${keys.sid}|${keys.action ?? ''}|${rules.limit}/${rules.windowMs}`, rate: rules }
+      : { ip: false, key: keys.sid, rate: defaults })
+  }
+  return out
 }
 
 // #20: one IPv6 client usually owns a whole /64, so per-address buckets would let it rotate freely;

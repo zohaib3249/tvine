@@ -65,17 +65,19 @@ export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
 
-// channels.md: named pub/sub groups. Implementation: core/channels.ts (MemoryChannelLayer).
+// channels.md: named pub/sub groups. Implementations: core/channels.ts (memory), backends/redis.ts (redis:
+// fan-out across servers, replay from a stream). seq = the event's cursor (SSE `id:`); one counter for the layer.
 export interface ChannelLayer {
   group(name: string): {
-    add(subscriber: (e: Event) => void): () => void   // returns unsubscribe
-    send(e: Event): void
-    size(): number                                    // live subscribers
-    since(cursor: number): Event[]                    // ring events after a cursor (Last-Event-ID)
+    add(subscriber: (e: Event, seq: number) => void): () => void   // returns unsubscribe
+    send(e: Event): void                                          // fire and forget; delivery may be async
+    size(): number                                                // live subscribers in this process
+    since(cursor: number): Replayed[] | Promise<Replayed[]>       // ring events after a cursor (Last-Event-ID)
   }
-  head(): number                                      // cursor of the latest event on any group
+  head(): number                                      // cursor of the latest event this process has seen
   drop(name: string): void                            // remove a group's ring and subscribers
 }
+export interface Replayed { seq: number; e: Event }
 
 // request.md: the per-call request object.
 export interface ReadonlyHeaders {

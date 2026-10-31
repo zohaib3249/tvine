@@ -15,10 +15,13 @@ export class ProgressRelay {
   stop(): void { this.off?.() }
 
   private send(j: JobRow): void {
-    const s = j.sid ? this.server.sessions.peek({ sid: j.sid }) : undefined
+    void this.post(j).catch(() => undefined)   // a session store hiccup drops one progress event, never the relay
+  }
+  private async post(j: JobRow): Promise<void> {
+    const s = j.sid ? await this.server.sessions.peek({ sid: j.sid }) : undefined
     if (!s) return   // another web process's session, or gone
     // a final status bumps the rev (the page may show what the job changed); progress keeps it
-    if (FINAL.includes(j.status)) s.rev++
+    if (FINAL.includes(j.status)) { s.rev++; await this.server.sessions.save(s) }
     const e: Event = {
       kind: 'update', sid: s.sid, rev: s.rev, source: 'job',
       job: { id: j.id, task: j.task, status: j.status, ...(j.progress != null && { progress: j.progress }), ...(j.message != null && { message: j.message }) },

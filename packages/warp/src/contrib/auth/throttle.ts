@@ -6,23 +6,21 @@
 //   gets one guess per new ip (/64); the victim, from an ip that never failed, can still sign in (no lockout DoS).
 // Keys use the NFKC lower-cased name AS TYPED (unknown names lock exactly like real ones: no enumeration) and
 // ips grouped like the rate limiter (IPv6 by /64, so rotating addresses inside a /64 does not reset anything).
-// ponytail: in-process (single process v1, like every limiter); a shared store comes with Redis (BACKLOG #12)
+// settings.limits.backend: 'memory' = LoginThrottle (per process), 'redis' = backends/redis.ts (same rules, shared).
 import type { Settings } from '../../core/types.js'
 import { ipKey } from '../../security/ratelimit.js'
+import { RedisLoginThrottle, type ThrottleLike } from '../../backends/redis.js'
 
 interface Entry { count: number; since: number; lockedUntil: number }
 export interface ThrottleConfig { maxFailures: number; accountMaxFailures: number; ipMaxFailures: number; windowMs: number; lockoutMs: number }
 
 export const normName = (u: string) => u.normalize('NFKC').trim().toLowerCase()
 
-export class LoginThrottle {
+export class LoginThrottle implements ThrottleLike {
   private m = new Map<string, Entry>()   // insertion order = LRU
   constructor(private c: ThrottleConfig, private cap = 100_000) {}
 
-  private keys(user: string, ip: string) {
-    const u = normName(user), i = ipKey(ip)
-    return { pair: `p\0${u}\0${i}`, acct: `u\0${u}`, ip: `i\0${i}` }
-  }
+  private keys(user: string, ip: string) { return throttleKeys(user, ip) }
   private live(k: string, now: number): Entry | undefined {
     const e = this.m.get(k)
     return e && (e.lockedUntil > now || now - e.since <= this.c.windowMs) ? e : undefined
@@ -65,15 +63,21 @@ export class LoginThrottle {
   get size(): number { return this.m.size }
 }
 
-const throttles = new WeakMap<Settings, LoginThrottle>()
-export function throttleOf(s: Settings): LoginThrottle {
+export function throttleKeys(user: string, ip: string) {
+  const u = normName(user), i = ipKey(ip)
+  return { pair: `p\0${u}\0${i}`, acct: `u\0${u}`, ip: `i\0${i}` }
+}
+
+const throttles = new WeakMap<Settings, ThrottleLike>()
+export function throttleOf(s: Settings): ThrottleLike {
   let t = throttles.get(s)
   if (!t) {
     const l = s.auth?.login ?? {}
-    throttles.set(s, (t = new LoginThrottle({
+    const c = {
       maxFailures: l.maxFailures ?? 5, accountMaxFailures: l.accountMaxFailures ?? 50, ipMaxFailures: l.ipMaxFailures ?? 100,
       windowMs: l.windowMs ?? 15 * 60_000, lockoutMs: l.lockoutMs ?? 15 * 60_000,
-    })))
+    }
+    throttles.set(s, (t = s.limits?.backend === 'redis' ? new RedisLoginThrottle(s.limits.redis, c, throttleKeys) : new LoginThrottle(c)))
   }
   return t
 }

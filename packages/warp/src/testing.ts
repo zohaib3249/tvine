@@ -14,7 +14,7 @@ export interface AgentClient {
   // to copy the bind from when the action sits on several nodes with different binds
   do(route: string, action: ActionId, params?: object, opts?: { sid?: Sid; cmdId?: string; node?: string }):
     Promise<{ status: number; events: Event[]; sid: Sid; raw: string }>
-  session(sid: Sid): Session | undefined   // white-box assertion access
+  session(sid: Sid): Promise<Session | undefined>   // white-box assertion access
 }
 
 // The bind a page signs for `<Form action bind={payload}>` (weft pairBind: payload + $action), for tests
