@@ -70,6 +70,11 @@ export default migration({
       running: field.int({ default: 0 }),
       processed: field.int({ default: 0 }),
     }),
+    ops.createModel('tasks_outbox', {
+      id: field.uuid(),
+      payload: field.json(),
+      createdAt: field.int({ index: true }),
+    }),
     ops.addIndex('tasks_job', 'tasks_job_claim_idx', ['status', 'queue', 'priority', 'runAt']),
   ],
 })

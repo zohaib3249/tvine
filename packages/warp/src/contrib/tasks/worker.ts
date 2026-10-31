@@ -1,13 +1,11 @@
 // The worker (docs/design/contrib/tasks.md §Worker): claims with leases, runs attempts with an AbortSignal and
 // timeouts, heartbeats, reaps expired leases, retries with backoff, dead-letters, cleans results, and shuts
-// down gracefully (finish or release within the grace period).
+// down gracefully (finish or release within the grace period). Every job access goes through the Broker.
 import { hostname } from 'node:os'
 import { randomBytes } from 'node:crypto'
-import { atomic, onCommit } from '../../data/engine.js'
-import { dec } from '../../index.js'
-import { DbBroker, type Broker } from './broker.js'
-import { Group, Job, Lock, WorkerRow, type JobRow, type JobStatus } from './models.js'
-import { afterFinal, bus, config, followUp, parseRate, Retry, taskById, type SigJSON, type Task, type TaskCtx } from './task.js'
+import { broker as current, bus, type Broker, type Final } from './broker.js'
+import type { JobRow } from './models.js'
+import { config, followUp, parseRate, Retry, taskById, type SigJSON, type Task, type TaskCtx } from './task.js'
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 export interface WorkerOpts {
@@ -25,7 +23,7 @@ class Stop extends Error { constructor(why: string) { super(why); this.name = 'S
 
 interface Running {
   job: JobRow; token: string; ac: AbortController; done: Promise<void>
-  lost?: boolean; cancelled?: boolean; released?: boolean
+  lost?: boolean; cancelled?: boolean; released?: boolean; zombie?: boolean
   progress?: { at: number; timer?: NodeJS.Timeout; pending?: { p: number; m?: string } }
 }
 
@@ -46,8 +44,8 @@ export class Worker {
   private ticking = false
   private again = false
   private processed = 0
+  private zombieCount = 0
   private rates = new Map<string, number[]>()
-  private startedAt = 0
   private onEnqueued = () => { void this.tick() }
 
   constructor(o: WorkerOpts = {}) {
@@ -55,7 +53,7 @@ export class Worker {
     this.queues = o.queues ?? '*'
     this.concurrency = o.concurrency ?? 10
     if (!Number.isInteger(this.concurrency) || this.concurrency < 0) throw new Error('worker concurrency must be an integer >= 0')
-    this.broker = o.broker ?? new DbBroker()
+    this.broker = o.broker ?? current()
     this.log = o.log ?? (() => {})
     this.leaseMs = o.leaseMs ?? config.tasks.leaseMs
     this.pollMs = o.pollMs ?? config.tasks.pollMs
@@ -63,11 +61,11 @@ export class Worker {
   }
 
   get busy(): number { return this.running.size }
+  // hard-timed-out / abandoned handlers still running: they hold their slot until they actually settle
+  get zombies(): number { return this.zombieCount }
 
   async start(): Promise<void> {
-    this.startedAt = Date.now()
-    await WorkerRow.objects.filter({ name: this.name }).delete()
-    await WorkerRow.create({ name: this.name, queues: this.queues === '*' ? '*' : this.queues.join(','), concurrency: this.concurrency, pid: process.pid, host: hostname(), startedAt: this.startedAt, beatAt: this.startedAt })
+    await this.broker.register({ name: this.name, queues: this.queues === '*' ? '*' : this.queues.join(','), concurrency: this.concurrency, pid: process.pid, host: hostname() })
     this.log('info', 'worker.start', { worker: this.name, queues: this.queues, concurrency: this.concurrency })
     const every = (ms: number, fn: () => Promise<unknown>) => {
       const t = setInterval(() => { fn().catch((e) => this.log('error', 'worker.loop', { worker: this.name, error: errText(e) })) }, ms)
@@ -79,7 +77,7 @@ export class Worker {
     }
     this.beatTimer = setInterval(() => { this.heartbeat().catch((e) => this.log('error', 'worker.heartbeat', { worker: this.name, error: errText(e) })) }, Math.max(100, Math.floor(this.leaseMs / 3)))
     every(this.leaseMs, () => this.reap())
-    every(CLEAN_MS, () => this.cleanup())
+    every(CLEAN_MS, () => this.broker.cleanup(Date.now()))
     await this.reap()
     void this.tick()
   }
@@ -97,12 +95,12 @@ export class Worker {
     for (const r of [...this.running.values()]) {
       r.released = true
       r.ac.abort(new Stop('worker shutting down'))
-      const ok = await this.broker.settle(r.job.id, r.token, { status: 'queued', attempts: dec(1) as never, runAt: Date.now(), worker: null, token: null, leaseUntil: null })
+      const ok = r.zombie ? false : await this.broker.requeue(r.job.id, r.token, { runAt: Date.now(), refund: true })
       this.log('warn', 'job.released', { worker: this.name, jobId: r.job.id, task: r.job.task, released: ok })
       this.running.delete(r.job.id)
     }
     clearInterval(this.beatTimer)
-    await WorkerRow.objects.filter({ name: this.name }).delete().catch(() => undefined)
+    await this.broker.unregister(this.name).catch(() => undefined)
     this.log('info', 'worker.stop', { worker: this.name, processed: this.processed })
   }
 
@@ -116,9 +114,9 @@ export class Worker {
         this.again = false
         const free = this.concurrency - this.running.size
         if (free <= 0) break
-        const { token, jobs } = await this.broker.claim({ worker: this.name, queues: this.queues, n: Math.min(free, 100), leaseMs: this.leaseMs })
+        const { token, jobs } = await this.broker.claim({ worker: this.name, queues: this.queues, n: Math.min(free, 100), leaseMs: this.leaseMs, skipTasks: this.overLimit() })
         if (this.stopping) {   // stop() began during the claim: hand these straight back
-          for (const j of jobs) await this.broker.settle(j.id, token, { status: 'queued', attempts: dec(1) as never, worker: null, token: null, leaseUntil: null })
+          for (const j of jobs) await this.broker.requeue(j.id, token, { runAt: Date.now(), refund: true })
           return
         }
         for (const j of jobs) this.launch(j, token)
@@ -152,25 +150,27 @@ export class Worker {
       this.log('info', 'job.expired', base)
       return this.final(r, 'expired', { error: 'expired before it started' })
     }
-    const wait = this.overRate(task)
-    if (wait > 0) {   // per-worker rate limit: back to the queue, no attempt spent
-      await this.broker.settle(job.id, r.token, { status: 'queued', attempts: dec(1) as never, runAt: Date.now() + wait, worker: null, token: null, leaseUntil: null })
+    const wait = this.take(task)
+    if (wait > 0) {   // claimed in a race with the limit: back to the queue when allowed, no attempt spent
+      await this.broker.requeue(job.id, r.token, { runAt: Date.now() + wait, refund: true })
       return
     }
     const parsed = task.schema.safeParse(job.args)
     if (!parsed.success) return this.final(r, 'dead', { error: `invalid args: ${parsed.error.issues[0]?.message ?? 'rejected'}` })
 
     this.log('info', 'job.start', { ...base, ...(task.opts.logArgs && { args: job.args }) })
-    const parent = job.parentId ? await Job.get(job.parentId).catch(() => undefined) : undefined
+    const parent = job.parentId ? await this.broker.get(job.parentId) : undefined
     const ctx: TaskCtx = {
       jobId: job.id, task: job.task, attempt: job.attempts, queue: job.queue, signal: r.ac.signal,
       ...(parent && { parent: { jobId: parent.id, result: parent.result } }),
       progress: (pct, message) => this.progress(r, pct, message),
       retry: (o = {}) => new Retry(o.inMs),
-      log: (msg, data) => this.log('info', 'job.log', { ...base, msg, ...data }),
+      log: (msg, data) => this.log('info', 'job.log', { msg, ...data, ...base }),   // base last: a handler cannot forge ids
     }
     const tm = typeof task.opts.timeoutMs === 'number' ? { hard: task.opts.timeoutMs } : { hard: 300_000, ...task.opts.timeoutMs }
     const timers: NodeJS.Timeout[] = []
+    const work = Promise.resolve().then(() => task.run(parsed.data, ctx))
+    work.catch(() => undefined)
     try {
       if (tm.soft !== undefined) timers.push(setTimeout(() => r.ac.abort(new SoftTimeLimit()), tm.soft))
       const hard = new Promise<never>((_, rej) => {
@@ -178,9 +178,9 @@ export class Worker {
       })
       const stop = new Promise<never>((_, rej) => r.ac.signal.addEventListener('abort', () => {
         const why = r.ac.signal.reason
-        if (why instanceof Stop) rej(why)   // lease lost / revoked / shutdown: stop waiting at once (the handler may still run)
+        if (why instanceof Stop) rej(why)   // lease lost / revoked / shutdown: settle at once (the handler may still run)
       }, { once: true }))
-      const result = await Promise.race([task.run(parsed.data, ctx), hard, stop])
+      const result = await Promise.race([work, hard, stop])
       if (r.lost || r.released) return
       if (r.cancelled) return this.final(r, 'cancelled', {})
       let stored: unknown
@@ -189,40 +189,40 @@ export class Worker {
       await this.succeed(r, task, stored, Date.now() - t0)
     } catch (e) {
       if (r.released) return
-      if (r.lost) { this.log('warn', 'job.lost', { ...base, ms: Date.now() - t0 }); return }
-      if (r.cancelled) return this.final(r, 'cancelled', { error: 'revoked' })
-      await this.fail(r, e, task)
+      if (r.lost) this.log('warn', 'job.lost', { ...base, ms: Date.now() - t0 })
+      else if (r.cancelled) await this.final(r, 'cancelled', { error: 'revoked' })
+      else await this.fail(r, e, task)
+      await this.zombie(r, work)
     } finally { for (const t of timers) clearTimeout(t) }
   }
 
+  // ponytail: JS cannot kill a promise; a handler that ignores ctx.signal keeps its slot until it settles (counted
+  // against concurrency, so a pile of them stops this worker claiming instead of overloading it). Worker threads
+  // (killable) if real handlers hang.
+  private async zombie(r: Running, work: Promise<unknown>): Promise<void> {
+    let settled = false
+    work.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    if (settled) return
+    r.zombie = true
+    this.zombieCount++
+    this.log('warn', 'job.zombie', { worker: this.name, jobId: r.job.id, task: r.job.task, zombies: this.zombieCount })
+    try { await work.catch(() => undefined) } finally {
+      this.zombieCount--
+      this.log('info', 'job.zombie.done', { worker: this.name, jobId: r.job.id, task: r.job.task })
+    }
+  }
+
   private async succeed(r: Running, task: Task, result: unknown, ms: number): Promise<void> {
-    const { job } = r, now = Date.now()
-    const ttl = task.opts.resultTtlMs ?? config.tasks.resultTtlMs
-    let ok = false
-    await atomic(async () => {
-      ok = await this.broker.settle(job.id, r.token, { status: 'success', result, error: null, progress: 100, finishedAt: now, purgeAt: now + ttl, leaseUntil: null })
-      if (!ok) return
-      const rest = (job.chain as SigJSON[] | null) ?? []
-      const next = rest.length ? this.link(job, () => followUp(rest[0]!, result, job, { chain: rest.length > 1 ? rest.slice(1) : null })) : undefined
-      if (next) await Job.create(next as never)
-      if (job.groupId) await this.chordStep(job)
-      await afterFinal(job, 'success')
-      onCommit(() => { bus.emit('enqueued'); bus.emit('moved') })
+    const { job } = r
+    const rest = (job.chain as SigJSON[] | null) ?? []
+    const next = rest.length ? this.link(job, () => followUp(rest[0]!, result, job, { chain: rest.length > 1 ? rest.slice(1) : null })) : undefined
+    const ok = await this.broker.succeed(job, r.token, {
+      result, purgeAt: Date.now() + (task.opts.resultTtlMs ?? config.tasks.resultTtlMs), next,
+      callback: (sig, results) => this.link(job, () => followUp(sig, results, job, { groupId: null })),
     })
     if (ok) this.log('info', 'job.ok', { worker: this.name, jobId: job.id, task: job.task, attempt: job.attempts, ms })
     else this.log('warn', 'job.lost', { worker: this.name, jobId: job.id, task: job.task, ms })
-  }
-
-  // a chord member succeeded (inside its success transaction): count down; the one reaching 0 fires the callback once
-  private async chordStep(job: JobRow): Promise<void> {
-    const id = job.groupId!
-    if (!(await Group.objects.filter({ id, status: 'pending' }).update({ remaining: dec(1) }))) return   // plain group, or a failed chord
-    const g = await Group.get(id)
-    if (!g || g.remaining > 0) return
-    if (!(await Group.objects.filter({ id, status: 'pending' }).update({ status: 'fired', purgeAt: Date.now() + config.tasks.resultTtlMs }))) return
-    const members = await Job.objects.filter({ groupId: id }).order('groupIndex').all()
-    const cb = this.link(job, () => followUp(g.callback as SigJSON, members.map((m) => m.result), job, { groupId: null }))
-    if (cb) await Job.create(cb as never)
   }
 
   // the next chain link / chord callback row; args it refuses (or an unregistered task) break the canvas there,
@@ -240,72 +240,75 @@ export class Worker {
     const base = { worker: this.name, jobId: job.id, task: job.task, attempt: job.attempts, error: errText(e) }
     if (retry && job.attempts <= job.maxRetries) {
       const inMs = e instanceof Retry && e.inMs !== undefined ? e.inMs : fixedMs ?? backoff(task?.opts.retryBackoff, job.attempts)
-      const ok = await this.broker.settle(job.id, r.token, { status: 'queued', runAt: Date.now() + inMs, error: errText(e), worker: null, token: null, leaseUntil: null })
-      if (ok) { bus.emit('moved'); this.log('warn', 'job.retry', { ...base, inMs }) }
+      if (await this.broker.requeue(job.id, r.token, { runAt: Date.now() + inMs, error: errText(e) })) this.log('warn', 'job.retry', { ...base, inMs })
       return
     }
     this.log('error', 'job.dead', base)
     await this.final(r, 'dead', { error: errText(e) })
   }
 
-  private async final(r: Running, status: JobStatus, patch: Partial<JobRow>): Promise<void> {
-    const now = Date.now()
+  private async final(r: Running, status: Final, o: { error?: string }): Promise<void> {
     const ttl = taskById(r.job.task)?.opts.resultTtlMs ?? config.tasks.resultTtlMs
-    const ok = await atomic(async () => {
-      if (!(await this.broker.settle(r.job.id, r.token, { status, finishedAt: now, purgeAt: now + ttl, leaseUntil: null, ...patch }))) return false
-      await afterFinal(r.job, status)
-      return true
-    })
-    if (ok) bus.emit('moved')
+    await this.broker.finish(r.job, r.token, status, { ...o, purgeAt: Date.now() + ttl })
   }
 
   // ctx.progress: written at most every 250 ms per job; the last value always lands (trailing write)
   private async progress(r: Running, pct: number, message?: string): Promise<void> {
     if (typeof pct !== 'number' || Number.isNaN(pct)) throw new TypeError('progress(pct): pct must be a number 0-100')
-    const p = Math.max(0, Math.min(100, pct))
     const st = (r.progress ??= { at: 0 })
-    st.pending = { p, m: message?.slice(0, 500) }
+    st.pending = { p: Math.max(0, Math.min(100, pct)), m: message?.slice(0, 500) }
     const flush = async () => {
       st.timer = undefined
       const v = st.pending
-      if (!v || r.lost || r.released) return
+      if (!v || r.lost || r.released || r.zombie) return
       st.pending = undefined
       st.at = Date.now()
-      await Job.objects.filter({ id: r.job.id, token: r.token, status: 'running' }).update({ progress: v.p, message: v.m ?? null, updatedAt: st.at })
-      bus.emit('moved')
+      await this.broker.progress(r.job.id, r.token, v.p, v.m ?? null)
     }
     const wait = 250 - (Date.now() - st.at)
     if (wait <= 0) return flush()
     st.timer ??= setTimeout(() => { flush().catch((e) => this.log('error', 'job.progress', { jobId: r.job.id, error: errText(e) })) }, wait)
   }
 
-  private overRate(task: Task): number {
-    if (!task.opts.rateLimit) return 0
-    const { limit, windowMs } = parseRate(task.opts.rateLimit)
+  // per-worker rate limits: the tasks at their limit right now (never claimed while there), and taking a slot
+  private hits(task: Task): { hits: number[]; limit: number; windowMs: number } {
+    const { limit, windowMs } = parseRate(task.opts.rateLimit!)
     const now = Date.now()
     const hits = (this.rates.get(task.id) ?? []).filter((t) => t > now - windowMs)
     this.rates.set(task.id, hits)
-    if (hits.length >= limit) return hits[0]! + windowMs - now
-    hits.push(now)
+    return { hits, limit, windowMs }
+  }
+  private overLimit(): string[] {
+    const out: string[] = []
+    for (const id of this.rates.keys()) {
+      const t = taskById(id)
+      if (t?.opts.rateLimit && this.hits(t).hits.length >= this.hits(t).limit) out.push(id)
+    }
+    return out
+  }
+  private take(task: Task): number {
+    if (!task.opts.rateLimit) return 0
+    const { hits, limit, windowMs } = this.hits(task)
+    if (hits.length >= limit) return hits[0]! + windowMs - Date.now()
+    hits.push(Date.now())
     return 0
   }
 
   // extend every lease; a lost one stops its handler; revoked jobs (cancel flag) are aborted
   private async heartbeat(): Promise<void> {
-    const runs = [...this.running.values()].filter((r) => !r.released)
-    for (const r of runs) {
-      if (!(await this.broker.heartbeat(r.job.id, r.token, this.leaseMs)) && this.running.has(r.job.id)) {
-        r.lost = true
-        r.ac.abort(new Stop('lease lost'))
-      }
-    }
+    const runs = [...this.running.values()].filter((r) => !r.released && !r.zombie && !r.lost)
     if (runs.length) {
-      for (const j of await Job.objects.filter([{ field: 'id', op: 'in', value: runs.map((r) => r.job.id) }, { field: 'cancel', op: 'eq', value: true }]).all()) {
-        const r = this.running.get(j.id)
+      const { lost, cancelled } = await this.broker.heartbeat(runs.map((r) => ({ id: r.job.id, token: r.token })), this.leaseMs)
+      for (const id of lost) {
+        const r = this.running.get(id)
+        if (r && !r.zombie) { r.lost = true; r.ac.abort(new Stop('lease lost')) }
+      }
+      for (const id of cancelled) {
+        const r = this.running.get(id)
         if (r && !r.cancelled) { r.cancelled = true; r.ac.abort(new Stop('revoked')) }
       }
     }
-    await WorkerRow.objects.filter({ name: this.name }).update({ beatAt: Date.now(), running: this.running.size, processed: this.processed })
+    await this.broker.beat(this.name, this.running.size, this.processed)
   }
 
   // running rows whose lease passed (their worker died): re-queue (late acks) or kill (early acks / out of retries)
@@ -313,33 +316,24 @@ export class Worker {
     let n = 0
     for (const j of await this.broker.expired(now, 100)) {
       if (this.running.get(j.id)?.token === j.token) continue   // ours: the heartbeat is late, not dead
-      const status: JobStatus | 'queued' = j.cancel ? 'cancelled' : !j.acksLate || j.attempts > j.maxRetries ? 'dead' : 'queued'
+      const status: Final | 'queued' = j.cancel ? 'cancelled' : !j.acksLate || j.attempts > j.maxRetries ? 'dead' : 'queued'
       const error = j.cancel ? 'revoked' : !j.acksLate ? 'worker lost (acks early: not re-delivered)' : 'worker lost'
       const ttl = taskById(j.task)?.opts.resultTtlMs ?? config.tasks.resultTtlMs
-      const ok = await atomic(async () => {
-        if (status === 'queued') return this.broker.settle(j.id, j.token!, { status, runAt: now, error, worker: null, token: null, leaseUntil: null })
-        if (!(await this.broker.settle(j.id, j.token!, { status, error, finishedAt: now, purgeAt: now + ttl, leaseUntil: null }))) return false
-        await afterFinal(j, status)
-        return true
-      })
+      const ok = status === 'queued'
+        ? await this.broker.requeue(j.id, j.token!, { runAt: now, error })
+        : await this.broker.finish(j, j.token!, status, { error, purgeAt: now + ttl })
       if (ok) { n++; this.log('warn', status === 'queued' ? 'job.redelivered' : `job.${status}`, { worker: this.name, jobId: j.id, task: j.task, attempt: j.attempts, from: j.worker, error }) }
     }
-    if (n) bus.emit('moved')
     return n
   }
 
-  async cleanup(now = Date.now()): Promise<void> {
-    await this.broker.cleanup(now)
-    await Group.objects.filter([{ field: 'purgeAt', op: 'lte', value: now }]).delete()
-    await Lock.objects.filter([{ field: 'expiresAt', op: 'lte', value: now - CLEAN_MS }]).delete()
-    await WorkerRow.objects.filter([{ field: 'beatAt', op: 'lt', value: now - 86_400_000 }]).delete()
-  }
+  cleanup(now = Date.now()): Promise<void> { return this.broker.cleanup(now) }
 }
 
-// an Error class matches by instanceof, any other function is a predicate; dontRetryOn wins
+// an Error class (any function with a prototype) matches by instanceof; an arrow function is a predicate. dontRetryOn wins.
 export function retryable(task: Task, e: unknown): boolean {
   const is = (list: Task['opts']['retryOn']) => (list ?? []).some((m) =>
-    m === Error || (m as { prototype?: unknown }).prototype instanceof Error ? e instanceof (m as typeof Error) : (m as (e: unknown) => boolean)(e) === true)
+    typeof m === 'function' && (m as { prototype?: unknown }).prototype ? e instanceof (m as abstract new (...a: never[]) => unknown) : (m as (e: unknown) => boolean)(e) === true)
   if (is(task.opts.dontRetryOn)) return false
   return task.opts.retryOn ? is(task.opts.retryOn) : true
 }

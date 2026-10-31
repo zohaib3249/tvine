@@ -80,4 +80,12 @@ export const WorkerRow = defineModel('tasks_worker', {
   processed: field.int({ default: 0 }),
 })
 
+// durable enqueue (task opt `durable: true`): one tiny row written in the CALLER's transaction, pushed to the
+// broker by the outbox relay after commit (never lost). Lives in the main database, unlike the broker's tables.
+export const Outbox = defineModel('tasks_outbox', {
+  id: field.uuid(),
+  payload: field.json(),
+  createdAt: field.int({ index: true }),
+})
+
 export type JobRow = Infer<typeof Job>

@@ -1,6 +1,6 @@
 // 5-field cron (min hour dom month dow), UTC. `*`, `a-b`, `*/n`, `a-b/n`, `a/n`, lists, jan-dec / sun-sat
 // names, 7 = Sunday, @yearly @annually @monthly @weekly @daily @midnight @hourly. dom and dow both restricted
-// → a day matches either (Vixie cron).
+// → a day matches either (Vixie cron: a field starting with `*`, like `*/2`, counts as unrestricted for that rule).
 export interface Cron { minute: Set<number>; hour: Set<number>; dom: Set<number>; month: Set<number>; dow: Set<number>; domStar: boolean; dowStar: boolean }
 
 const MACROS: Record<string, string> = {
@@ -19,7 +19,7 @@ export function parseCron(expr: string): Cron {
   if (parts.length !== 5) throw new Error(`cron "${expr}": expected 5 fields (min hour dom month dow) or an @macro`)
   const sets = parts.map((p, i) => field(p, SPEC[i]!, expr))
   const dow = new Set([...sets[4]!].map((d) => (d === 7 ? 0 : d)))
-  return { minute: sets[0]!, hour: sets[1]!, dom: sets[2]!, month: sets[3]!, dow, domStar: parts[2] === '*' || parts[2] === '?', dowStar: parts[4] === '*' || parts[4] === '?' }
+  return { minute: sets[0]!, hour: sets[1]!, dom: sets[2]!, month: sets[3]!, dow, domStar: /^[*?]/.test(parts[2]!), dowStar: /^[*?]/.test(parts[4]!) }
 }
 
 function field(text: string, [name, lo, hi, names, base = 0]: (typeof SPEC)[number], expr: string): Set<number> {
@@ -58,12 +58,10 @@ export function nextFire(c: Cron | string, after: Date | number): Date {
   t.setUTCSeconds(0, 0)
   t.setUTCMinutes(t.getUTCMinutes() + 1)
   const limit = t.getTime() + 5 * 366 * 86_400_000
+  // Vixie: either field star-like → both must match (a star set is full); both restricted → either matches
   const dayOk = (d: Date) => {
     const dom = cron.dom.has(d.getUTCDate()), dow = cron.dow.has(d.getUTCDay())
-    if (cron.domStar && cron.dowStar) return true
-    if (cron.domStar) return dow
-    if (cron.dowStar) return dom
-    return dom || dow
+    return cron.domStar || cron.dowStar ? dom && dow : dom || dow
   }
   while (t.getTime() <= limit) {
     if (!cron.month.has(t.getUTCMonth() + 1)) { t.setUTCMonth(t.getUTCMonth() + 1, 1); t.setUTCHours(0, 0); continue }

@@ -6,5 +6,6 @@ export {
 export { Worker, SoftTimeLimit, HardTimeLimit, backoff, type WorkerOpts } from './worker.js'
 export { Beat, type BeatOpts } from './beat.js'
 export { parseCron, nextFire, type Cron } from './cron.js'
-export { DbBroker, type Broker, type QueueStats } from './broker.js'
-export { Job, Group, Lock, Schedule, WorkerRow, STATUSES, FINAL, type JobRow, type JobStatus } from './models.js'
+export { broker, setBroker, dbBroker, type Broker, type QueueStats, type NewJob, type SigJSON } from './broker.js'
+export { OutboxRelay, ProgressRelay, outboxNeeded } from './relay.js'
+export { STATUSES, FINAL, type JobRow, type JobStatus } from './models.js'

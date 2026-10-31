@@ -2,7 +2,9 @@
 import { connections } from '../../data/db.js'
 import type { Settings } from '../../core/types.js'
 import { Beat } from './beat.js'
-import { Job, type JobStatus } from './models.js'
+import { broker } from './broker.js'
+import { STATUSES, type JobStatus } from './models.js'
+import { OutboxRelay } from './relay.js'
 import { configureTasks, discoverTasks } from './task.js'
 import { Worker, type Log } from './worker.js'
 
@@ -37,8 +39,10 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   const queues = typeof o.queues === 'string' && o.queues !== '*' ? o.queues.split(',').map((q) => q.trim()).filter(Boolean) : '*'
   const w = new Worker({ name: o.name as string | undefined, queues, concurrency: int(o.concurrency, 'concurrency', 0), graceMs: int(o.grace, 'grace', 0), log })
   const beat = o.beat ? new Beat({ log }) : undefined
+  const outbox = new OutboxRelay(log)
   await w.start()
   beat?.start()
+  outbox.start()
   io.out(`worker ${w.name}: ${found.length} task(s), queues ${queues === '*' ? '*' : queues.join(',')}, concurrency ${w.concurrency}${beat ? ', beat' : ''}`)
   let stopping = false
   const stop = () => {
@@ -47,6 +51,7 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
     io.err(`tvine worker: stopping (${w.busy} running; grace ${settings.tasks.graceMs} ms)`)
     void (async () => {
       await beat?.stop()
+      await outbox.stop()
       await w.stop()
       await connections.closeAll()
     })().then(() => io.exit(0), (e: unknown) => { io.err(`tvine worker: stop failed: ${String(e)}`); io.exit(1) })
@@ -55,42 +60,36 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   return undefined
 }
 
-const RETRYABLE: JobStatus[] = ['dead', 'expired', 'cancelled']
-
 export async function tasksCommand(apps: string, settings: Settings, args: string[], o: Flags, io: Io): Promise<number> {
   await boot(apps, settings)
+  const b = broker()
   try {
     const [sub, id] = args
     switch (sub) {
       case 'list': {
-        let qs = Job.objects.order('-createdAt')
-        if (typeof o.status === 'string') qs = qs.filter({ status: o.status })
-        if (typeof o.queue === 'string') qs = qs.filter({ queue: o.queue })
-        const rows = (await qs.page({ size: int(o.limit, 'limit', 1) ?? 50 })).items
+        if (typeof o.status === 'string' && !(STATUSES as readonly string[]).includes(o.status)) throw new Error(`--status must be one of ${STATUSES.join(', ')}`)
+        const rows = await b.list({ status: o.status as string | undefined, queue: o.queue as string | undefined, limit: int(o.limit, 'limit', 1) ?? 50 })
         const t = [['ID', 'TASK', 'STATUS', 'TRIES', 'QUEUE', 'CREATED'], ...rows.map((j) => [j.id, j.task, j.status, String(j.attempts), j.queue, new Date(j.createdAt).toISOString()])]
         const w = t[0]!.map((_, i) => Math.max(...t.map((r) => r[i]!.length)))
         io.out(t.map((r) => r.map((c, i) => c.padEnd(w[i]!)).join('  ').trimEnd()).join('\n'))
         return 0
       }
       case 'inspect': {
-        const j = id && (await Job.get(id).catch(() => undefined))
+        const j = id && (await b.get(id))
         if (!j) { io.err(`tvine tasks: no job ${id ?? ''}`); return 1 }
         io.out(JSON.stringify(j, null, 2))
         return 0
       }
       case 'retry': {
-        const j = id && (await Job.get(id).catch(() => undefined))
-        if (!j) { io.err(`tvine tasks: no job ${id ?? ''}`); return 1 }
-        if (!RETRYABLE.includes(j.status)) { io.err(`tvine tasks: job ${j.id} is ${j.status}; only ${RETRYABLE.join(' / ')} jobs can be retried`); return 1 }
-        const now = Date.now()
-        const n = await Job.objects.filter({ id: j.id, status: j.status }).update({ status: 'queued', attempts: 0, runAt: now, error: null, finishedAt: null, purgeAt: null, cancel: false, expiresAt: null, updatedAt: now })
-        if (!n) { io.err(`tvine tasks: job ${j.id} changed meanwhile; try again`); return 1 }
-        io.out(`requeued ${j.id} (${j.task})`)
+        const r = id ? await b.retry(id) : undefined
+        if (r === undefined) { io.err(`tvine tasks: no job ${id ?? ''}`); return 1 }
+        if (r !== 'requeued') { io.err(`tvine tasks: job ${id} is ${r}; only dead / expired / cancelled jobs can be retried`); return 1 }
+        io.out(`requeued ${id}`)
         return 0
       }
       case 'purge': {
         if (!o.dead) { io.err('usage: tvine tasks purge --dead'); return 1 }
-        io.out(`purged ${await Job.objects.filter({ status: 'dead' }).delete()} dead job(s)`)
+        io.out(`purged ${await b.purge('dead' as JobStatus)} dead job(s)`)
         return 0
       }
       default:
