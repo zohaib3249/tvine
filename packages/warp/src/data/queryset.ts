@@ -73,7 +73,7 @@ export function decodeCursor(cursor: string): unknown[] {
     const v: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
     if (Array.isArray(v)) return v.map(fromWire)
   } catch { /* fall through */ }
-  throw new Error('invalid cursor')
+  throw new DomainError('invalid_param', 'invalid cursor', 'cursor')
 }
 
 // Everything that needs the database engine (aggregates, bulk writes, prefetch, …). model.ts builds it.

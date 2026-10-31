@@ -124,6 +124,8 @@ function forwards(o: OpData, s: ProjectState, app: string): void {
       delete m.fields[o.name]
       for (const [n, ix] of Object.entries(m.indexes)) if (ix.fields.includes(o.name)) delete m.indexes[n]
       if (m.unique) { m.unique = m.unique.filter(u => !u.includes(o.name)); if (!m.unique.length) delete m.unique }
+      for (const [n, c] of Object.entries(m.constraints ?? {})) if (constraintUses(c, o.name)) delete m.constraints![n]
+      if (m.constraints && !Object.keys(m.constraints).length) delete m.constraints
       return
     }
     case 'alterField': {
@@ -146,7 +148,12 @@ function forwards(o: OpData, s: ProjectState, app: string): void {
       if (findModel(s, o.to)) throw new Error(`model "${o.to}" already exists`)
       s.apps[app] = Object.fromEntries(Object.entries(s.apps[app]).map(([n, m]) => [n === o.from ? o.to : n, m]))
       for (const models of Object.values(s.apps)) {
-        for (const m of Object.values(models)) for (const f of Object.values(m.fields)) if (f.kind === 'fk' && f.to === o.from) f.to = o.to
+        for (const m of Object.values(models)) {
+          for (const f of Object.values(m.fields)) {
+            if ((f.kind === 'fk' || f.kind === 'm2m') && f.to === o.from) f.to = o.to
+            if (f.kind === 'm2m' && f.through === o.from) f.through = o.to
+          }
+        }
       }
       return
     }
@@ -186,6 +193,13 @@ function forwards(o: OpData, s: ProjectState, app: string): void {
     }
     case 'runSQL': return
   }
+}
+
+// does a constraint read this field (its unique fields, CHECK / condition lookups, F() refs)?
+export function constraintUses(c: ConstraintSpec, field: string): boolean {
+  const q = (d?: QData): boolean => !!d && d.items.some(i => !Array.isArray(i) ? q(i)
+    : i[0].split('__')[0] === field || (!!i[1] && typeof i[1] === 'object' && (i[1] as { $F?: string }).$F === field))
+  return c.kind === 'check' ? q(c.check) : c.fields.includes(field) || q(c.condition)
 }
 
 // a renamed field inside a constraint (its CHECK lookups / unique fields)
@@ -310,7 +324,10 @@ export function defaultRender(o: OpData, d: Dialect, from: ProjectState, to: Pro
     }
     case 'removeField': {
       const cols = fieldOf(findModel(from, o.model)!.model.fields[o.name], from).columns(o.name)
-      return [...indexDiff(d, from, o.model, to, o.model).drop, ...cols.map(c => r({ t: 'alterTable', name: o.model, dropColumn: c }))]
+      // CHECKs on the field go first (mysql refuses to drop a column a CHECK uses)
+      const checks = Object.values(findModel(from, o.model)!.model.constraints ?? {}).filter(c => c.kind === 'check' && constraintUses(c, o.name))
+        .map(c => ({ sql: `ALTER TABLE ${d.quoteIdent(o.model)} DROP ${d.name === 'mysql' ? 'CHECK' : 'CONSTRAINT'} ${d.quoteIdent(c.name)}`, params: [] }))
+      return [...checks, ...indexDiff(d, from, o.model, to, o.model).drop, ...cols.map(c => r({ t: 'alterTable', name: o.model, dropColumn: c }))]
     }
     case 'alterField': {
       // sqlite rebuilds, postgres / mysql render native ALTERs (dialects/*)
@@ -418,6 +435,8 @@ export function inverse(o: OpData, before: ProjectState): OpData {
     case 'removeField': {
       const f = m(o.model)!.fields[o.name]
       refill(o.model, o.name, f)
+      const lost = Object.values(m(o.model)!.constraints ?? {}).filter(c => constraintUses(c, o.name)).map(c => c.name)
+      if (lost.length) throw irreversible(o, `removing ${o.model}.${o.name} also dropped constraint(s) ${lost.join(', ')}: remove them with ops.removeConstraint before the field`)
       return { kind: 'addField', model: o.model, name: o.name, field: structuredClone(f) }
     }
     case 'alterField': return { kind: 'alterField', model: o.model, name: o.name, field: structuredClone(m(o.model)!.fields[o.name]) }

@@ -332,7 +332,9 @@ export function bulkUpdate(def: ModelDef, rows: Record<string, unknown>[], field
   const t = Table.of(def)
   return atomic(async () => {
     let n = 0
-    const size = batchOf(fields.length * 2 + 1, batchSize)
+    // params per row: (pk + value) per column of each field (money = 2 columns) + the pk in IN
+    const cols = fields.reduce((n, f) => n + (Object.entries(def.fields).find(([k, x]) => k === f || x.key(k) === f)?.[1].columns(f).length ?? 1), 0)
+    const size = batchOf(cols * 2 + 1, batchSize)
     for (let i = 0; i < rows.length; i += size) {
       const chunk = rows.slice(i, i + size)
       n += await exec(async ({ driver, dialect }) => {

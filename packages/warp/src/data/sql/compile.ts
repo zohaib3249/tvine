@@ -249,7 +249,13 @@ export class Scope {
     const { def, spec } = qs.__query()
     const inner = new Scope(def as TableDef, this.d, { alias: this.next('u'), qualify: true, outer: this, counter: this.counter, mode: this.mode })
     const b = buildSelect(inner, def, { ...spec, cursor: undefined, related: undefined }, kind === 'scalar' ? 1 : undefined)
-    if (kind === 'exists') return { select: { ...b.select, cols: [raw('1')], order: undefined } }
+    if (kind === 'exists') {
+      // a grouped / distinct subquery keeps its own columns (GROUP BY ordinals): EXISTS over it as a derived table
+      if (b.select.groupBy || b.select.distinct || b.select.distinctOn || b.select.having) {
+        return { select: { t: 'select', from: { ...b.select, order: undefined, ...(b.select.cols ? {} : { cols: [raw('1')] }) }, as: this.next('g'), cols: [raw('1')] } }
+      }
+      return { select: { ...b.select, cols: [raw('1')], order: undefined } }
+    }
     let cols = b.select.cols, out: F | undefined
     if (spec.values) {
       if (b.plan.outs.length !== 1) throw invalid('a subquery must select exactly one value: .values(\'field\')')
@@ -578,7 +584,7 @@ function buildSelect(s: Scope, def: ModelDef, spec: QuerySpec, limit?: number): 
   let w = where, h = having
   if (spec.cursor) {
     const cv = decodeCursor(spec.cursor)
-    if (cv.length !== keys.length) throw new Error('invalid cursor')
+    if (cv.length !== keys.length) throw invalid('invalid cursor', 'cursor')
     const n = distinctOn ? distinctOn.length : keys.length   // DISTINCT ON: one row per leading key — page on those
     const k = keysetOf(keys.slice(0, n), cv.slice(0, n), s.d)
     const onAgg = (spec.order ?? []).slice(0, n).some(o => s.ann.get(o.field)?.agg)
