@@ -563,7 +563,19 @@ async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ct
   return { ok: true, pk: String(row.id) }
 }
 // files ride as multipart (transport/api.ts); 50 MB per request, each file capped by its field
-const MULTIPART = { maxBytes: 50 * 1024 * 1024 }
+const MULTIPART = {
+  maxBytes: 50 * 1024 * 1024,
+  // one file part may be as big as the largest upload field any admin has (default 5 MB): the transport stops past it
+  // ponytail: recomputed per multipart request; cache it if admins get large
+  get partBytes() {
+    let m = FILE_MAX
+    for (const a of site.admins()) for (const b of [a as Base, ...site.inlinesOf(a)]) for (const n of formFields(b)) {
+      const f = b.model.fields[n], up = f && fieldMeta(n, f, metaOpts(b)).upload
+      if (up) m = Math.max(m, up.maxBytes ?? FILE_MAX)
+    }
+    return m
+  },
+}
 export const create = Object.assign(defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), staff), { multipart: MULTIPART })
 export const update = Object.assign(defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), staff), { multipart: MULTIPART })
 
@@ -606,7 +618,8 @@ export const action = defineAction('action', z.object({
     return r.protected ? { message: `Cannot delete: ${r.protected.length} related object(s) are protected.`, level: 'error' } : { message: `Successfully deleted ${r.deleted} ${a.verboseNamePlural ?? labelOf(a._key.split('.')[1]!)}.`, level: 'success' }
   }
   const ids = a.changelist ? pks : (await selected(a, ctx, pks)).map((r) => String(r.id))
-  const qs = a.changelist ? a.getQueryset(ctx) : a.getQueryset(ctx).filter({ id__in: ids.map((i) => coercePk(a.model, i)!) })
+  // always the selected rows only (options.ts AdminActionFn): a custom changelist's pks narrow the queryset too
+  const qs = a.getQueryset(ctx).filter({ id__in: ids.map((i) => coercePk(a.model, i)).filter((k) => k !== undefined) })
   const res = (await x.fn(a, ctx, qs, ids)) ?? {}
   for (const id of ids) await logAction(ctx, a._key, id, `${a._key} ${id}`, CHANGE, [{ action: x.name }])
   return { message: res.message ?? `${x.description}: ${ids.length} item(s).`, level: res.level ?? 'success', ...(res.download && { download: res.download }) }
@@ -629,8 +642,14 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
 
 export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
   const a = await gate(ctx, model, 'module')
-  const obj = await a.getObject(ctx, coercePk(a.model, pk) ?? -1)
-  if (obj ? !(await a.hasViewPermission(ctx, obj)) : !(await a.hasViewPermission(ctx))) throw forbidden()
+  const id = coercePk(a.model, pk)
+  const obj = id === undefined ? undefined : await a.getObject(ctx, id)
+  if (obj) { if (!(await a.hasViewPermission(ctx, obj))) throw forbidden() }
+  else {
+    // hidden by getQueryset (another tenant's row) → not found; only a deleted row falls back to the model perm
+    if (id !== undefined && (await a.model.objects.filter({ id }).count())) throw new DomainError('not_found', `${a._key} ${String(pk)} not found`)
+    if (!(await a.hasViewPermission(ctx))) throw forbidden()
+  }
   const rows = await LogEntry.objects.filter({ contentType: a._key, objectId: String(pk) }).order('actionTime', 'id').all(MAX_PKS)
   const User = modelNamed<AnyModel>('auth_user')
   const ids = [...new Set(rows.map((r) => r.userId).filter((x) => /^\d+$/.test(x)))].map(Number)

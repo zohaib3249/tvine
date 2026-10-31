@@ -5,6 +5,7 @@ import { parseMultipart, PARTS, type FilePart } from '../media/index.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
+import { authenticate } from '../core/auth.js'
 import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
 import type { ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
@@ -202,8 +203,18 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
     if (mp) {
       // only actions that declare `multipart` take files here; the body is buffered under bodyBytes + their cap
       if (!mpDef?.multipart) return send(res, fail('invalid_param', 'this action does not take multipart bodies'))
-      const buf = await readBuffer(req, settings.limits.bodyBytes + mpDef.multipart.maxBytes)
-      if (buf === null) { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', 'request body too large'), 413) }
+      // nothing is buffered for a caller that cannot run it: uploads need a signed-in user, same-origin, a rate token
+      // (the action's own permissions, e.g. isStaff, still run in dispatch)
+      await authenticate(settings, who.request, await server.sessions.peek({ sid: who.sid, cookie: who.cookie }))
+      if (!who.request.user?.isAuthenticated) { res.setHeader('connection', 'close'); return send(res, fail('domain', 'forbidden: uploads need a signed-in user', 'forbidden')) }
+      if (crossOrigin(who.request, settings)) return send(res, FORBIDDEN)
+      const rl = await server.limiter.check({ ip: who.request.ip })
+      if (!rl.ok) { res.setHeader('connection', 'close'); return send(res, toApiResult([rateLimited(rl.retryAfterMs)])) }
+      const buf = await readMultipart(req, settings.limits.bodyBytes + mpDef.multipart.maxBytes, mpDef.multipart.partBytes ?? mpDef.multipart.maxBytes, mp[1] ?? mp[2]!)
+      if (buf === null) {   // stop reading: the rest of an oversized upload is never received
+        res.setHeader('connection', 'close'); res.once('finish', () => req.destroy())
+        return send(res, fail('invalid_param', 'request body or a file part too large'), 413)
+      }
       const parsed = parseMultipart(buf, mp[1] ?? mp[2]!)
       if (!parsed || Object.keys(parsed.fields).some((k) => k !== 'params')) return send(res, fail('invalid_param', 'multipart: a `params` JSON part and file parts only'))
       let params: unknown
@@ -236,15 +247,21 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
   }
 }
 
-function readBuffer(req: IncomingMessage, cap: number): Promise<Buffer | null> {
+// A multipart body under `cap` bytes whose every part (the bytes between two boundaries) stays under partCap
+// (+ 1 KB of part headers); null as soon as either is exceeded. Boundaries are found while streaming.
+function readMultipart(req: IncomingMessage, cap: number, partCap: number, boundary: string): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    let n = 0
+    const sep = Buffer.from(`--${boundary}`)
+    let n = 0, since = 0, tail = Buffer.alloc(0)
     const onData = (c: Buffer) => {
       n += c.length
-      if (n <= cap) return void chunks.push(c)
+      const win = Buffer.concat([tail, c]), i = win.lastIndexOf(sep)
+      since = i >= 0 ? win.length - i - sep.length : since + c.length
+      tail = win.subarray(Math.max(0, win.length - sep.length + 1))
+      if (n <= cap && since <= partCap + 1024) return void chunks.push(c)
       req.off('data', onData)
-      req.resume()
+      req.pause()
       resolve(null)
     }
     req.on('data', onData)
