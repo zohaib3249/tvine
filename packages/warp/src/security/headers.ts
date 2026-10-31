@@ -2,7 +2,9 @@
 // (docs/design/server/security-headers.md). Decided when the headers are sent (transport/compress hookResponse),
 // so the class of the response (page / data / media / asset) is known.
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import type { Log } from '../core/dispatch.js'
 import { clientIp } from '../core/request.js'
 import type { Settings } from '../core/types.js'
@@ -53,7 +55,9 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
     const d: Record<string, string[]> = { ...BASE }
     for (const [k, v] of Object.entries(csp.directives)) { if (v === false) delete d[k]; else d[k] = [...v] }
     if (o.isDev) for (const [k, v] of Object.entries(DEV)) if (d[k]) d[k] = uniq([...d[k]!, ...v])
-    const script = (d['script-src'] ?? d['default-src'] ?? ["'self'"]).filter((s) => !/^'(nonce-|strict-dynamic|unsafe-inline)/.test(s))
+    // relaxed (no nonce) also drops hashes: a hash in script-src makes browsers ignore 'unsafe-inline'
+    const drop = nonced ? /^'(nonce-|strict-dynamic|unsafe-inline)/ : /^'(nonce-|strict-dynamic|unsafe-inline|sha(256|384|512)-)/
+    const script = (d['script-src'] ?? d['default-src'] ?? ["'self'"]).filter((s) => !drop.test(s))
     d['script-src'] = nonced ? uniq([...script, `'nonce-${NONCE}'`, "'strict-dynamic'"]) : uniq([...script, "'unsafe-inline'"])
     if (https && !csp.reportOnly) d['upgrade-insecure-requests'] = []
     if (csp.reportUri) { d['report-uri'] = [csp.reportUri]; d['report-to'] = ['csp'] }
@@ -82,6 +86,13 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
   if (pp) always.push(['permissions-policy', pp])
   const hsts = h.hsts ? `max-age=${h.hsts.maxAge}${h.hsts.includeSubDomains ? '; includeSubDomains' : ''}${h.hsts.preload ? '; preload' : ''}` : ''
 
+  const privateOnly = (res: ServerResponse) => {
+    const cc = String(res.getHeader('cache-control') ?? '')
+    if (!cc) return void res.setHeader('cache-control', 'private, no-cache')
+    if (/\b(private|no-store)\b/i.test(cc)) return
+    const kept = cc.split(',').map((t) => t.trim()).filter((t) => t && !/^(public|s-maxage=.*)$/i.test(t))
+    res.setHeader('cache-control', ['private', ...kept].join(', '))
+  }
   const setIfAbsent = (res: ServerResponse, k: string, v: string) => { if (!res.hasHeader(k)) res.setHeader(k, v) }
   // a route's own CSP stays: two policies = the browser enforces both, so a route can only tighten
   const addCsp = (res: ServerResponse, header: string, v: string) => {
@@ -121,6 +132,8 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
         // Next served prerendered HTML (built without a nonce): the static policy
         const prerendered = res.hasHeader('x-nextjs-prerender') || res.hasHeader('x-nextjs-postponed')
         const p = (prerendered ? policies.static : policies.dynamic)[plan.https ? 1 : 0]!.replace(NONCE, plan.nonce ?? '')
+        // a nonce must never be replayed from a shared cache: nonce-bearing HTML is private
+        if (!prerendered || (csp.staticPages === 'strict')) privateOnly(res)
         addCsp(res, name, p)
         if (csp.reportUri) setIfAbsent(res, 'reporting-endpoints', `csp="${csp.reportUri}"`)
         return
@@ -134,6 +147,26 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
     // POST /tvine/csp-report is ours only when the policy reports to it
     reportsHere: !!csp && csp.reportUri === CSP_REPORT_PATH,
   }
+}
+
+// Boot checks against the built Next app (.next): Next compressing HTML itself (not BREACH-aware), and
+// ISR / PPR routes served under the relaxed static policy (their cached HTML may carry stored user content).
+export function nextBuildWarnings(nextDir: string, settings: Settings): string[] {
+  const read = (f: string) => { try { return JSON.parse(readFileSync(join(nextDir, f), 'utf8')) as Record<string, unknown> } catch { return undefined } }
+  const out: string[] = []
+  const config = read('required-server-files.json')?.config as { compress?: boolean } | undefined
+  if (config && config.compress !== false && settings.compression.enabled) {
+    out.push('next.config has compress on (Next\'s default): Next gzips HTML itself, without tvine\'s BREACH rule — set compress: false in next.config')
+  }
+  const csp = settings.security.headers.enabled ? settings.security.headers.csp : false
+  if (csp && csp.staticPages === 'relaxed') {
+    const routes = (read('prerender-manifest.json')?.routes ?? {}) as Record<string, { initialRevalidateSeconds?: number | false; renderingMode?: string }>
+    const risky = Object.entries(routes).filter(([, r]) => (typeof r.initialRevalidateSeconds === 'number' && r.initialRevalidateSeconds > 0) || r.renderingMode === 'PARTIALLY_STATIC').map(([p]) => p)
+    if (risky.length) {
+      out.push(`${risky.length} ISR/PPR route(s) (${risky.slice(0, 5).join(', ')}${risky.length > 5 ? ', …' : ''}) get the relaxed static CSP ('unsafe-inline' scripts): if they render stored user content, make them dynamic and set security.headers.csp.staticPages: 'strict'`)
+    }
+  }
+  return out
 }
 
 // ---- POST /tvine/csp-report ------------------------------------------------------------------------
@@ -174,14 +207,14 @@ export function cspReports(body: unknown): Record<string, unknown>[] {
 }
 
 export function cspReportHandler(settings: Settings, log: Log): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
-  const limiter = new RateLimiter({ limit: 100, windowMs: 60_000 })   // per IP: 100 per 5 min (ip buckets span 5 windows)
+  // per IP, counted per REPORT: a burst of 100, refilling 100 per 5 min (RateLimiter's ip buckets span 5 windows)
+  const limiter = new RateLimiter({ limit: 100, windowMs: 60_000 })
   return (req, res, next) => {
     if ((req.url ?? '/').split('?')[0] !== CSP_REPORT_PATH) return next()
     const done = (status: number, extra: Record<string, string> = {}) => void res.writeHead(status, { 'cache-control': 'no-store', 'content-length': '0', ...extra }).end()
     if (req.method !== 'POST') return done(405, { allow: 'POST' })
     if (!REPORT_TYPES.test(String(req.headers['content-type'] ?? ''))) return done(415, { connection: 'close' })
     const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    if (!limiter.check({ ip }).ok) return done(429, { connection: 'close', 'retry-after': '60' })
     const chunks: Buffer[] = []
     let n = 0, over = false
     req.on('data', (c: Buffer) => { if (over) return; if ((n += c.length) > REPORT_BYTES) { over = true; done(413, { connection: 'close' }) } else chunks.push(c) })
@@ -190,7 +223,10 @@ export function cspReportHandler(settings: Settings, log: Log): (req: IncomingMe
       if (over) return
       let body: unknown
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return done(400) }
-      for (const r of cspReports(body)) log('warn', 'csp violation', r)
+      for (const r of cspReports(body)) {
+        if (!limiter.check({ ip }).ok) return done(429, { 'retry-after': '60' })
+        log('warn', 'csp violation', r)
+      }
       done(204)
     })
   }

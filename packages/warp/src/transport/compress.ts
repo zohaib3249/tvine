@@ -142,7 +142,8 @@ export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookO
     const eligible = !!c && compressible(typeof type === 'string' ? type : undefined) && !res.hasHeader('content-encoding') &&
       req.method !== 'HEAD' && s >= 200 && s !== 204 && s !== 206 && s !== 304 && !res.hasHeader('content-range') &&
       !/\bno-transform\b/i.test(String(res.getHeader('cache-control') ?? ''))
-    if (eligible) addVary(res, 'Accept-Encoding')
+    // the BREACH rule reads Cookie + Sec-Fetch-Site: a cache must key on them too
+    if (eligible) addVary(res, 'Accept-Encoding', 'Cookie', 'Sec-Fetch-Site')
     enc = eligible && breachSafe(req) ? negotiate(req.headers['accept-encoding'] as string | undefined, c!.brotli) : undefined
     if (!enc) return sendHead()
     const known = Number(res.getHeader('content-length'))

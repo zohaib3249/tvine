@@ -18,7 +18,7 @@ import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } f
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
-import { cspReportHandler, securityHeaders } from './security/headers.js'
+import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
 import { defineSettings, merge, type SettingsInput } from './settings.js'
 import { channelTransport } from './transport/channel.js'
@@ -132,6 +132,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
+  if (fe && !opts.dev) for (const w of nextBuildWarnings(fe.nextDir, settings)) say(`WARNING: ${w}`, 'warn')
   if (!actions.all().length && process.env.NODE_ENV === 'production') {
     say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
   }
