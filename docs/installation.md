@@ -17,13 +17,12 @@ pnpm -r build          # warp, weft, admin, inspect + the example Next app
 
 ## Getting the `tvine` command
 
-`tvine` is the CLI of `@tvine/warp`. A bare `tvine start` in a shell says "command not found" until you pick one of these:
+`tvine` is the CLI that ships with the `tvine` package. A bare `tvine start` in a shell says "command not found" until you pick one of these:
 
 1. **Inside a project** (what these docs use): `pnpm exec tvine <cmd>` or `npx tvine <cmd>`, or a package.json
    script such as `"dev": "tvine dev"`, then `pnpm dev`.
-2. **Global, from a clone**: `cd packages/warp && npm link`. Now `tvine` works in any folder.
-   Undo with `npm unlink -g @tvine/warp`.
-3. **After the npm release**: `npm i -g @tvine/warp`.
+2. **Global**: `npm i -g tvine` (from a clone: `cd packages/tvine && npm link`). Now `tvine` works in any folder.
+   Undo with `npm unlink -g tvine`.
 
 ## Run the example app
 
@@ -39,12 +38,12 @@ pnpm exec tvine dev --port 4400
 - Admin: http://localhost:4400/admin
 - What an agent sees: `curl -H 'x-tvine: 1' http://localhost:4400/`
 
-## Create a project with the scaffolder (new)
+## Create a project
 
-These commands ship with the scaffolding release. They are marked (new) until it is merged.
+`npm install tvine` gives the backend, frontend, admin, inspector, forms and the `tvine` CLI in one package.
 
 ```bash
-npm create tvine@latest my-app                  # (new) or: pnpm exec tvine startproject my-app [--db postgres] [--no-admin] [--local]
+npx tvine startproject my-app [--db postgres] [--no-admin] [--local]
 cd my-app && pnpm install
 pnpm exec tvine migrate
 pnpm exec tvine createsuperuser
@@ -62,7 +61,7 @@ The smallest working app is [examples/notes](../examples/notes). Copy it and ren
 
 ```
 examples/notes/
-├─ package.json        deps: @tvine/warp, @tvine/weft, @tvine/admin, next, react, zod
+├─ package.json        deps: tvine, next, react, zod
 ├─ settings.ts         Django settings.py
 ├─ urls.ts             optional REST paths
 ├─ next.config.ts
@@ -86,7 +85,7 @@ The full walkthrough, from an empty folder to a working app with admin, agents a
 
 ```bash
 pnpm test                          # every package
-pnpm --filter @tvine/warp test    # one package
+pnpm -C packages/tvine test
 ```
 
 More in [testing.md](testing.md).
@@ -95,7 +94,7 @@ More in [testing.md](testing.md).
 
 - `tvine start` runs in production mode. It refuses to boot without `TVINE_SECRET` (32+ chars) and
   `TVINE_ALLOWED_HOSTS`. For a local run use `tvine dev`, or see [deploy.md](deploy.md).
-- `next.config.ts` must list `@tvine/warp` in `serverExternalPackages` and set `compress: false`
+- `next.config.ts` must set `compress: false`
   (Warp compresses). Copy the one from `examples/notes`.
 - After editing a package under `packages/`, rebuild it (`pnpm -r build`); apps import the built `dist/`.
 

@@ -9,13 +9,13 @@ can do) and serves it to agents as compact JSON.
 
 Three things, all already done in `examples/notes`:
 
-1. **Dependencies:** `@tvine/weft`, `@tvine/warp`, `next`, `react`, `react-dom`.
+1. **Dependencies:** `tvine/weft`, `tvine`, `next`, `react`, `react-dom`.
 2. **`<WeftRoot>` in the root layout.** It runs the presence overlay, WebMCP tools, tab control and the dev
    gallery, and survives client navigation.
 
    ```tsx
    // app/layout.tsx
-   import { WeftRoot } from '@tvine/weft'
+   import { WeftRoot } from 'tvine/weft'
    export default function RootLayout({ children }) {
      return <html lang="en"><body><WeftRoot>{children}</WeftRoot></body></html>
    }
@@ -24,21 +24,21 @@ Three things, all already done in `examples/notes`:
 3. **Plain HTML becomes controllable** with one `tsconfig.json` line:
 
    ```json
-   { "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "@tvine/weft" } }
+   { "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "tvine/weft" } }
    ```
 
    Now every `<button>`, `<a>`, `<input>`, `<select>`, `<textarea>`, `<form>` and `<details>` registers itself:
    an agent can click, type, select and submit it. Turn it off for a subtree with `agent={false}`, or everywhere
    with `<WeftRoot auto={false}>`.
 
-`next.config.ts` needs `serverExternalPackages: ['@tvine/warp']` and `compress: false` (Warp compresses).
+`next.config.ts` needs `compress: false` (Warp compresses).
 
 ## Minimal usage
 
 ```tsx
-import { Page } from '@tvine/weft'
-import { Card } from '@tvine/weft/widgets'
-import { api, must } from '@tvine/weft/api'
+import { Page } from 'tvine/weft'
+import { Card } from 'tvine/widgets'
+import { api, must } from 'tvine/api'
 
 export default async function Notes() {
   const notes = must(await api.notes.list({})).items
@@ -60,7 +60,7 @@ export default async function Notes() {
 
 ## Widgets
 
-Import from `@tvine/weft/widgets` (not the root entry). They are built on native HTML (`<dialog>`, the
+Import from `tvine/widgets` (not the root entry). They are built on native HTML (`<dialog>`, the
 Popover API, `<details>`, native inputs), with no Radix and no extra dependencies, and you style them with your
 own CSS or Tailwind.
 
@@ -96,7 +96,7 @@ One doc per widget: [frontend v2 index](design/frontend/v2/README.md). Live gall
 
 ```tsx
 'use client'
-import { useWidget } from '@tvine/weft'
+import { useWidget } from 'tvine/weft'
 
 export function ListOf({ name, label, children }) {
   const w = useWidget({ kind: 'list', name, label })
@@ -109,13 +109,13 @@ call), `sum` (one-line summary), `hidden`, `sensitive`. `defineWidget(def)` make
 [widget-contract.md](design/frontend/v2/core/widget-contract.md), custom control logic and veto hooks:
 [custom-logic.md](design/frontend/v2/core/custom-logic.md).
 
-## Forms (`@tvine/weft/forms`)
+## Forms (`tvine/forms`)
 
 Django `ModelForm`-style forms built from field metadata. The admin uses them; any page can too.
 
 ```tsx
-import { ModelForm } from '@tvine/weft/forms'
-import '@tvine/weft/forms/forms.css'   // optional default look
+import { ModelForm } from 'tvine/forms'
+import 'tvine/forms/forms.css'   // optional default look
 ```
 
 Parts: `ModelForm` (fieldsets, client validation, server errors per field, dirty state), `Field`, `Fieldset`,
@@ -168,8 +168,8 @@ Two levels, set on the **backend** action ([views-urls-api.md](views-urls-api.md
 In the page, wrap the control so agents see *why* it is locked:
 
 ```tsx
-import { HumanOnly } from '@tvine/weft'
-import { Button } from '@tvine/weft/widgets'
+import { HumanOnly } from 'tvine/weft'
+import { Button } from 'tvine/widgets'
 
 <HumanOnly reason="Deleting every note">
   <Button name="clear-all" onClick={clearAll}>Delete all notes</Button>
@@ -218,7 +218,7 @@ All commands: [cli.md](cli.md).
   Weft's `Link` widget.
 - **`<el {...spread} key={k}>`** falls back to `createElement` and is not auto-registered. Put `key` before the
   spread or use a widget.
-- **Widgets come from `@tvine/weft/widgets`.** The root entry exports an older `Input` with the same name.
+- **Widgets come from `tvine/widgets`.** The root entry exports an older `Input` with the same name.
 - **Ids are names, not indexes.** Give widgets a `name` (or an `entity`) that is stable across renders; never
   `useId()`.
 - **Sensitive inputs** (passwords, `cc-*` autocomplete, `otp`) show agents `{filled}` only. Agents can type into

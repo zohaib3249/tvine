@@ -1,26 +1,8 @@
 {
-  "name": "tvine",
+  "name": "tvine-monorepo",
   "version": "0.0.0",
-  "description": "Tvine: agent-native full-stack web framework. Django-style TypeScript backend + Next.js/React frontend that AI agents can drive over MCP.",
-  "keywords": [
-    "agent-native",
-    "ai-agents",
-    "mcp",
-    "model-context-protocol",
-    "mcp-server",
-    "webmcp",
-    "django",
-    "typescript",
-    "nextjs",
-    "react",
-    "orm",
-    "admin-panel",
-    "web-framework",
-    "full-stack"
-  ],
   "license": "MIT",
   "repository": "github:zohaib3249/tvine",
-  "homepage": "https://github.com/zohaib3249/tvine#readme",
   "private": true,
   "type": "module",
   "engines": {

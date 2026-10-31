@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineTask } from '@tvine/warp/tasks'
+import { defineTask } from 'tvine/tasks'
 import { Note } from './models.ts'
 
 // Runs in `tvine worker` (or the web server's embedded worker), never in the request.

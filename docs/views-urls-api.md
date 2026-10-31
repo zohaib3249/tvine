@@ -15,7 +15,7 @@ request, idempotency (`cmdId`), serializers.
 
 ## Setup
 
-Nothing to install beyond `@tvine/warp`. Warp finds `apps/<app>/views.ts` by itself and registers every
+Nothing to install beyond `tvine`. Warp finds `apps/<app>/views.ts` by itself and registers every
 exported action and view class. Check what it found:
 
 ```bash
@@ -27,7 +27,7 @@ pnpm exec tvine check
 
 ```ts
 import { z } from 'zod'
-import { defineAction } from '@tvine/warp'
+import { defineAction } from 'tvine'
 import { Note } from './models.ts'
 
 export const clearAll = defineAction('clearAll', z.object({}),
@@ -57,7 +57,7 @@ Full list: [core-actions.md](design/server/core-actions.md), [permissions.md](de
 
 ```ts
 import { z } from 'zod'
-import { action, DetailView, ListView, type ViewCtx } from '@tvine/warp'
+import { action, DetailView, ListView, type ViewCtx } from 'tvine'
 import { Product } from './models.ts'
 
 export class ProductList extends ListView<Product> {   // → catalog.list
@@ -121,11 +121,11 @@ Without a root `urls.ts`, every action still answers at `POST /tvine/api/<app>.<
 
 ```ts
 // urls.ts (next to settings.ts)
-import { include, path } from '@tvine/warp'
+import { include, path } from 'tvine'
 export const urlpatterns = [path('api/', include('notes.urls'))]
 
 // apps/notes/urls.ts
-import { path } from '@tvine/warp'
+import { path } from 'tvine'
 import { NoteList } from './views.ts'
 export const appName = 'notes'
 export const urlpatterns = [
@@ -155,11 +155,11 @@ Methods: `GET` for read actions, else `POST`; a wrong method gets `405`. Depth: 
 
 ## The `api.*` client
 
-Pages never import models. They call actions through `api.<app>.<name>` from `@tvine/weft/api`. The same code
+Pages never import models. They call actions through `api.<app>.<name>` from `tvine/api`. The same code
 works in server and client components.
 
 ```tsx
-import { api, must } from '@tvine/weft/api'
+import { api, must } from 'tvine/api'
 
 const page = must(await api.catalog.list({ category: 'hats', sort: '-price' }))     // server component
 const p    = must(await api.catalog.get({ id }), { notFound: true })                 // not found → 404 page

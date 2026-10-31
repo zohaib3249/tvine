@@ -1,8 +1,8 @@
 'use client'
 import { useRouter } from 'next/navigation'
-import { HumanOnly } from '@tvine/weft'
-import { Button } from '@tvine/weft/widgets'
-import { api, type ApiResult } from '@tvine/weft/api'
+import { HumanOnly } from 'tvine/weft'
+import { Button } from 'tvine/widgets'
+import { api, type ApiResult } from 'tvine/api'
 
 function useDone() {
   const router = useRouter()

@@ -1,4 +1,4 @@
-import { migration, ops, field } from '@tvine/warp/migrations'
+import { migration, ops, field } from 'tvine/migrations'
 
 export default migration({
   dependencies: [],

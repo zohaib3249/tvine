@@ -20,7 +20,7 @@ Set it as `DATABASE_URL` or `settings.db.url`. Pool and engine details:
 
 ```ts
 // apps/notes/models.ts
-import { defineModel, field, type Infer } from '@tvine/warp'
+import { defineModel, field, type Infer } from 'tvine'
 
 export const Note = defineModel('note', {
   id: field.id(),
@@ -132,7 +132,7 @@ and relation paths (`vendor__name`, `product_set__price__gt`).
 Expressions and aggregates, as in Django:
 
 ```ts
-import { F, Q, Sum, Count, Avg } from '@tvine/warp'
+import { F, Q, Sum, Count, Avg } from 'tvine'
 
 await Product.objects.filter({ id }).update({ stock: F('stock').sub(qty) })          // stock = stock - ?
 await Product.objects.filter(Q({ category: 'shirts' }).or(Q({ price__lt: 10 })))

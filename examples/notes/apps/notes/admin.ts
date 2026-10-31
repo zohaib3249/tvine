@@ -1,5 +1,5 @@
 // Django admin.py: what /admin shows for notes.
-import { admin, ModelAdmin } from '@tvine/warp/contrib/admin'
+import { admin, ModelAdmin } from 'tvine/contrib/admin'
 import { Note } from './models.ts'
 
 class NoteAdmin extends ModelAdmin {

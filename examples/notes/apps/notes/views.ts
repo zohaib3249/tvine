@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { action, defineAction, DomainError, ListView, type ViewCtx } from '@tvine/warp'
+import { action, defineAction, DomainError, ListView, type ViewCtx } from 'tvine'
 import { Note } from './models.ts'
 import { countWords } from './tasks.ts'
 

@@ -1,5 +1,5 @@
 {
-  "name": "@tvine/example-notes",
+  "name": "tvine-example-notes",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,17 +8,13 @@
     "start": "tvine migrate && tvine start"
   },
   "dependencies": {
-    "@tvine/admin": "workspace:*",
-    "@tvine/warp": "workspace:*",
-    "@tvine/weft": "workspace:*",
-    "esbuild": "0.28.2",
+    "tvine": "workspace:*",
     "next": "16.4.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "@tvine/inspect": "workspace:*",
     "@types/react": "^19",
     "@types/react-dom": "^19"
   }

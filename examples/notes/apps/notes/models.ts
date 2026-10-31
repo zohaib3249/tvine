@@ -1,4 +1,4 @@
-import { defineModel, field, type Infer } from '@tvine/warp'
+import { defineModel, field, type Infer } from 'tvine'
 
 export const Note = defineModel('note', {
   id: field.id(),

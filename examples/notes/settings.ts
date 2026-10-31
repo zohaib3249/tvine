@@ -1,5 +1,5 @@
 // Django settings.py. Everything not named here is a default (docs/design/conventions/settings.md).
-import { defineSettings } from '@tvine/warp'
+import { defineSettings } from 'tvine'
 
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },

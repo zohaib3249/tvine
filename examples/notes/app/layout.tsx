@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { WeftRoot } from '@tvine/weft'
+import { WeftRoot } from 'tvine/weft'
 
 export const metadata = { title: 'Notes' }
 

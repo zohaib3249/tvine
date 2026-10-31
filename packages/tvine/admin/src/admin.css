@@ -1,0 +1,233 @@
+/* tvine/admin — Tailwind v4 compiled into dist/admin.css at build; the host app needs no Tailwind.
+   No global preflight: the reset below is scoped to .tva so the host's own pages are untouched.
+   Theme = CSS variables (set from admin.site.theme on the root element): --tva-brand, --tva-radius. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tvine/forms/forms.css";
+@source "./";
+
+/* the Warp-served shell (serve.ts): no inline style, so a strict CSP needs no style-src exception */
+body.tva-page { margin: 0; }
+
+@theme inline {
+  --color-bg: var(--tva-bg);
+  --color-surface: var(--tva-surface);
+  --color-sunken: var(--tva-sunken);
+  --color-line: var(--tva-line);
+  --color-fg: var(--tva-fg);
+  --color-muted: var(--tva-muted);
+  --color-brand: var(--tva-brand);
+  --color-brand-fg: var(--tva-brand-fg);
+  --color-brand-soft: var(--tva-brand-soft);
+  --color-accent: var(--tva-accent);
+  --color-danger: var(--tva-danger);
+  --color-ok: var(--tva-ok);
+  --color-warn: var(--tva-warn);
+  --radius-ui: var(--tva-radius);
+}
+
+.tva {
+  --tva-brand: #4f46e5; --tva-brand-fg: #fff; --tva-radius: 0.5rem;
+  --tva-bg: #f6f7f9; --tva-surface: #fff; --tva-sunken: #f1f3f6; --tva-line: #e3e6eb;
+  --tva-fg: #0f172a; --tva-muted: #5b6474; --tva-danger: #dc2626; --tva-ok: #15803d; --tva-warn: #b45309;
+  --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 12%, transparent);
+  --tva-accent: var(--tva-brand);
+  --tva-c1: #2a78d6; --tva-c2: #eb6834; --tva-c3: #1baf7a; --tva-c4: #eda100; --tva-c5: #e87ba4; --tva-c6: #008300; --tva-c7: #6250d6; --tva-c8: #e34948;
+  --tva-good: #0ca30c; --tva-warning: #fab219; --tva-critical: #d03b3b; --tva-good-ink: #006300; --tva-grid: #e8eaee; --tva-axis: #c9ced6;
+  color-scheme: light;
+}
+.tva[data-theme="dark"] {
+  --tva-bg: #0b0e14; --tva-surface: #121722; --tva-sunken: #0f141d; --tva-line: #232a38;
+  --tva-fg: #e6e9ef; --tva-muted: #98a2b3; --tva-danger: #f87171; --tva-ok: #4ade80; --tva-warn: #fbbf24;
+  --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 22%, transparent);
+  --tva-accent: color-mix(in oklab, var(--tva-brand) 55%, white);
+    --tva-c1: #3987e5; --tva-c2: #d95926; --tva-c3: #199e70; --tva-c4: #c98500; --tva-c5: #d55181; --tva-c6: #008300; --tva-c7: #9085e9; --tva-c8: #e66767;
+    --tva-good-ink: #0ca30c; --tva-grid: #1d2430; --tva-axis: #313a4b;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  .tva[data-theme="auto"] {
+    --tva-bg: #0b0e14; --tva-surface: #121722; --tva-sunken: #0f141d; --tva-line: #232a38;
+    --tva-fg: #e6e9ef; --tva-muted: #98a2b3; --tva-danger: #f87171; --tva-ok: #4ade80; --tva-warn: #fbbf24;
+    --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 22%, transparent);
+  --tva-accent: color-mix(in oklab, var(--tva-brand) 55%, white);
+    --tva-c1: #3987e5; --tva-c2: #d95926; --tva-c3: #199e70; --tva-c4: #c98500; --tva-c5: #d55181; --tva-c6: #008300; --tva-c7: #9085e9; --tva-c8: #e66767;
+    --tva-good-ink: #0ca30c; --tva-grid: #1d2430; --tva-axis: #313a4b;
+    color-scheme: dark;
+  }
+}
+
+/* tvine/forms (bundled above) themed from the admin tokens. Unlayered, like forms.css, so it wins. */
+.tva :is(.tf-form, .tf-field, .tf-inline) {
+  --tf-brand: var(--tva-brand); --tf-brand-fg: var(--tva-brand-fg); --tf-fg: var(--tva-fg); --tf-muted: var(--tva-muted);
+  --tf-bg: var(--tva-surface); --tf-subtle: var(--tva-sunken); --tf-border: var(--tva-line); --tf-danger: var(--tva-danger);
+  --tf-danger-bg: color-mix(in oklab, var(--tva-danger) 10%, transparent); --tf-radius: var(--tva-radius);
+  --tf-ring: var(--tva-brand-soft); --tf-label-w: 11rem;
+}
+
+@layer base {
+  .tva, .tva *, .tva *::before, .tva *::after { box-sizing: border-box; border: 0 solid var(--tva-line); margin: 0; padding: 0; }
+  .tva {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; line-height: 1.5; background: var(--tva-bg); color: var(--tva-fg);
+    -webkit-font-smoothing: antialiased; position: fixed; inset: 0; z-index: 40; overflow: hidden;
+  }
+  .tva button, .tva input, .tva select, .tva textarea { font: inherit; color: inherit; background: transparent; }
+  .tva button, .tva [role="button"], .tva a, .tva summary, .tva label:has(input) { cursor: pointer; }
+  .tva a { color: inherit; text-decoration: none; }
+  .tva table { border-collapse: collapse; }
+  .tva ul, .tva ol { list-style: none; }
+  .tva svg { display: block; flex-shrink: 0; }
+  .tva :focus-visible { outline: 2px solid var(--tva-brand); outline-offset: 2px; border-radius: 4px; }
+  .tva ::placeholder { color: var(--tva-muted); opacity: .8; }
+  .tva dialog { color: var(--tva-fg); }
+  .tva :is(h1, h2, h3, h4) { font-size: inherit; font-weight: inherit; }
+  @media (prefers-reduced-motion: reduce) { .tva * { transition: none !important; animation: none !important; } }
+}
+
+@layer components {
+  .tva-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .4rem; height: 2.25rem; padding: 0 .85rem;
+    border-radius: var(--tva-radius); font-weight: 500; white-space: nowrap; border: 1px solid var(--tva-line);
+    background: var(--tva-surface); transition: background-color .15s, border-color .15s, box-shadow .15s;
+  }
+  .tva-btn:hover { background: var(--tva-sunken); }
+  .tva-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .tva-btn-primary { background: var(--tva-brand); color: var(--tva-brand-fg); border-color: transparent; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+  .tva-btn-primary:hover { background: color-mix(in oklab, var(--tva-brand) 88%, black); }
+  .tva-btn-danger { color: var(--tva-danger); }
+  .tva-btn-danger-solid { background: var(--tva-danger); color: #fff; border-color: transparent; }
+  .tva-btn-ghost { border-color: transparent; background: transparent; }
+  .tva-btn-icon { width: 2.25rem; padding: 0; }
+  .tva-input {
+    height: 2.25rem; width: 100%; padding: 0 .75rem; border: 1px solid var(--tva-line); border-radius: var(--tva-radius);
+    background: var(--tva-surface); transition: border-color .15s, box-shadow .15s;
+  }
+  textarea.tva-input { height: auto; min-height: 6rem; padding: .5rem .75rem; }
+  select.tva-input { padding-right: 2rem; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2394a3b8' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .5rem center; }
+  .tva-input:focus { outline: none; border-color: var(--tva-brand); box-shadow: 0 0 0 3px var(--tva-brand-soft); }
+  .tva-input[aria-invalid="true"] { border-color: var(--tva-danger); }
+  .tva-card { background: var(--tva-surface); border: 1px solid var(--tva-line); border-radius: calc(var(--tva-radius) + 4px); box-shadow: 0 1px 2px rgb(16 24 40 / .04); }
+  .tva-chip { display: inline-flex; align-items: center; gap: .25rem; height: 1.5rem; padding: 0 .5rem; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--tva-brand-soft); color: var(--tva-accent); }
+  .tva-kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 0 .35rem; border: 1px solid var(--tva-line); border-bottom-width: 2px; border-radius: 4px; color: var(--tva-muted); background: var(--tva-surface); }
+  .tva-skel { background: linear-gradient(90deg, var(--tva-sunken), var(--tva-line), var(--tva-sunken)); background-size: 200% 100%; animation: tva-shimmer 1.2s infinite linear; border-radius: 6px; }
+  @keyframes tva-shimmer { to { background-position: -200% 0; } }
+  .tva-nav-link { display: flex; align-items: center; gap: .6rem; padding: .4rem .6rem; border-radius: var(--tva-radius); color: var(--tva-muted); font-weight: 500; }
+  .tva-nav-link:hover { background: var(--tva-sunken); color: var(--tva-fg); }
+  .tva-nav-link[aria-current="page"] { background: var(--tva-brand-soft); color: var(--tva-accent); }
+  .tva-th { position: sticky; top: 0; z-index: 1; background: var(--tva-sunken); text-align: left; font-size: 12px; font-weight: 600; color: var(--tva-muted); text-transform: uppercase; letter-spacing: .03em; padding: .55rem .75rem; border-bottom: 1px solid var(--tva-line); white-space: nowrap; }
+  .tva-td { padding: .55rem .75rem; border-bottom: 1px solid var(--tva-line); font-variant-numeric: tabular-nums; vertical-align: middle; }
+  .tva-row:hover .tva-td { background: color-mix(in oklab, var(--tva-sunken) 70%, transparent); }
+  .tva-row[data-selected] .tva-td { background: var(--tva-brand-soft); }
+  .tva-check { width: 1rem; height: 1rem; accent-color: var(--tva-brand); }
+
+  /* Weft overlays (Dialog / Drawer / Menu / Toaster) are headless: style their parts here. */
+  .tva [data-tvine-widget="dialog"] > [data-part="trigger"][hidden] { display: none; }
+  .tva dialog[data-state="open"] {
+    margin: auto; inset: 0; position: fixed; max-width: min(36rem, calc(100vw - 2rem)); width: 100%; max-height: calc(100dvh - 4rem);
+    overflow: auto; border: 1px solid var(--tva-line); border-radius: calc(var(--tva-radius) + 6px); background: var(--tva-surface);
+    padding: 1.25rem; box-shadow: 0 0 0 100vmax rgb(2 6 23 / .45), 0 24px 48px -12px rgb(0 0 0 / .35); animation: tva-pop .16s ease-out;
+  }
+  .tva dialog[data-side] { margin: 0; max-width: min(22rem, 88vw); height: 100dvh; max-height: 100dvh; border-radius: 0; animation: tva-slide .2s ease-out; }
+  .tva dialog[data-side="left"] { inset: 0 auto 0 0; }
+  .tva dialog[data-side="right"] { inset: 0 0 0 auto; }
+  .tva dialog [data-part="close"] { position: absolute; top: .6rem; right: .7rem; width: 2rem; height: 2rem; border-radius: 6px; font-size: 20px; color: var(--tva-muted); }
+  .tva dialog [data-part="close"]:hover { background: var(--tva-sunken); }
+  .tva dialog.tva-palette { padding: 0; top: 12vh; margin-top: 0; max-width: min(40rem, calc(100vw - 2rem)); }
+  @keyframes tva-pop { from { opacity: 0; transform: scale(.97) translateY(4px); } }
+  @keyframes tva-slide { from { transform: translateX(-12px); opacity: 0; } }
+  .tva [role="menu"]:popover-open {
+    position: fixed; inset: auto; top: 3.5rem; right: 1rem; margin: 0; min-width: 12rem; padding: .3rem; background: var(--tva-surface);
+    border: 1px solid var(--tva-line); border-radius: var(--tva-radius); box-shadow: 0 12px 32px -8px rgb(0 0 0 / .25); color: var(--tva-fg);
+  }
+  .tva [role="menuitem"] { display: flex; width: 100%; padding: .45rem .6rem; border-radius: 6px; text-align: left; }
+  .tva [role="menuitem"]:hover, .tva [role="menuitem"]:focus { background: var(--tva-sunken); outline: none; }
+  .tva [data-tvine-widget="toast"] { position: fixed; bottom: 1rem; right: 1rem; z-index: 60; display: flex; flex-direction: column; gap: .5rem; width: min(22rem, calc(100vw - 2rem)); }
+  .tva [data-toast] {
+    position: relative; padding: .75rem 2.25rem .75rem .9rem; background: var(--tva-surface); border: 1px solid var(--tva-line); border-left: 4px solid var(--tva-brand);
+    border-radius: var(--tva-radius); box-shadow: 0 12px 32px -8px rgb(0 0 0 / .25); animation: tva-pop .18s ease-out;
+  }
+  .tva [data-toast][data-kind="success"] { border-left-color: var(--tva-ok); }
+  .tva [data-toast][data-kind="error"] { border-left-color: var(--tva-danger); }
+  .tva [data-toast] p { color: var(--tva-muted); font-size: 13px; }
+  .tva [data-toast] [data-part="close"] { position: absolute; top: .4rem; right: .5rem; color: var(--tva-muted); font-size: 18px; }
+
+  /* ---- charts (charts.tsx) ---- */
+  .tva-grid { stroke: var(--tva-grid); stroke-width: 1; shape-rendering: crispEdges; }
+  .tva-axis { stroke: var(--tva-axis); stroke-width: 1; shape-rendering: crispEdges; }
+  .tva-tick { fill: var(--tva-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tva-plot { overflow: visible; touch-action: pan-y; }
+  .tva-plot:focus-visible { outline: 2px solid var(--tva-brand); outline-offset: 4px; }
+  .tva-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: tva-draw .8s cubic-bezier(.2,.7,.2,1) both; }
+  .tva-area { opacity: .1; animation: tva-fade .6s ease-out both; }
+  .tva-area-stack { opacity: .28; }
+  .tva-cross { stroke: var(--tva-muted); stroke-width: 1; opacity: .6; }
+  .tva-dot { stroke: var(--tva-surface); stroke-width: 2; }
+  .tva-band { fill: var(--tva-sunken); }
+  .tva-bars path { transition: opacity .15s; transform-box: fill-box; transform-origin: bottom; animation: tva-grow .5s cubic-bezier(.2,.7,.2,1) both; }
+  .tva-bars.is-hi path { opacity: .82; }
+  .tva-slice { transition: transform .15s ease-out, opacity .15s; transform-origin: center; transform-box: view-box; outline: none; }
+  .tva-slice.is-hi, .tva-slice:focus-visible { transform: scale(1.035); }
+  .tva-donut { animation: tva-spin-in .6s cubic-bezier(.2,.7,.2,1) both; }
+  .tva-spark-line { stroke: var(--tva-accent); }
+  .tva-spark-area { fill: var(--tva-accent); opacity: .1; }
+  .tva-spark-dot { fill: var(--tva-accent); stroke: var(--tva-surface); stroke-width: 2; }
+  .tva-tip { position: absolute; top: 8px; z-index: 5; pointer-events: none; min-width: 9rem; padding: .45rem .6rem; font-size: 12px; line-height: 1.6;
+    background: var(--tva-surface); border: 1px solid var(--tva-line); border-radius: var(--tva-radius); box-shadow: 0 8px 24px -8px rgb(0 0 0 / .25); }
+  .tva-tip-x { color: var(--tva-muted); font-size: 11px; }
+  .tva-key-line { display: inline-block; width: 12px; height: 2px; border-radius: 2px; }
+  .tva-key-rect { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .tva-stat-value { font-size: 1.75rem; font-weight: 600; letter-spacing: -.01em; line-height: 1.2; white-space: nowrap; }
+  .tva-delta { display: inline-flex; align-items: center; gap: .3rem; margin-top: .35rem; font-size: 12px; font-weight: 600; }
+  .tva-delta.is-good { color: var(--tva-good-ink); }
+  .tva-delta.is-bad { color: var(--tva-danger); }
+  @keyframes tva-draw { from { stroke-dashoffset: 1; } }
+  @keyframes tva-fade { from { opacity: 0; } }
+  @keyframes tva-grow { from { transform: scaleY(0); } }
+  @keyframes tva-spin-in { from { opacity: 0; transform: rotate(-30deg) scale(.92); } }
+
+  /* ---- dashboard + system pages ---- */
+  .tva-dash { display: grid; gap: 1rem; grid-template-columns: repeat(1, minmax(0, 1fr)); grid-auto-flow: row dense; }
+  @media (min-width: 640px) { .tva-dash { grid-template-columns: repeat(2, minmax(0, 1fr)); } .tva-dash > [data-size="lg"], .tva-dash > [data-size="xl"], .tva-dash > [data-size="md"] { grid-column: span 2; } }
+  @media (min-width: 1024px) {
+    .tva-dash { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+    .tva-dash > [data-size="sm"] { grid-column: span 3; } .tva-dash > [data-size="md"] { grid-column: span 6; }
+    .tva-dash > [data-size="lg"] { grid-column: span 9; } .tva-dash > [data-size="xl"] { grid-column: span 12; }
+  }
+  .tva-enter { animation: tva-rise .42s cubic-bezier(.2,.7,.2,1) both; }
+  @keyframes tva-rise { from { opacity: 0; transform: translateY(8px); } }
+  .tva-lift { transition: transform .18s ease-out, box-shadow .18s ease-out, border-color .18s; }
+  .tva-lift:hover { transform: translateY(-2px); box-shadow: 0 10px 28px -14px rgb(16 24 40 / .28); }
+  .tva-dash[data-editing] > * { outline: 1px dashed var(--tva-line); outline-offset: 3px; }
+  .tva-dash > [data-dragging] { opacity: .4; }
+  .tva-dash > [data-over] { outline: 2px solid var(--tva-brand) !important; }
+  .tva-page-enter { animation: tva-page .22s ease-out both; }
+  @keyframes tva-page { from { opacity: 0; transform: translateY(4px); } }
+  .tva-seg { display: inline-flex; padding: 2px; border: 1px solid var(--tva-line); border-radius: var(--tva-radius); background: var(--tva-surface); }
+  .tva-seg button { height: 1.85rem; padding: 0 .65rem; border-radius: calc(var(--tva-radius) - 2px); font-size: 13px; font-weight: 500; color: var(--tva-muted); }
+  .tva-seg button[aria-pressed="true"] { background: var(--tva-brand-soft); color: var(--tva-accent); }
+  .tva-live { display: inline-flex; align-items: center; gap: .4rem; height: 1.6rem; padding: 0 .6rem; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--tva-line); background: var(--tva-surface); }
+  .tva-live::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: var(--tva-muted); }
+  .tva-live[data-state="live"]::before { background: var(--tva-good); box-shadow: 0 0 0 0 var(--tva-good); animation: tva-ping 1.8s infinite; }
+  .tva-live[data-state="connecting"]::before { background: var(--tva-warning); }
+  .tva-live[data-state="offline"]::before { background: var(--tva-critical); }
+  @keyframes tva-ping { 70% { box-shadow: 0 0 0 6px transparent; } }
+  .tva-status { display: inline-flex; align-items: center; gap: .3rem; height: 1.4rem; padding: 0 .5rem; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .tva-status[data-s="ok"] { background: color-mix(in oklab, var(--tva-good) 16%, transparent); color: var(--tva-good-ink); }
+  .tva-status[data-s="warn"] { background: color-mix(in oklab, var(--tva-warning) 22%, transparent); color: var(--tva-warn); }
+  .tva-status[data-s="error"] { background: color-mix(in oklab, var(--tva-critical) 16%, transparent); color: var(--tva-danger); }
+  .tva-tile-ok { border-top: 3px solid var(--tva-good); } .tva-tile-warn { border-top: 3px solid var(--tva-warning); } .tva-tile-error { border-top: 3px solid var(--tva-critical); }
+  .tva-log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .tva-log-row { display: grid; grid-template-columns: 5.5rem 3.6rem minmax(6rem, 10rem) 1fr; gap: .6rem; padding: .25rem .75rem; border-bottom: 1px solid var(--tva-line); text-align: left; width: 100%; }
+  .tva-log-row:hover { background: var(--tva-sunken); }
+  .tva-log-row.is-new { animation: tva-flash 1.2s ease-out; }
+  @keyframes tva-flash { from { background: var(--tva-brand-soft); } }
+  @media (max-width: 639px) { .tva-log-row { grid-template-columns: 4.6rem 3.2rem 1fr; } .tva-log-row > :nth-child(3) { display: none; } }
+  .tva-lvl { font-weight: 700; text-transform: uppercase; font-size: 10.5px; padding: 0 .3rem; border-radius: 4px; justify-self: start; align-self: center; }
+  .tva-lvl[data-l="debug"] { color: var(--tva-muted); background: var(--tva-sunken); }
+  .tva-lvl[data-l="info"] { color: var(--tva-c1); background: color-mix(in oklab, var(--tva-c1) 12%, transparent); }
+  .tva-lvl[data-l="warn"] { color: var(--tva-warn); background: color-mix(in oklab, var(--tva-warning) 18%, transparent); }
+  .tva-lvl[data-l="error"] { color: var(--tva-danger); background: color-mix(in oklab, var(--tva-critical) 14%, transparent); }
+  .tva-pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--tva-sunken); border-radius: var(--tva-radius); padding: .6rem .75rem; }
+}

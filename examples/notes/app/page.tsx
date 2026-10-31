@@ -1,7 +1,7 @@
 import { connection } from 'next/server'
-import { Page } from '@tvine/weft'
-import { Card } from '@tvine/weft/widgets'
-import { api, must } from '@tvine/weft/api'
+import { Page } from 'tvine/weft'
+import { Card } from 'tvine/widgets'
+import { api, must } from 'tvine/api'
 import { AddNote, ClearAll, NoteButtons } from '../components/notes.tsx'
 
 type NoteRow = { id: number; title: string; body: string; pinned: boolean; words: number }
