@@ -83,12 +83,18 @@ function takeParam(name: string): string | null {
   return v
 }
 const store = () => { try { return globalThis.sessionStorage } catch { return undefined } }
+// sessionStorage, mirrored in memory: when storage throws (private mode, blocked), the flag still holds for this
+// document (a re-sent `control` stays refused until the release lands).
+const mem = new Set<string>()
+export function resetTabFlags(): void { mem.clear() }   // tests
 const flag = (k: string, on?: boolean): boolean => {
+  if (on === true) mem.add(k)
+  else if (on === false) mem.delete(k)
   try {
     if (on === true) store()?.setItem(k, '1')
     else if (on === false) store()?.removeItem(k)
-    return store()?.getItem(k) === '1'
-  } catch { return false }
+    return store()?.getItem(k) === '1' || mem.has(k)
+  } catch { return mem.has(k) }
 }
 const framed = () => { try { return globalThis.top !== globalThis.self } catch { return true } }
 
@@ -110,6 +116,7 @@ export function connectTab(): () => void {
   const overlay = getOverlay()
   const tools = pageTools('tab')
   let es: EventSource | undefined, tabId: string | undefined, closed = false, retry: ReturnType<typeof setTimeout> | undefined
+  let backoff: ReturnType<typeof setTimeout> | undefined   // the release loop's own timer (never shares `retry`)
   let hello: Promise<void> | undefined, ready = () => {}
   let closePrompt = () => {}
   const post = async (op: string, body: object = {}): Promise<{ status: number; body: any }> => {
@@ -135,7 +142,7 @@ export function connectTab(): () => void {
     for (let wait = 500; !closed; wait = Math.min(wait * 2, 10_000)) {
       const r = await post('release')
       if (r.status === 200 || r.status === 401 || r.status === 403) { flag(STOP_KEY, false); break }   // landed (or nothing left to release)
-      await new Promise((ok) => { retry = setTimeout(ok, wait) })
+      await new Promise((ok) => { backoff = setTimeout(ok, wait) })
     }
     releasing = false
   }
@@ -222,6 +229,7 @@ export function connectTab(): () => void {
   return () => {
     closed = true
     clearTimeout(retry)
+    clearTimeout(backoff)
     es?.close()
     closePrompt()
     if (tabControl.remote) { tabControl.remote = false; abortRunning(); overlay.setPill(null) }   // unmount ≠ release: CTL_KEY stays for the reload

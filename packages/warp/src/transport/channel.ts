@@ -77,7 +77,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const byCookie = byCookieSession()
     const ctx = () => ({ sid: byCookie ? '' : sid, rev: session?.rev ?? 0, page: '' })
 
-    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), sid)
+    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid)   // I3: never the cookie session's sid
 
     const group = channels.group(inspector ? 'inspector' : `sid:${sid}`)
     req.socket.setTimeout(0) // SSE is exempt from request timeouts
