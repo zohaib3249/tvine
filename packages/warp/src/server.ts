@@ -30,6 +30,7 @@ import { buildMiddleware, runMiddleware, type HttpMiddleware, type MwRequest } f
 import { closeRedis, configureRedis } from './redis/index.js'
 import { configureCaches } from './cache/index.js'
 import { configureMail } from './mail/index.js'
+import { configureSigning } from './security/signing.js'
 import { channelTransport } from './transport/channel.js'
 import { hookResponse, weakIfNoneMatch } from './transport/compress.js'
 import { corsLayer } from './transport/cors.js'
@@ -121,6 +122,7 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
   configureMail(settings)
+  configureSigning(settings)   // signing.dumps / encrypted fields / signed media urls
   return settings
 }
 

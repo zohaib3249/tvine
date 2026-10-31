@@ -52,3 +52,4 @@ export { defineMiddleware, CATALOG as MIDDLEWARE_CATALOG, type HttpMiddleware, t
 export { getLogger, configureLogging, type Logger, type LogRecord, type LogHandler, type LoggingConfig, type LoggingSetting, type Level } from './log.js'
 export { env, loadDotenv, FRAMEWORK_ENV } from './env.js'
 export { securityEvent } from './core/audit.js'
+export { signing, dumps, loads, Signer, TimestampSigner, BadSignature, SignatureExpired, configureSigning } from './security/signing.js'
