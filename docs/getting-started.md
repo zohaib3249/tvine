@@ -9,14 +9,22 @@ Every command below was run as written.
 > Packages are not on npm yet: build your app inside this repo (`examples/<name>/` or `apps/<name>/`, both are pnpm
 > workspace folders) so `workspace:*` resolves.
 
-## 0. Install
+## 0. Start a project
 
 ```bash
-pnpm install
-pnpm -r build          # builds warp, weft, admin, inspect (and the demo/example Next apps)
+npm create tvine@latest mysite     # or: pnpm create tvine mysite  /  tvine startproject mysite
+cd mysite
+pnpm tvine migrate
+pnpm tvine createsuperuser
+pnpm tvine dev                     # http://localhost:3000: the Tvine welcome page, /admin, /mcp
+pnpm tvine startapp notes --model Note    # apps/notes/: models, views, urls, admin, tests
+pnpm tvine makemigrations && pnpm tvine migrate
 ```
 
-Node 22.15 or newer.
+Node 22.15 or newer. Until the packages are on npm, run it from a clone: `pnpm install && pnpm -r build`, then
+`node packages/warp/bin/tvine.js startproject mysite ../mysite --local` (links the clone's packages).
+What each file is: [conventions/scaffolding.md](design/conventions/scaffolding.md). The rest of this guide builds
+`examples/notes/` by hand, file by file.
 
 ## 1. Project files
 

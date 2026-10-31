@@ -1,0 +1,10 @@
+{
+  "name": "create-tvine",
+  "version": "0.0.0",
+  "description": "npm create tvine@latest my-app: a new Tvine project (same generator as tvine startproject)",
+  "type": "module",
+  "bin": { "create-tvine": "index.js" },
+  "files": ["index.js"],
+  "engines": { "node": ">=22.15" },
+  "dependencies": { "@tvine/warp": "workspace:*" }
+}

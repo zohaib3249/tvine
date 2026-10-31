@@ -15,6 +15,12 @@ export interface ProjectOpts { name: string; dir?: string; db?: string; admin?: 
 const write = (root: string, files: Record<string, string>) => {
   for (const [p, text] of Object.entries(files)) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), text) }
 }
+const commonRoot = (a: string, b: string) => {
+  const x = a.split(/[\\/]/), y = b.split(/[\\/]/)
+  let i = 0
+  while (i < x.length && x[i] === y[i]) i++
+  return x.slice(0, i).join('/') || '/'
+}
 const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n'
 
 // Before npm publish: --local links this clone's packages; otherwise the running CLI's own version.
@@ -68,8 +74,8 @@ import { defineSettings } from '@tvine/warp'
 
 export default defineSettings({
   site: { name: '${title}', description: 'A Tvine project.' },
-  installedApps: ${JSON.stringify(installed).replace(/,/g, ', ')},
-})
+  installedApps: ${JSON.stringify(installed).replace(/,/g, ', ').replace(/"/g, "'")},
+${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}})
 `,
     'urls.ts': `// Django ROOT_URLCONF. Every action also answers at /tvine/api/<app>.<name> and as an MCP tool at /mcp.
 ${admin ? '// /admin is served by tvine.admin itself (settings.admin.path); no route needed.\n' : ''}import { include, path } from '@tvine/warp'
@@ -102,7 +108,7 @@ export default {
   serverExternalPackages: ['@tvine/warp'],   // Warp is Node-only: loaded from node_modules, never bundled
   compress: false,                            // Warp compresses (with its BREACH rule); Next must not gzip twice
   devIndicators: false,                       // no Next.js dev badge: Weft draws its own agent badge
-} satisfies NextConfig
+${o.local ? `  turbopack: { root: ${JSON.stringify(commonRoot(dir, resolve(WARP_DIR, '..')))} },   // --local: the linked clone must sit inside the root\n` : ''}} satisfies NextConfig
 `,
     'app/layout.tsx': `import type { ReactNode } from 'react'
 import { WeftRoot } from '@tvine/weft'
@@ -196,7 +202,7 @@ ${[
           <h2>Next steps</h2>
           <pre>{\`tvine startapp blog --model Post   \`}<span className="c"># a new app in apps/blog</span>{\`
 tvine makemigrations && tvine migrate
-claude                               \`}<span className="c"># Claude Code reads .mcp.json: your actions are its tools</span></pre>
+claude                              \`}<span className="c"># Claude Code reads .mcp.json: your actions are its tools</span></pre>
         </div>
         <p className="tv-foot">Connect Claude Code: <code>.mcp.json</code> points at http://localhost:3000/mcp.</p>
       </div>

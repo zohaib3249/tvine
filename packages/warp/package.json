@@ -46,6 +46,10 @@
     "./contrib/*": {
       "types": "./dist/contrib/*.d.ts",
       "import": "./dist/contrib/*.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
     }
   },
   "scripts": {
