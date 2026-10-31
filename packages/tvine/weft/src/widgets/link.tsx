@@ -17,7 +17,7 @@ export type LinkProps = SlotProps<S> & {
 }
 
 // Server (no location): only relative same-site paths ("/x", "?q", "#h"; not "//host") are safe.
-const sameSite = (href: string) => {
+export const sameSite = (href: string) => {
   if (typeof location === 'undefined') return /^(\/(?![\/\\])|[?#])/.test(href)
   try { const u = new URL(href, location.href); return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === location.origin } catch { return false }
 }
@@ -31,6 +31,7 @@ const useLink = defineWidget<LinkProps, S, C>({
       await agentNavigate(p.href, ctx.signal, () => { const a = el(); if (!a) throw new Error('link is not mounted'); a.click() })
     } },
   }),
+  headless: (p) => (sameSite(p.href) ? { navigate: { url: p.href } } : {}),   // warp core/ui: a path url map = GET that page
   describe: (p) => ({ label: text(p), summary: [p.href] }),
   spec: (p) => ({ name: p.name ?? p.href, data: { href: p.href } }),   // headless: a plain GET of href
 })

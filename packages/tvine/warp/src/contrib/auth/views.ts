@@ -69,8 +69,12 @@ const loginFailed = (ctx: ActionCtx, username: string, why: string) =>
   securityEvent('login_failed', { username: username.slice(0, 150), why }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
 
 // secreview L1: an agent acting in the human's tab (the tab channel, WebMCP, the inspector) never signs that browser in
-// or out. An agent on its own sid (HTTP/MCP) still may: that session is its own.
-const notInTab: Permission = (ctx) => !(ctx.agent?.is && ['channel', 'webmcp', 'inspector'].includes(String(ctx.agent.via)))
+// or out. An agent on its own sid (HTTP/MCP) still may: that session is its own. The refusal is human_only with a
+// message both the agent and the human (the form's message) can act on.
+const notInTab = (message: string): Permission => (ctx) => {
+  if (ctx.agent?.is && ['channel', 'webmcp', 'inspector'].includes(String(ctx.agent.via))) throw new DomainError('human_only', message)
+  return true
+}
 
 // Django LoginView: authenticate() over settings.auth.backends, then the second factor, then login()
 export const loginAction = defineAction('login', z.object({
@@ -90,9 +94,9 @@ async ({ otp, ...credentials }, ctx): Promise<SafeUser> => {
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   await checkNewDevice(ctx.settings, { id: row.id, username: String((row as Record<string, unknown>)[userMeta().usernameField]), email: emailOf(row) }, ctx.request)
   return safeUser(await login(ctx, row))
-}, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
+}, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab('only you can sign in in this tab: the agent filled the form, please press Sign in yourself')] })
 
-export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab] })
+export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab('only you can sign out in this tab: please press Sign out yourself')] })
 
 export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promise<SafeUser | null> => {
   const u: TvineUser = ctx.request.user
@@ -168,14 +172,14 @@ export const revokeSession = defineAction('revokeSession', z.object({ id: z.stri
   else await UserSession.objects.filter({ key: id, userId: Number(u.id) }).delete()
   securityEvent('session_revoked', { userId: u.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
   return null
-}, { permissions: [isAuthenticated, notInTab] })
+}, { permissions: [isAuthenticated, notInTab('only you can sign sessions out in this tab: please press the button yourself')] })
 
 export const logoutOthers = defineAction('logoutOthers', z.object({}), async (_p, ctx) => {
   const u = sessionOnly(ctx)
   const n = await dropOtherSessions(Number(u.id), ctx.session)
   securityEvent('sessions_revoked', { userId: u.id, count: n }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
   return { revoked: n }
-}, { permissions: [isAuthenticated, notInTab] })
+}, { permissions: [isAuthenticated, notInTab('only you can sign sessions out in this tab: please press the button yourself')] })
 
 // ---- privacy: my data ---------------------------------------------------------------------------------
 // a JSON file of everything the app holds on me (models opt in with Meta.personalData), as a private media file:

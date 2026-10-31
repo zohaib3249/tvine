@@ -89,7 +89,7 @@ export function permissionCtx(ctx: Pick<ActionCtx, 'sid' | 'session' | 'request'
 // A token-authenticated user is also held to the token's scopes: checked where dispatch states whether the action
 // is readOnly (pctx.readOnly present), i.e. once per command before any app permission.
 // a permission may refuse with one of these (the client can act on it: set up 2FA, sign in again)
-const PASS = new Set(['two_factor_required', 'reauth_required'])
+const PASS = new Set(['two_factor_required', 'reauth_required', 'human_only'])
 export async function runPermissions(perms: Permission[], pctx: PermissionCtx): Promise<void> {
   const scopes = pctx.user.scopes
   if (scopes && pctx.action && pctx.readOnly !== undefined && !scopeAllows(scopes, pctx.action, pctx.readOnly)) {

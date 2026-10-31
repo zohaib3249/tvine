@@ -61,7 +61,16 @@ const useCombobox = defineWidget<Internal, S, C>({
         } },
       clear: { kind: 'clear', run: async (_a, ctx) => { await typeText(ctx, field(ctx), '') } },
     }
-    if (p.freeText) c.submit = { kind: 'submit', run: async (_a, ctx) => { field(ctx).form ? field(ctx).form!.requestSubmit() : await submit(p, p.s.query, ctx.signal) } }
+    // What Enter does for a human: submit the enclosing form, else onSubmit + the ?<url>= search page.
+    // Optional `text` types the query first (one step instead of search + submit).
+    // Always listed: the enclosing form is only known once mounted (controls are built during render).
+    c.submit = { kind: 'submit', params: { text: { type: 'string', optional: true } }, run: async (a: { text?: string }, ctx) => {
+      const f = field(ctx)
+      if (a.text !== undefined) await typeText(ctx, f, a.text)
+      if (f.form) f.form.requestSubmit()
+      else if (p.onSubmit || p.url) await submit(p, f.value, ctx.signal)
+      else throw invalid('text', 'nothing to submit: this box is not in a form and has no search page')
+    } }
     return c
   },
   headless: (p) => {
