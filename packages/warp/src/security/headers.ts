@@ -77,6 +77,7 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
     ['referrer-policy', h.referrerPolicy],
     ...(h.coop ? [['cross-origin-opener-policy', h.coop] as [string, string]] : []),
     ...(h.corp ? [['cross-origin-resource-policy', h.corp] as [string, string]] : []),
+    ...(h.coep ? [['cross-origin-embedder-policy', h.coep] as [string, string]] : []),
     ['origin-agent-cluster', '?1'],
     ['x-permitted-cross-domain-policies', 'none'],
     ['x-xss-protection', '0'],
@@ -136,6 +137,8 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
         if (!prerendered || (csp.staticPages === 'strict')) privateOnly(res)
         addCsp(res, name, p)
         if (csp.reportUri) setIfAbsent(res, 'reporting-endpoints', `csp="${csp.reportUri}"`)
+        // Trusted Types trial (opt-in): reports DOM-XSS sinks fed plain strings, blocks nothing
+        if (h.trustedTypes === 'report-only') addCsp(res, 'content-security-policy-report-only', `require-trusted-types-for 'script'${csp.reportUri ? `; report-uri ${csp.reportUri}; report-to csp` : ''}`)
         return
       }
       if (DATA.test(type)) {

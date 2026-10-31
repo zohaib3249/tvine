@@ -68,7 +68,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
       referrerPolicy: 'strict-origin-when-cross-origin',
       coop: 'same-origin',
       corp: 'same-origin',
-      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [] },
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [], 'clipboard-read': [] },
     },
   },
   cors: {
@@ -153,6 +153,8 @@ const schema: z.ZodType<Settings> = z.object({
       coop: z.union([z.literal(false), z.enum(['same-origin', 'same-origin-allow-popups', 'unsafe-none'])]),
       corp: z.union([z.literal(false), z.enum(['same-origin', 'same-site', 'cross-origin'])]),
       permissionsPolicy: z.record(z.string().regex(/^[a-z-]+$/), z.union([z.array(z.string().regex(/^(self|\*|https?:\/\/[^\s"()]+)$/, "'self', '*' or an origin")), z.literal(false)])),
+      coep: z.union([z.literal(false), z.enum(['require-corp', 'credentialless'])]).optional(),
+      trustedTypes: z.union([z.literal(false), z.literal('report-only')]).optional(),
     }),
   }),
   cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),

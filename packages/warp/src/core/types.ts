@@ -212,6 +212,8 @@ export interface SecurityHeaders {
   coop: false | 'same-origin' | 'same-origin-allow-popups' | 'unsafe-none'
   corp: false | 'same-origin' | 'same-site' | 'cross-origin'
   permissionsPolicy: Record<string, string[] | false>   // feature → allowlist ([] = nobody, ['self'], origins)
+  coep?: false | 'require-corp' | 'credentialless'      // opt-in Cross-Origin-Embedder-Policy (cross-origin isolation)
+  trustedTypes?: false | 'report-only'                  // opt-in: CSP-Report-Only require-trusted-types-for 'script' on HTML
 }
 export type CorsOrigin = string | RegExp   // exact origin, '*' (never with credentials), or an anchored RegExp
 export interface CorsPolicy {
