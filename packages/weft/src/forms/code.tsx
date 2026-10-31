@@ -15,7 +15,8 @@ const RULES: Record<string, Rule[]> = {
   sql: [[/--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)/y, 'com'], [/'(?:[^']|'')*'?/y, 'str'], NUM,
     [/\b(?:select|from|where|and|or|not|insert|into|values|update|set|delete|create|table|drop|alter|join|left|right|inner|outer|on|group|by|order|having|limit|offset|as|distinct|null|is|in|like|between|union|all|case|when|then|else|end|asc|desc|primary|key|references|index)\b/iy, 'kw'], [/[(),;.*=<>]/y, 'punct']],
   html: [[/<!--[\s\S]*?(?:-->|$)/y, 'com'], [/<\/?[a-zA-Z][\w-]*/y, 'kw'], [/\s[\w-:]+(?==)/y, 'key'], [/"[^"]*"?|'[^']*'?/y, 'str'], [/\/?>/y, 'kw']],
-  css: [[/\/\*[\s\S]*?(?:\*\/|$)/y, 'com'], STR, [/[\w-]+(?=\s*:)/y, 'key'], [/#[0-9a-fA-F]{3,8}\b|-?\d*\.?\d+(?:px|em|rem|%|vh|vw|s|ms)?/y, 'num'], [/[.#]?[\w-]+(?=[^{}]*\{)|@[\w-]+/y, 'kw'], [/[{}();:,>+~]/y, 'punct']],
+  // every rule matches at the sticky position and scans only its own token (no look-ahead over the rest): linear
+  css: [[/\/\*[\s\S]*?(?:\*\/|$)/y, 'com'], STR, [/[\w-]+(?= ?:)/y, 'key'], [/#[0-9a-fA-F]{3,8}\b|-?\d*\.?\d+(?:px|em|rem|%|vh|vw|s|ms)?/y, 'num'], [/[.#@][\w-]+/y, 'kw'], [/[{}();:,>+~]/y, 'punct']],
 }
 RULES.ts = RULES.js!; RULES.javascript = RULES.js!; RULES.typescript = RULES.js!
 

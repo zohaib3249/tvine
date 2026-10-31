@@ -50,3 +50,10 @@ export function isIp(s: unknown, version?: 4 | 6): boolean {
   const n = groups.length + (v4tail ? 2 : 0)
   return tail === undefined ? n === 8 : n < 8
 }
+
+// A real calendar day 'YYYY-MM-DD' (2026-02-31 does not round-trip). Shared by field.dateRange and the date widgets.
+export const realDay = (s: unknown): boolean => {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const d = new Date(`${s}T00:00:00Z`)
+  return !isNaN(+d) && d.toISOString().slice(0, 10) === s
+}

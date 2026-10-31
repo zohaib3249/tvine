@@ -5,12 +5,14 @@ import { z } from 'zod'
 import { fn, param, type Expr } from '../sql/ast.js'
 import { byDb, Field, type Kind } from './base.js'
 import type { Dialect } from '../sql/dialect.js'
-import { E164, isCountry, isIp } from '../../shape/countries.js'
-import { sanitizeHtml } from '../../shape/rich.js'
+import { E164, isCountry, isIp, realDay } from '../../shape/countries.js'
+import { richTextLength, sanitizeHtml } from '../../shape/rich.js'
+import { DomainError } from '../../core/errors.js'
 
 const varchar = (d: Dialect, n: number) => byDb(d, { sqlite: 'TEXT', postgres: `VARCHAR(${n})`, mysql: `VARCHAR(${n})` })
 const longText = (d: Dialect) => byDb(d, { sqlite: 'TEXT', postgres: 'TEXT', mysql: 'LONGTEXT' })
-const max = (o: { maxLength?: number }, s: z.ZodString) => (o.maxLength ? s.max(o.maxLength) : s)
+export const LONG_TEXT_MAX = 100_000   // markdown / code default cap (characters)
+const max = (o: { maxLength?: number }, s: z.ZodString) => s.max(o.maxLength ?? LONG_TEXT_MAX, `Ensure this value has at most ${o.maxLength ?? LONG_TEXT_MAX} characters.`)
 
 export class ColorField extends Field<string, boolean, 'color', boolean> {
   readonly kind = 'color' as const
@@ -55,7 +57,13 @@ export class CodeField extends Field<string, boolean, 'code', boolean> {   // op
 export class RichTextField extends Field<string, boolean, 'richText', boolean> {
   readonly kind = 'richText' as const
   dbType(d: Dialect) { return [longText(d)] }
-  zod() { return z.string().transform((s) => sanitizeHtml(s)).pipe(max(this.opts, z.string())) }
+  zod() {
+    const o = { allowRemoteImages: !!this.opts.allowRemoteImages }, cap = this.opts.maxLength
+    return z.string().transform((s) => sanitizeHtml(s, o)).superRefine((s, ctx) => {
+      const n = richTextLength(s, o)   // visible text, the same count the editor shows
+      if (cap != null && n > cap) ctx.addIssue({ code: 'custom', message: `Ensure this value has at most ${cap} characters (it has ${n}).` })
+    })
+  }
 }
 
 export class PercentField extends Field<number, boolean, 'percent', boolean> {   // 12.5 = 12.5 %
@@ -77,15 +85,16 @@ abstract class JsonStored<V, K extends Kind> extends Field<V, boolean, K, boolea
   }
 }
 
-// opts.maxItems caps the count; opts.choices restricts the values (else free text). Trimmed, deduped.
+export const TAGS_MAX = 100
+// opts.maxItems caps the count (default 100), opts.maxLength each tag (default 50); opts.choices restricts the values (else free text). Trimmed, deduped.
 export class TagsField extends JsonStored<string[], 'tags'> {
   readonly kind = 'tags' as const
   zod() {
-    const { maxItems, choices } = this.opts
+    const { maxItems = TAGS_MAX, choices } = this.opts
     const base = z.string().trim().min(1).max(this.opts.maxLength ?? 50)
     const tag: z.ZodTypeAny = choices?.length ? base.refine((t) => choices.includes(t), (t) => ({ message: `Select a valid choice. ${t} is not one of the available choices.` })) : base
     const list = z.array(tag).transform((a: string[]) => [...new Set(a)])
-    return maxItems ? list.refine((a) => a.length <= maxItems, `Ensure this list has at most ${maxItems} items.`) : list
+    return list.refine((a) => a.length <= maxItems, `Ensure this list has at most ${maxItems} items.`)
   }
 }
 
@@ -101,10 +110,22 @@ export class AddressField extends JsonStored<Address, 'address'> {
   }
 }
 
-const DAY = /^\d{4}-\d{2}-\d{2}$/
-const day = z.string().regex(DAY, 'Enter a valid date.').refine((s) => !isNaN(+new Date(`${s}T00:00:00Z`)), 'Enter a valid date.')
+const day = z.string().refine(realDay, 'Enter a valid date.')
 export interface DateRange { start: string; end: string }
 export class DateRangeField extends JsonStored<DateRange, 'dateRange'> {   // Django DateRangeField (inclusive)
   readonly kind = 'dateRange' as const
   zod() { return z.object({ start: day, end: day }).strict().refine((r) => r.start <= r.end, 'The end date must be on or after the start date.') }
+}
+
+// Signature: an image a person draws. humanOnly: agent-marked writes are refused (admin save, generic views).
+export const signatureOpts = <P extends object>(o?: P) => ({ humanOnly: 'a signature must be drawn by a person', ...o })
+
+// Field-level humanOnly (any field): an agent-marked request that sets one of these fields is refused with human_only.
+export function refuseHumanOnly(fields: Record<string, Field<any, boolean, Kind, boolean>>, input: Record<string, unknown> | undefined, agent: boolean): void {
+  if (!agent || !input) return
+  for (const [n, f] of Object.entries(fields)) {
+    const ho = f.opts.humanOnly
+    if (!ho || !(n in input || f.key(n) in input)) continue
+    throw new DomainError('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : `${n} is set by a person`}); ask the user to do it`, n)
+  }
 }

@@ -33,6 +33,8 @@ export interface Opts {
   language?: string                     // code: 'json' | 'js' | 'sql' | 'html' | 'css' (json is validated)
   maxItems?: number                     // tags: at most this many
   choices?: string[]                    // tags: only these values (else free text)
+  humanOnly?: boolean | string          // any field: agent-marked writes are refused with human_only (admin + generic views); no DDL
+  allowRemoteImages?: boolean           // richText: keep http(s) <img> (default: same-site media paths only); no DDL
 }
 
 export interface Money { value: number; currency: string }

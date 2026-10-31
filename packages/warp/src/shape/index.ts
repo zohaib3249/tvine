@@ -3,5 +3,5 @@
 export { toTree, disclose, expand, level, est, signature, kindOfWidget, entityType } from './disclose.js'
 export type { Shaped, SnapNode, SnapTree, ShapeSource, WidgetFrag, CtlFrag, ParamSpec, ActionRef, V1Node, V1Link, NavLink, View } from './disclose.js'
 export { notationBody, cell, quote, bare, UNTRUSTED, UNTRUSTED_TOOL } from './notation.js'
-export { sanitizeHtml, safeHref } from './rich.js'
-export { COUNTRY_CODES, COUNTRY_DIAL, isCountry, countryName, normalizePhone, E164, isIp } from './countries.js'
+export { sanitizeHtml, safeHref, richTextLength, type SanitizeOpts } from './rich.js'
+export { COUNTRY_CODES, COUNTRY_DIAL, isCountry, countryName, normalizePhone, E164, isIp, realDay } from './countries.js'

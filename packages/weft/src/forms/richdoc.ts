@@ -170,13 +170,15 @@ export const docText = (doc: Doc) => leaves(doc).map((l) => textOf(leafRuns(doc,
 export const docHtml = (doc: Doc) => (docText(doc).trim() || doc.some((it) => it.k === 'img' || it.k === 'hr') ? renderHtml(doc) : '')
 
 // ---- markdown → Doc ----
-const INLINE = /`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\s][^*]*?)\*|(?<![\w])_([^_\s][^_]*?)_(?![\w])|\[([^\]]+)\]\(([^)\s]+)\)/
+// link target: <…> (anything but <>), or one level of balanced parens: [t](https://x.io/a_(b))
+const URL_MD = String.raw`<([^<>\n]+)>|((?:[^()\s]|\([^()\s]*\))+)`
+const INLINE = new RegExp('`([^`]+)`|' + String.raw`\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\s][^*]*?)\*|(?<![\w])_([^_\s][^_]*?)_(?![\w])|\[([^\]]+)\]\((?:${URL_MD})\)`)
 export function mdInline(s: string, base: Omit<Run, 't'> = {}): Run[] {
   const out: Run[] = []
   let rest = s
   for (let m = INLINE.exec(rest); m; m = INLINE.exec(rest)) {
     if (m.index) out.push({ ...base, t: rest.slice(0, m.index) })
-    const [, code, b1, b2, st, i1, i2, lt, lh] = m
+    const [, code, b1, b2, st, i1, i2, lt, la, lb] = m, lh = la ?? lb
     if (code !== undefined) out.push({ ...base, t: code, code: true })
     else if (b1 ?? b2) out.push(...mdInline(b1 ?? b2!, { ...base, b: true }))
     else if (st !== undefined) out.push(...mdInline(st, { ...base, s: true }))
@@ -188,7 +190,7 @@ export function mdInline(s: string, base: Omit<Run, 't'> = {}): Run[] {
   return norm(out)
 }
 const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => mdInline(c.trim()))
-export function parseMarkdown(md: string): Doc {
+export function parseMarkdown(md: string, allowRemoteImages = false): Doc {
   const doc: Doc = [], lines = String(md ?? '').replace(/\r\n?/g, '\n').split('\n')
   let para: string[] = []
   const flush = () => { if (para.length) doc.push({ k: 'p', runs: mdInline(para.join(' ')) }); para = [] }
@@ -206,7 +208,11 @@ export function parseMarkdown(md: string): Doc {
     if ((m = /^>\s?(.*)$/.exec(t))) { flush(); doc.push({ k: 'quote', runs: mdInline(m[1]!) }); continue }
     if ((m = /^[-*+]\s+(.*)$/.exec(t))) { flush(); doc.push({ k: 'ul', runs: mdInline(m[1]!) }); continue }
     if ((m = /^\d+[.)]\s+(.*)$/.exec(t))) { flush(); doc.push({ k: 'ol', runs: mdInline(m[1]!) }); continue }
-    if ((m = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(t))) { flush(); const src = sanitizeHtml(`<img src="${m[2]!.replace(/"/g, '')}">`); if (src) doc.push({ k: 'img', src: decode(/src="([^"]*)"/.exec(src)![1]!), alt: m[1]! }); continue }
+    if ((m = new RegExp(String.raw`^!\[([^\]]*)\]\((?:${URL_MD})\)$`).exec(t))) {
+      flush(); const raw = m[2] ?? m[3]!
+      const src = sanitizeHtml(`<img src="${raw.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">`, { allowRemoteImages })
+      if (src) doc.push({ k: 'img', src: decode(/src="([^"]*)"/.exec(src)![1]!), alt: m[1]! }); continue
+    }
     if (t.startsWith('|') && /^\|?\s*:?-{3,}/.test(lines[i + 1]?.trim() ?? '')) {
       flush(); const rows = [cells(t)]; i++
       while (lines[i + 1]?.trim().startsWith('|')) rows.push(cells(lines[++i]!))
@@ -217,7 +223,9 @@ export function parseMarkdown(md: string): Doc {
   flush()
   return doc
 }
-export const markdownToHtml = (md: string) => sanitizeHtml(renderHtml(parseMarkdown(md)))
+export const markdownToHtml = (md: string, allowRemoteImages = false) => sanitizeHtml(renderHtml(parseMarkdown(md, allowRemoteImages)), { allowRemoteImages })
+// a link / image target written back to markdown: <…> when it has spaces or parens
+const mdUrl = (u: string) => (/[\s()<>]/.test(u) ? `<${u.replace(/[<>\n]/g, encodeURIComponent)}>` : u)
 
 // ---- Doc → markdown (the compact form agents read) ----
 function runsMd(runs: Run[]): string {
@@ -227,7 +235,7 @@ function runsMd(runs: Run[]): string {
     if (r.s) x = `~~${x}~~`
     if (r.i) x = `*${x}*`
     if (r.b) x = `**${x}**`
-    if (r.href) x = `[${x}](${r.href})`
+    if (r.href) x = `[${x}](${mdUrl(r.href)})`
     return x
   }).join('')
 }
@@ -237,7 +245,7 @@ export function toMarkdown(doc: Doc): string {
   doc.forEach((it, i) => {
     const glue = (it.k === 'ul' || it.k === 'ol' || it.k === 'quote') && doc[i - 1]?.k === it.k
     n = it.k === 'ol' ? (doc[i - 1]?.k === 'ol' ? n + 1 : 1) : 0
-    const s = it.k === 'hr' ? '---' : it.k === 'img' ? `![${it.alt}](${it.src})`
+    const s = it.k === 'hr' ? '---' : it.k === 'img' ? `![${it.alt}](${mdUrl(it.src)})`
       : it.k === 'table' ? it.rows.map((r, ri) => `| ${r.map(runsMd).join(' | ')} |${ri === 0 ? `\n|${r.map(() => '---').join('|')}|` : ''}`).join('\n')
       : it.k === 'pre' ? `\`\`\`\n${textOf(it.runs)}\n\`\`\``
       : `${{ p: '', h1: '# ', h2: '## ', h3: '### ', quote: '> ', ul: '- ', ol: `${n}. ` }[it.k]}${runsMd(it.runs)}`
@@ -245,5 +253,5 @@ export function toMarkdown(doc: Doc): string {
   })
   return out.join('\n\n')
 }
-export const htmlToMarkdown = (html: string) => toMarkdown(parseHtml(sanitizeHtml(html)))
+export const htmlToMarkdown = (html: string, allowRemoteImages = false) => toMarkdown(parseHtml(sanitizeHtml(html, { allowRemoteImages })))
 export const htmlText = (html: string) => docText(parseHtml(sanitizeHtml(html)))

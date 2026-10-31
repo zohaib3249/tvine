@@ -16,6 +16,7 @@ import { isStaff } from '../../security/permissions.js'
 import { scoped as scopedBy } from '../../security/scope.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
+import { refuseHumanOnly } from '../../data/fields/inputs.js'
 import { makePassword, validatePassword } from '../auth/passwords.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
 import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
@@ -129,11 +130,12 @@ async function valuesOf(a: Base, ctx: Ctx, obj: Row): Promise<Row> {
 
 // input values → { data (row keys), m2m, errors }; only form fields that are not read-only
 // `changed` (the LogEntry message) lists only fields whose value differs from `old` (Django form.changed_data)
-function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: Row) {
+function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: Row, agent = false) {
   const errors: Record<string, string> = {}
   const data: Row = {}, m2m: Record<string, unknown[]> = {}, changed: string[] = []
   const editable = (only ?? formFields(a)).filter((n) => a.model.fields[n] && !a.readonlyFields.includes(n))
   for (const k of Object.keys(values ?? {})) if (!editable.includes(k)) errors[k] = 'Unknown or read-only field.'
+  refuseHumanOnly(Object.fromEntries(editable.map((n) => [n, a.model.fields[n]!])), values, agent)   // field humanOnly: agents never set it
   for (const n of editable) {
     const f = a.model.fields[n]!
     const meta = fieldMeta(n, f, metaOpts(a))
@@ -143,7 +145,7 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
       continue
     }
     if (isPassword(n, f) && (values[n] === '' || values[n] == null)) continue   // blank = keep the password
-    const r = fromWire(n, f, meta.kind === 'rich' && typeof values[n] === 'string' ? sanitizeHtml(values[n]) : values[n])   // never trust the browser's sanitizer
+    const r = fromWire(n, f, meta.kind === 'rich' && typeof values[n] === 'string' ? sanitizeHtml(values[n], { allowRemoteImages: !!f.opts.allowRemoteImages }) : values[n])   // never trust the browser's sanitizer
     if (!r.ok) { errors[n] = r.error; continue }
     if (f.kind === 'm2m') m2m[n] = r.value as unknown[]
     else data[f.key(n)] = r.value
@@ -614,7 +616,7 @@ async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) 
 }
 async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
   await storeFiles(a, ctx, p, stored)
-  const c = clean(a, p.values, creating, undefined, obj)
+  const c = clean(a, p.values, creating, undefined, obj, ctx.request.agent.is)
   await cleanChoices(a, ctx, c, obj)
   if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
   const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
@@ -729,7 +731,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     const obj = objs.find((o) => String(o.id) === String(r.pk))
     if (!obj) { errors[`rows.${i}.pk`] = 'Not found.'; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
-    const c = clean(a, r.values, false, a.listEditable, obj)
+    const c = clean(a, r.values, false, a.listEditable, obj, ctx.request.agent.is)
     await cleanChoices(a, ctx, c, obj)
     for (const [f, m] of Object.entries(c.errors)) errors[`rows.${i}.${f}`] = m
     if (!Object.keys(c.errors).length) work.push({ obj, c })

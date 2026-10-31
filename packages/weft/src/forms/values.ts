@@ -11,7 +11,7 @@
 //   signature like image · rich '' when empty · the rest strings
 import { accepts } from '../widgets/file-upload.js'
 import type { FieldMeta, FormMeta, Row } from './types.js'
-import { E164, isCountry, isIp } from './rich.js'
+import { E164, isCountry, isIp, realDay, richTextLength } from './rich.js'
 import { htmlText } from './richdoc.js'
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -147,7 +147,7 @@ export function validateField(m: FieldMeta, v: any): string | undefined {
     case 'slug': if (!SLUG.test(v)) return 'Enter a valid “slug” consisting of letters, numbers, underscores or hyphens.'; break
     case 'uuid': if (!UUID.test(v)) return 'Enter a valid UUID.'; break
     case 'duration': if (isNaN(durationSeconds(v))) return 'Enter a valid duration.'; break
-    case 'date': if (isNaN(+new Date(v))) return 'Enter a valid date.'; break
+    case 'date': if (!realDay(String(v).slice(0, 10))) return 'Enter a valid date.'; break
     case 'datetime': if (isNaN(+new Date(v))) return 'Enter a valid date/time.'; break
     case 'json': try { JSON.parse(v) } catch { return 'Enter a valid JSON.' } break
     case 'choice': if (m.choices) {
@@ -185,7 +185,7 @@ export function validateField(m: FieldMeta, v: any): string | undefined {
     }
     case 'segmented': case 'currency': if (m.choices && !m.choices.some((c) => c.value === v)) return `Select a valid choice. ${v} is not one of the available choices.`; break
     case 'daterange': {
-      if (!v.start || isNaN(+new Date(v.start)) || !v.end || isNaN(+new Date(v.end))) return 'Enter a valid date range.'
+      if (!realDay(v.start) || !realDay(v.end)) return 'Enter a valid date.'
       if (v.start > v.end) return 'The end date must be on or after the start date.'
       return
     }
@@ -209,7 +209,7 @@ export function validateField(m: FieldMeta, v: any): string | undefined {
       return
     }
     case 'rich': {
-      const n = htmlText(v).replace(/\n/g, '').length
+      const n = richTextLength(v, { allowRemoteImages: m.allowRemoteImages })   // the server's count (visible text)
       if (m.maxLength != null && n > m.maxLength) return `Ensure this value has at most ${m.maxLength} characters (it has ${n}).`
       return
     }

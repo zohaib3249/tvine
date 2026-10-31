@@ -5,7 +5,7 @@
 // restoring the caret by (leaf, offset). Output is always sanitized HTML ('' when empty).
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
 import type { FieldWidgetProps } from './types.js'
-import { safeHref, sanitizeHtml } from './rich.js'
+import { richTextLength, safeHref, sanitizeHtml as sanitize } from './rich.js'
 import {
   clone, cut, docHtml, docText, emptyDoc, isLine, leafRuns, leaves, MARKS, norm, parseHtml, parseMarkdown, renderHtml, setLeafRuns, textOf,
   type Doc, type Item, type LineKind, type Mark, type Pos, type Run,
@@ -174,6 +174,7 @@ export const looksHtml = (s: string) => /<\/?[a-z][a-z0-9]*[\s>/]/i.test(s)
 type Tool = { label: string; title: string; run: () => void; pressed?: boolean }
 export function RichEditor(p: FieldWidgetProps & { uploadImage?: (f: File) => Promise<string> }) {
   const ed = useRef<HTMLDivElement>(null), fileIn = useRef<HTMLInputElement>(null)
+  const so = { allowRemoteImages: p.meta.allowRemoteImages }, sanitizeHtml = (h: string) => sanitize(h, so)
   const clean = sanitizeHtml(p.value ?? '')
   const [first] = useState(() => renderHtml(clean ? parseHtml(clean) : emptyDoc()))
   const hist = useRef<{ stack: { html: string; sel?: Sel }[]; i: number; t: number }>({ stack: [], i: -1, t: 0 })
@@ -247,7 +248,7 @@ export function RichEditor(p: FieldWidgetProps & { uploadImage?: (f: File) => Pr
     if (f && p.uploadImage) { try { src = await p.uploadImage(f) } catch (e) { setMsg(`Upload failed: ${(e as Error).message}`); return } }
     else src = globalThis.prompt?.('Image URL (https://… or /path)')?.trim()
     if (!src) return
-    if (!/^(https?:|\/(?![/\\]))/i.test(src)) { setMsg('Enter a valid image URL (https://… or /path).'); return }
+    if (!sanitizeHtml(`<img src="${src.replace(/"/g, '&quot;')}">`)) { setMsg(p.meta.allowRemoteImages ? 'Enter a valid image URL (https://… or /path).' : 'Enter an uploaded image path (/media/…).'); return }
     apply((d, s) => insertAfter(d, s, [{ k: 'img', src: src!, alt: f?.name ?? '' }]).doc)
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -280,7 +281,7 @@ export function RichEditor(p: FieldWidgetProps & { uploadImage?: (f: File) => Pr
     { label: '↶', title: 'Undo (Ctrl+Z)', run: () => travel(-1) }, { label: '↷', title: 'Redo (Ctrl+Shift+Z)', run: () => travel(1) },
     { label: '⌫', title: 'Clear formatting', run: () => apply((d, s) => clearFormat(d, s)) },
   ]
-  const max = p.meta.maxLength, chars = count.replace(/\n/g, '').length, words = count.trim() ? count.trim().split(/\s+/).length : 0
+  const max = p.meta.maxLength, chars = richTextLength(p.value ?? '', so), words = count.trim() ? count.trim().split(/\s+/).length : 0
   return <div className="tf-rich" data-part="rich">
     {!p.readOnly && <div className="tf-toolbar" role="toolbar" aria-label={`${p.meta.label} formatting`}>
       {tools.map((t, i) => t === '|' ? <span key={i} className="tf-tool-sep" aria-hidden="true" />
@@ -301,6 +302,6 @@ export function RichEditor(p: FieldWidgetProps & { uploadImage?: (f: File) => Pr
   </div>
 }
 // For agent controls: markdown or HTML in, sanitized HTML out.
-export const richFrom = (v: string, format?: 'html' | 'markdown') =>
-  docHtml((format ?? (looksHtml(v) ? 'html' : 'markdown')) === 'html' ? parseHtml(sanitizeHtml(v)) : parseMarkdown(v))
+export const richFrom = (v: string, format?: 'html' | 'markdown', allowRemoteImages = false) =>
+  docHtml((format ?? (looksHtml(v) ? 'html' : 'markdown')) === 'html' ? parseHtml(sanitize(v, { allowRemoteImages })) : parseMarkdown(v, allowRemoteImages))
 export { MARKS }

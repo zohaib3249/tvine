@@ -22,7 +22,8 @@ export interface FieldMeta {
   from?: string                 // slugAuto: the field it is built from (Django prepopulated_fields)
   of?: Partial<FieldMeta>       // list: the item kind (default text)
   free?: boolean                // tags with choices: free text allowed too
-  humanOnly?: boolean           // signature: default true (agents cannot draw); false exposes `clear` to agents
+  humanOnly?: boolean           // any kind: locked for agents (the ORM field's humanOnly; signature defaults to true, false exposes `clear`)
+  allowRemoteImages?: boolean   // rich: keep http(s) images (default: same-site media paths only)
 }
 
 export interface InlineMeta {

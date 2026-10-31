@@ -1,6 +1,6 @@
 // FieldMeta from ORM field definitions (contract §2), wire conversion of values, and input validation.
 import { type Field, type Kind } from '../../data/fields.js'
-import { pkField, type ModelDef } from '../../data/fields/index.js'
+import { LONG_TEXT_MAX, pkField, TAGS_MAX, type ModelDef } from '../../data/fields/index.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
 export type MetaKind = 'text' | 'textarea' | 'email' | 'url' | 'slug' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'datetime' | 'time' |
@@ -14,7 +14,7 @@ export interface FieldMeta {
   decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes?: number }
-  step?: number; palette?: string[]; language?: string; from?: string; of?: Partial<FieldMeta>; free?: boolean; humanOnly?: boolean
+  step?: number; palette?: string[]; language?: string; from?: string; of?: Partial<FieldMeta>; free?: boolean; humanOnly?: boolean; allowRemoteImages?: boolean
 }
 
 // 'createdAt' → 'Created at', 'shipTo' → 'Ship to' (Django verbose_name from the attribute name)
@@ -67,11 +67,14 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
     if (f.opts.maxItems) m.max = f.opts.maxItems
   }
   if (f.kind === 'code' && f.opts.language) m.language = f.opts.language
+  if (f.opts.humanOnly) { m.humanOnly = true; if (f.kind === 'image') m.kind = 'signature' }
+  if (f.kind === 'richText' && f.opts.allowRemoteImages) m.allowRemoteImages = true
+  if (f.kind === 'tags' && !m.max) m.max = TAGS_MAX
   if (f.kind === 'percent') { m.min = 0; m.max = 100 }
   if (f.kind === 'image') m.upload = { accept: 'image/*' }
   if (f.kind === 'file') m.upload = { accept: 'application/pdf,image/*' }   // every type media sniffing knows
   if (f.kind === 'decimal') { m.decimals = (f as unknown as { places: number }).places; m.max = 10 ** ((f as unknown as { digits: number }).digits - m.decimals) - 10 ** -m.decimals }
-  const ml = f.opts.maxLength ?? ({ email: 254, url: 200, slug: 50 } as Record<string, number>)[f.kind]
+  const ml = f.opts.maxLength ?? ({ email: 254, url: 200, slug: 50, markdown: LONG_TEXT_MAX, code: LONG_TEXT_MAX } as Record<string, number>)[f.kind]
   if (ml) m.maxLength = ml
   return { ...m, ...o.overrides[f.kind], ...o.overrides[n] }
 }

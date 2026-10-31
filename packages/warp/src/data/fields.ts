@@ -4,7 +4,7 @@ import { z } from 'zod'
 import {
   BoolField, DateField, DatetimeField, DecimalField, DurationField, EmailField, EnumField, FileField, FkField, FloatField, IdField,
   ImageField, IntField, JsonField, ColorField, PhoneField, IpField, CountryField, MarkdownField, CodeField, RichTextField, PercentField, TagsField,
-  AddressField, DateRangeField, type Address, type DateRange, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
+  AddressField, DateRangeField, signatureOpts, type Address, type DateRange, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
 } from './fields/index.js'
 
 export { concrete, isAuto, keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type ModelMeta, type Money, type OnDelete, type Opts } from './fields/index.js'
@@ -47,6 +47,8 @@ export const field = {
   address: mk<Address, 'address'>(AddressField),   // JSON {line1, line2?, city, region?, postal?, country}
   percent: mk<number, 'percent'>(PercentField),    // 0–100
   dateRange: mk<DateRange, 'dateRange'>(DateRangeField), // JSON {start, end} 'YYYY-MM-DD', inclusive
+  // an image a person draws (admin: signature widget); humanOnly — agent writes refused. Migrations see field.image.
+  signature: <const P extends Opts | undefined = undefined>(opts?: P) => new ImageField(signatureOpts(opts)) as unknown as Typed<string, 'image', P>,
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
     new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>

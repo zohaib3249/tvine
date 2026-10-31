@@ -43,7 +43,8 @@ const HINT: Partial<Record<FieldKind, (m: FieldMeta) => string>> = {
   address: () => '{line1, line2?, city, region?, postal?, country}', keyvalue: () => '{key: value}', ip: () => 'IPv4 or IPv6',
 }
 const SIGN_LOCK = 'a signature must be drawn by a person'
-const signLocked = (m: FieldMeta) => m.kind === 'signature' && m.humanOnly !== false
+const signLocked = (m: FieldMeta) => m.humanOnly === true || (m.kind === 'signature' && m.humanOnly !== false)
+const SECRET_KINDS = new Set<FieldKind>(['password', 'otp'])   // sensitive: state {filled}, args masked in step logs
 // long text in agent state: first 400 chars + the length (read_page stays compact; `read` gives the whole text)
 const CAP = 400
 const brief = (s: string) => (s.length > CAP ? `${s.slice(0, CAP)}… (${s.length} chars)` : s)
@@ -53,7 +54,7 @@ const isFile = (v: unknown): v is File => typeof File !== 'undefined' && v insta
 // Agent-visible state: JSON only, files as {name,type,size}, passwords never.
 function stateOf(m: FieldMeta, v: any, error?: string): FieldState {
   const s: FieldState = { kind: m.kind }
-  if (m.kind === 'password') s.filled = !!v
+  if (SECRET_KINDS.has(m.kind)) s.filled = !!v
   else if (m.kind === 'signature') s.filled = !!v
   else if (m.kind === 'rich') s.value = brief(htmlToMarkdown(v ?? ''))      // markdown: what the agent would send back
   else if (m.kind === 'markdown' || m.kind === 'code' || m.kind === 'textarea') s.value = brief(String(v ?? ''))
@@ -81,7 +82,7 @@ function paramFor(m: FieldMeta): ParamSpec {
     case 'country': return { type: 'string', enum: COUNTRY_CODES, optional: opt }
     case 'currency': return { type: 'string', enum: currencies(m), optional: opt }
     case 'daterange': case 'address': case 'keyvalue': case 'list': return { type: 'json', optional: opt }
-    default: return { type: 'string', ...(m.maxLength != null && m.kind !== 'rich' && { maxLength: m.maxLength }), ...(m.kind === 'password' && { secret: true }) }
+    default: return { type: 'string', ...(m.maxLength != null && m.kind !== 'rich' && { maxLength: m.maxLength }), ...(SECRET_KINDS.has(m.kind) && { secret: true }) }
   }
 }
 
@@ -94,7 +95,7 @@ function controlsFor(m: FieldMeta, value: any, apply: (v: any) => void, seen: Ma
         ...(m.kind === 'rich' && { format: { type: 'string', enum: ['markdown', 'html'], optional: true } }) },
       run: (a: { value: unknown; currency?: string }) => {
         if (m.kind === 'file' || m.kind === 'image') throw bad('use upload({file}) for files')
-        if (m.kind === 'rich') return commit(richFrom(String(a.value ?? ''), (a as { format?: 'html' | 'markdown' }).format))
+        if (m.kind === 'rich') return commit(richFrom(String(a.value ?? ''), (a as { format?: 'html' | 'markdown' }).format, m.allowRemoteImages))
         commit(fromApi(m, m.kind === 'money' ? { value: a.value, currency: a.currency ?? value?.currency ?? m.currency } : m.kind === 'json' ? a.value ?? null : a.value))
       },
     },
@@ -140,7 +141,10 @@ function inputsControls(m: FieldMeta, value: any, c: Record<string, Control<any,
   if (k === 'tags' || k === 'checkboxes') {
     const cur: string[] = value ?? [], one = { ...paramFor(m), multiple: undefined }
     c.add = { kind: 'select', params: { value: one }, run: (a: { value: string }) => { const t = String(a.value ?? '').trim(); if (!t) throw bad('value is empty'); if (!cur.includes(t)) commit([...cur, t]) } }
-    if (cur.length) c.remove = { kind: 'clear', params: { value: { type: 'string', enum: cur } }, run: (a: { value: string }) => commit(cur.filter((x) => x !== a.value)) }
+    c.remove = { kind: 'clear', params: { value: { type: 'string' } }, run: (a: { value: string }) => {   // no enum: a step may remove what the previous step added
+      if (!cur.includes(a.value)) throw bad(`${a.value} is not in the list.`)
+      commit(cur.filter((x) => x !== a.value))
+    } }
     if (k === 'checkboxes') c.toggle = { kind: 'toggle', params: { value: one }, run: (a: { value: string }) => commit(cur.includes(a.value) ? cur.filter((x) => x !== a.value) : [...cur, a.value]) }
   }
   if (k === 'keyvalue') {
@@ -150,18 +154,24 @@ function inputsControls(m: FieldMeta, value: any, c: Record<string, Control<any,
       const i = rows.findIndex((r) => r.key.trim() === key), row = { key, value: String(a.value ?? '') }
       commit(i < 0 ? [...rows, row] : rows.map((r, j) => (j === i ? row : r)))
     } }
-    if (rows.length) c.remove = { kind: 'clear', params: { key: { type: 'string', enum: rows.map((r) => r.key) } }, run: (a: { key: string }) => commit(rows.filter((r) => r.key !== a.key)) }
+    c.remove = { kind: 'clear', params: { key: { type: 'string' } }, run: (a: { key: string }) => {
+      if (!rows.some((r) => r.key === a.key)) throw bad(`No key ${a.key}.`)
+      commit(rows.filter((r) => r.key !== a.key))
+    } }
   }
   if (k === 'list') {
     const vs: unknown[] = value ?? [], sm = subMeta(m)
     c.add = { kind: 'set', params: { value: paramFor(sm) }, run: (a: { value: unknown }) => commit([...vs, fromApi(sm, a.value)]) }
-    if (vs.length) c.remove = { kind: 'clear', params: { index: { type: 'number', min: 0, max: vs.length - 1, step: 1 } }, run: (a: { index: number }) => commit(vs.filter((_, i) => i !== Number(a.index))) }
+    c.remove = { kind: 'clear', params: { index: { type: 'number', min: 0, step: 1 } }, run: (a: { index: number }) => {
+      if (!(Number(a.index) < vs.length)) throw bad(`No item ${a.index}.`)
+      commit(vs.filter((_, i) => i !== Number(a.index)))
+    } }
   }
   if (k === 'rich' || k === 'markdown') {
     c.append = { kind: 'input', params: { markdown: { type: 'string' } }, run: (a: { markdown: string }) => {
       const add = String(a.markdown ?? '')
       if (k === 'markdown') return commit(value ? `${value}\n\n${add}` : add)
-      commit(docHtml([...parseHtml(sanitizeHtml(value ?? '')), ...parseMarkdown(add)]))
+      commit(docHtml([...parseHtml(sanitizeHtml(value ?? '', { allowRemoteImages: m.allowRemoteImages })), ...parseMarkdown(add, m.allowRemoteImages)]))
     } }
   }
   if (k === 'rich') c.read = { kind: 'focus', label: 'Whole text as markdown', run: () => htmlToMarkdown(value ?? '') as Json }
@@ -185,8 +195,8 @@ export function Field(props: FieldProps) {
   } }]))
   const w = useWidget<FieldState>({
     id: `field:${m.name}`, name: m.name, kind: WKIND[m.kind] ?? 'input', label: m.label || m.name, state: s,
-    ...(m.help && { summary: [m.help] }), sensitive: m.kind === 'password', disabled: readOnly, changesContent: true,
-    ...(signLocked(m) && { humanOnly: SIGN_LOCK }),
+    ...(m.help && { summary: [m.help] }), sensitive: SECRET_KINDS.has(m.kind), disabled: readOnly, changesContent: true,
+    ...(signLocked(m) && { humanOnly: m.kind === 'signature' ? SIGN_LOCK : 'this field is set by a person' }),
     controls: readOnly ? {} : applyOverrides(fresh(), props.controls),
   })
   const uid = useId(), id = `${uid}-f`

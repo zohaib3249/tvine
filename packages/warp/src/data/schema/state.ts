@@ -23,7 +23,7 @@ export const emptyState = (): ProjectState => ({ apps: {} })
 const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto', 'autoNow', 'autoNowAdd'])
 // view-only flags (generic views' serializers) and the reverse accessor name: no DDL, so they never
 // enter state or migrations
-const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly', 'relatedName'])
+const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly', 'relatedName', 'humanOnly', 'allowRemoteImages'])
 
 // Field → spec (Django's deconstruct). Opts sorted so specs and generated code are deterministic.
 export function specOf(f: AnyField): FieldSpec {

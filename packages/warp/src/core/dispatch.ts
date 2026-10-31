@@ -535,7 +535,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   } catch (e) {
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]
     if (e instanceof DomainError) {
-      const code = e.code === 'invalid_param' || e.code === 'internal' ? e.code : 'domain'
+      const code = e.code === 'invalid_param' || e.code === 'internal' || e.code === 'human_only' ? e.code : 'domain'   // human_only: a humanOnly field (data/fields/inputs.ts)
       return [ev.err(code, e.message, { field: e.field, errors: e.errors, reason: e.code })]
     }
     server.log('error', 'action failed', { action: def.id, error: errStr(e) })
