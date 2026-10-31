@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
-import type { ActionDef } from '../../core/types.js'
+import type { ActionCtx, ActionDef } from '../../core/types.js'
 import type { Field, Fields, Kind, ModelDef } from '../../data/fields/index.js'
 import { hasDefault } from '../../data/fields.js'
 import type { Model } from '../../data/model.js'
@@ -443,6 +443,10 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
 
 // =========================================================================================================
 const staff = { permissions: [isStaff] }
+// agents = 'confirm' (auth.User / auth.Group by default): an agent's write answers confirm_required by 'human'
+const agentConfirm = (p: { model: string }, ctx: ActionCtx) =>
+  ctx.request.agent.is && site.adminFor(p.model)?.agents === 'confirm' ? { by: 'human' as const, message: `Change ${p.model}? (accounts and permissions)` } : undefined
+const write = { ...staff, confirm: agentConfirm }
 const read = { ...staff, readOnly: true }
 
 export const siteAction = defineAction('site', z.object({}), async (_p, ctx) => {
@@ -620,14 +624,14 @@ const MULTIPART = {
     return m
   },
 }
-export const create = Object.assign(defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), staff), { multipart: MULTIPART })
-export const update = Object.assign(defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), staff), { multipart: MULTIPART })
+export const create = Object.assign(defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), write), { multipart: MULTIPART })
+export const update = Object.assign(defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), write), { multipart: MULTIPART })
 
 const pksParams = z.object({ model: modelKey, pks: z.array(pkParam).max(MAX_PKS) })
 export const remove = defineAction('delete', pksParams, async ({ model, pks }, ctx) => {
   const a = await gate(ctx, model, 'delete')
   return deleteRows(a, ctx, await selected(a, ctx, pks))
-}, { ...staff, destructive: true })
+}, { ...write, destructive: true })
 
 export const deletePreview = defineAction('deletePreview', pksParams, async ({ model, pks }, ctx) => {
   const a = await gate(ctx, model, 'delete')
@@ -667,7 +671,7 @@ export const action = defineAction('action', z.object({
   const res = (await x.fn(a, ctx, qs, ids)) ?? {}
   for (const id of ids) await logAction(ctx, a._key, id, `${a._key} ${id}`, CHANGE, [{ action: x.name }])
   return { message: res.message ?? `${x.description}: ${ids.length} item(s).`, level: res.level ?? 'success', ...(res.download && { download: res.download }) }
-}, staff)
+}, write)
 
 export const autocomplete = defineAction('autocomplete', z.object({ model: modelKey, field: z.string().max(100), q: z.string().max(200).default(''), page: z.coerce.number().int().min(1).max(1000).default(1) }), async (p, ctx) => {
   // the source: the model's admin or an inline of some admin (Django AutocompleteJsonView.process_request)
@@ -727,7 +731,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     await logAction(ctx, a._key, row.id, a.str(row), CHANGE, [{ changed: { fields: c.changed.map(labelOf) } }])
   }
   return { ok: true, updated: work.filter((w) => w.c.changed.length).length }
-}, staff)
+}, write)
 
 
 // ---- dashboard + palette + per-user prefs ---------------------------------------------------------------

@@ -14,6 +14,7 @@ import { setPassword } from './users.js'
 type UserRow = typeof User extends { create(d: never): Promise<infer R> } ? R : never
 
 export class UserAdmin extends ModelAdmin<UserRow> {
+  agents: boolean | 'confirm' = 'confirm'   // an agent's change to accounts needs the user (secreview-3 M3); app: agents = true
   listDisplay = ['username', 'email', 'isStaff', 'isActive']
   listFilter = ['isStaff', 'isSuperuser', 'isActive']
   searchFields = ['username', 'email']
@@ -48,6 +49,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
 }
 
 export class GroupAdmin extends ModelAdmin {
+  agents: boolean | 'confirm' = 'confirm'
   searchFields = ['name']
   ordering = ['name']
 }

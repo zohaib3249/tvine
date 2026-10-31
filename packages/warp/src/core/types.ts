@@ -172,6 +172,8 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   rawParams?: boolean               // run() validates its own params (class views); dispatch passes them unparsed
   multipart?: { maxBytes: number; partBytes?: number }  // POST /tvine/api/<id> may be multipart: a `params` JSON part + file parts (all files ≤ maxBytes, each ≤ partBytes, default maxBytes)
 }
+export type ConfirmRule = true | { message?: string | ((params: any, ctx: ActionCtx) => string); by?: 'anyone' | 'human' }
+
 export interface ActionRules {
   anonymous?: boolean               // default true in v1
   rate?: { limit: number; windowMs: number }
@@ -186,7 +188,8 @@ export interface ActionRules {
   humanOnly?: true | string         // widgets/human-only.md: dispatch refuses every agent-marked request (human_only); no typed MCP tool
   // BACKLOG #2: the first call runs nothing and answers confirm_required + a single-use token (sid + action + params,
   // ~2 min); the same call again with params.$confirm = token runs. by 'human': only a human's request may confirm
-  confirm?: true | { message?: string | ((params: any, ctx: ActionCtx) => string); by?: 'anyone' | 'human' }
+  // a function decides per call (undefined = no confirm), e.g. admin's agents = 'confirm' asks only agent-marked writes
+  confirm?: ConfirmRule | ((params: any, ctx: ActionCtx) => ConfirmRule | undefined)
   audit?: boolean                   // false = never write a tvine.audit row for this action (settings.audit)
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
   // Django cache_page (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
