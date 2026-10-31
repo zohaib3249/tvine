@@ -5,7 +5,7 @@ import { DomainError } from '../core/errors.js'
 import { QuerySet } from './queryset.js'
 import { aggregateRows, atomic, bulkUpdate, engineSource, existsRows, insertMany, insertRow } from './engine.js'
 import { concrete, hasDefault, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
-import { registerDef } from './registry.js'
+import { defineChecked } from './registry.js'
 import { prefetch, related, type RelatedManager } from './related.js'
 import { checkIdent } from './sql/dialect.js'
 
@@ -80,8 +80,8 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
     async delete(id) { await objects.filter({ id }).delete() },
     related: (rel, id) => related(def, rel, id, atomic),
   }
+  defineChecked(def, model)   // reverse-name clashes are a definition error (Django's system check)
   registry.set(name, model)
-  registerDef(def, model)
   return model
 }
 

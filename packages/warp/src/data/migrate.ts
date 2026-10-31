@@ -11,6 +11,7 @@ import { appModule } from '../core/actions.js'
 import { contribLabels, installedApps } from '../core/apps.js'
 import { appSignals } from '../core/middleware.js'
 import { openConn, type Connection } from './db.js'
+import { checkRelations } from './registry.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
 import { and, bin, col, inList, param } from './sql/ast.js'
@@ -43,6 +44,7 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
       ;(out[app] ??= []).push(v)
     }
   }
+  checkRelations()
   if (!owner.size) throw new Error(`no models found under ${appsDir} (expected apps/<app>/models.ts); refusing to treat this as "all models removed"`)
   return out
 }

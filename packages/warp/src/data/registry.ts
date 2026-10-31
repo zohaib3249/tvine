@@ -7,7 +7,38 @@ type AnyField = Field<any, boolean, Kind, boolean>
 const defs = new Map<string, ModelDef>()
 const objects = new Map<string, unknown>()     // model name → its Model (model.ts)
 
-export const registerDef = (def: ModelDef, model?: unknown): void => { defs.set(def.name, def); if (model) objects.set(def.name, model) }
+let checked = false
+export const registerDef = (def: ModelDef, model?: unknown): void => { defs.set(def.name, def); if (model) objects.set(def.name, model); checked = false }
+// register + run the clash check; a clashing definition is not kept (the previous one, if any, stays)
+export function defineChecked(def: ModelDef, model: unknown): void {
+  const prev = [defs.get(def.name), objects.get(def.name)] as const
+  registerDef(def, model)
+  try { checkRelations() } catch (e) {
+    if (prev[0]) { defs.set(def.name, prev[0]); objects.set(def.name, prev[1]) } else { defs.delete(def.name); objects.delete(def.name) }
+    checked = false
+    throw e
+  }
+}
+
+// Django's reverse-accessor clash checks (fields.E304 / E302): every reverse name on a model is unique
+// and does not shadow one of its fields. Run at boot (discoverModels) and before the first relation lookup.
+export function checkRelations(): void {
+  if (checked) return
+  const seen = new Map<string, string>()   // `<target>.<reverse name>` → the field that claims it
+  for (const src of defs.values()) {
+    for (const [n, f] of Object.entries(src.fields)) {
+      if (f.kind !== 'fk' && f.kind !== 'm2m') continue
+      let target: ModelDef
+      try { target = f.target!() } catch { continue }   // target not defined yet: checked on a later call
+      const name = reverseName(src, f), key = `${target.name}.${name}`, who = `${src.name}.${n}`
+      const prev = seen.get(key)
+      if (prev && prev !== who) throw new Error(`${prev} and ${who} both give ${target.name} the reverse name "${name}": set relatedName on one of them`)
+      if (target.fields[name]) throw new Error(`${who}: its reverse name "${name}" clashes with the field ${target.name}.${name}: set relatedName`)
+      seen.set(key, who)
+    }
+  }
+  checked = true
+}
 export const modelNamed = <M>(name: string): M | undefined => objects.get(name) as M | undefined
 export const allDefs = (): ModelDef[] => [...defs.values()]
 
@@ -24,6 +55,7 @@ export const reverseName = (source: ModelDef, f: AnyField) => f.opts.relatedName
 
 // `name` as a relation from `def` (field name or reverse accessor), or undefined
 export function relationOf(def: ModelDef, name: string): Relation | undefined {
+  checkRelations()
   const own = def.fields[name]
   if (own?.kind === 'fk') return { kind: 'fk', name, field: own, col: colOf(def, name), target: own.target!() }
   if (own?.kind === 'm2m') {
