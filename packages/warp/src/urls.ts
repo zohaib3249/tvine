@@ -173,7 +173,13 @@ export async function loadUrls(appsDir: string, installed: readonly string[] = [
       let re: RegExp
       try { re = new RegExp(`^/${parts ? parts.map(reOf).join('') : src}$`) } catch (x) { throw new ImproperlyConfigured(`${file}: ${shownAt}: ${(x as Error).message}`) }
       const convs = Object.fromEntries((parts ?? []).filter((p) => typeof p !== 'string').map((p) => [p.name, p.conv]))
-      routes.push({ pattern: shownAt, re, parts, convs, methods, name, file })
+      // one pattern + name written as several entries (a router's list + create) is one route with more methods
+      const same = routes.find((r) => r.name === name && keyOf(r.re) === keyOf(re))
+      if (!same) { routes.push({ pattern: shownAt, re, parts, convs, methods, name, file }); continue }
+      for (const [m, d] of methods) {
+        if (same.methods.has(m)) throw new ImproperlyConfigured(`${file}: ${m} ${shownAt} is already routed (${same.file})`)
+        same.methods.set(m, d)
+      }
     }
   }
   const mod = await load(root)
@@ -182,9 +188,11 @@ export async function loadUrls(appsDir: string, installed: readonly string[] = [
   return table(routes)
 }
 
+const keyOf = (re: RegExp) => re.source.replace(/\(\?<\w+>/g, '(')
+
 // two routes to the same pattern + method, or one name on two patterns → boot error
 function check(routes: Route[]): void {
-  const key = (r: Route) => r.re.source.replace(/\(\?<\w+>/g, '(')
+  const key = (r: Route) => keyOf(r.re)
   const seen = new Map<string, Route>(), names = new Map<string, Route>()
   for (const r of routes) {
     for (const m of r.methods.keys()) {
