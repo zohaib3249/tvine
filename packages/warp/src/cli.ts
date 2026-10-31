@@ -7,8 +7,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
-import { openConn } from './data/db.js'
-import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { connections, openConn } from './data/db.js'
+import { discoverModels, makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -29,6 +30,8 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
                                 <app>: forward to its latest; <target>: forward or ROLL BACK to it
   sqlmigrate <app> <migration> [--backwards]
+  dumpdata [app[.model] …] [--output f.json]   fixtures as JSON (fk order)
+  loaddata <f.json> …           load fixtures in one transaction (upsert by pk)
   showmigrations`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
@@ -45,6 +48,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, 2] },
   sqlmigrate: { options: { backwards: bool }, args: [2, 2] },
   showmigrations: { options: {}, args: [0, 0] },
+  dumpdata: { options: { output: str }, args: [0, Infinity] },
+  loaddata: { options: {}, args: [1, Infinity] },
 }
 
 class Usage extends Error {}
@@ -101,7 +106,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
-    if (args.length < spec.args[0]) throw new Usage(`usage: tvine ${cmd} <app> <migration>`)
+    if (args.length < spec.args[0]) throw new Usage(cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
@@ -221,6 +226,21 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const [app, name] = args as [string, string]
         const conn = openConn((await loadSettings()).db.url)   // the connected dialect, as Django does
         try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { backwards: !!o.backwards })) } finally { await conn.driver.close() }
+        return 0
+      }
+      case 'dumpdata': case 'loaddata': {
+        connections.configure({ db: (await loadSettings()).db })
+        try {
+          const models = await discoverModels(apps)
+          if (cmd === 'dumpdata') {
+            const json = JSON.stringify(await dumpData(models, args), null, 2)
+            if (o.output) { writeFileSync(o.output as string, json + '\n'); io.out(`wrote ${o.output}`) } else io.out(json)
+          } else {
+            const rows = args.flatMap(f => JSON.parse(readFileSync(f, 'utf8')) as FixtureRow[])
+            const n = await loadData(models, rows)   // every file in ONE transaction
+            io.out(`installed ${n} object(s) from ${args.length} fixture(s)`)
+          }
+        } finally { await connections.closeAll() }
         return 0
       }
       default: {   // showmigrations

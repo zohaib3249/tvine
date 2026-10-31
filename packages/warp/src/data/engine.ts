@@ -346,6 +346,20 @@ export function bulkUpdate(def: ModelDef, rows: Record<string, unknown>[], field
   })
 }
 
+// after rows were inserted with explicit ids (loaddata): postgres sequences do not move by themselves
+// (sqlite AUTOINCREMENT and mysql AUTO_INCREMENT follow the max id)
+export function resetSequences(defs: ModelDef[]): Promise<void> {
+  return exec(async ({ driver, dialect }) => {
+    if (dialect.name !== 'postgres') return
+    for (const def of defs) {
+      const [pk, f] = pkField(def)
+      if (f.kind !== 'id') continue
+      const q = dialect.quoteIdent
+      await driver.query(`SELECT setval(pg_get_serial_sequence($1, $2), COALESCE(MAX(${q(pk)}), 1), MAX(${q(pk)}) IS NOT NULL) FROM ${q(def.name)}`, [q(def.name), pk])
+    }
+  })
+}
+
 // ---- delete + ORM-side onDelete -------------------------------------------------------------------
 // PROTECT: refuse with a readable error (the DB's RESTRICT backs it). SET_DEFAULT on mysql (InnoDB
 // rejects it): set the default first. CASCADE / SET_NULL / RESTRICT / DO_NOTHING: the database does it.
