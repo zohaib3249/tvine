@@ -57,12 +57,17 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
     if (f.kind === 'm2m') m.multiple = true
   }
   if (f.kind === 'image') m.upload = { accept: 'image/*' }
+  if (f.kind === 'file') m.upload = { accept: 'application/pdf,image/*' }   // every type media sniffing knows
+  if (f.kind === 'decimal') { m.decimals = (f as unknown as { places: number }).places; m.max = 10 ** ((f as unknown as { digits: number }).digits - m.decimals) - 10 ** -m.decimals }
+  const ml = f.opts.maxLength ?? ({ email: 254, url: 200, slug: 50 } as Record<string, number>)[f.kind]
+  if (ml) m.maxLength = ml
   return { ...m, ...o.overrides[f.kind], ...o.overrides[n] }
 }
 
 // a stored row value → JSON (fk = the related pk, money = {value, currency}, dates ISO)
 export function toWire(f: AnyField, row: Record<string, unknown>, n: string): unknown {
   const v = row[f.key(n)]
+  if (f.kind === 'duration' && typeof v === 'number') return v / 1000   // ORM ms → the form's seconds
   return v instanceof Date ? v.toISOString() : v ?? null
 }
 
@@ -82,6 +87,8 @@ export function fromWire(n: string, f: AnyField, v: unknown): { ok: true; value:
   let x = v
   if (f.kind === 'datetime' && typeof v === 'string') { x = new Date(v); if (Number.isNaN((x as Date).getTime())) return { ok: false, error: 'Enter a valid date/time.' } }
   if ((f.kind === 'int' || f.kind === 'float') && typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) x = Number(v)
+  if (f.kind === 'duration' && v !== undefined && Number.isFinite(Number(v))) x = Number(v) * 1000   // seconds → ms
+  if (f.kind === 'decimal' && typeof v === 'number') x = String(v)
   if (f.kind === 'bool' && typeof v === 'string') x = v === 'true' || v === '1' || v === 'on'
   if (f.kind === 'fk') {
     const pk = coercePk(f.target!(), v)

@@ -128,9 +128,10 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
   }
   return { data, m2m, errors, changed }
 }
+// every bad field (Django ValidationError dict): `errors` per input (inline rows `lines.0.qty`), `field` = the first
 const fieldErrors = (errors: Record<string, string>, prefix = ''): DomainError => {
-  const [first] = Object.keys(errors)
-  return new DomainError('invalid_param', Object.entries(errors).map(([k, v]) => `${prefix}${k}: ${v}`).join('\n'), prefix + first)
+  const list = Object.entries(errors).map(([k, message]) => ({ field: prefix + k, message }))
+  return new DomainError('invalid_param', list.map((e) => `${e.field}: ${e.message}`).join('; '), list[0]!.field, list)
 }
 
 // ---- changelist ---------------------------------------------------------------------------------------
@@ -139,7 +140,7 @@ function filterSpecs(a: ModelAdmin): Spec[] {
   return a.listFilter.map((f): Spec => {
     if (isFilterClass(f)) { const i = new f(); return { name: i.parameterName, label: i.title || labelOf(i.parameterName), kind: 'custom', cls: f } }
     const k = a.model.fields[f]!.kind
-    return { name: f, label: labelOf(f), field: f, kind: k === 'bool' ? 'boolean' : k === 'datetime' ? 'date' : k === 'fk' ? 'related' : 'choice' }
+    return { name: f, label: labelOf(f), field: f, kind: k === 'bool' ? 'boolean' : k === 'datetime' || k === 'date' ? 'date' : k === 'fk' ? 'related' : 'choice' }
   })
 }
 const DATE_CHOICES: [string, string][] = [['today', 'Today'], ['past7', 'Past 7 days'], ['month', 'This month'], ['year', 'This year']]
@@ -159,7 +160,6 @@ async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, str
   const vals = await a.model.objects.values(key).distinct().order(key).all(200)
   return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
 }
-function dayStart(d: Date) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
 async function applyFilter(a: ModelAdmin, ctx: Ctx, qs: QuerySet<any>, s: Spec, v: string): Promise<QuerySet<any>> {
   if (v.length > 200) throw bad(`filters.${s.name}`, 'value too long')
   if (s.cls) return (await new s.cls(v).queryset(ctx, qs)) ?? qs
@@ -167,10 +167,12 @@ async function applyFilter(a: ModelAdmin, ctx: Ctx, qs: QuerySet<any>, s: Spec, 
   if (v === 'null' && f.opts.optional) return qs.filter({ [key]: null })
   if (s.kind === 'boolean') { if (v !== 'true' && v !== 'false') throw bad(`filters.${n}`, 'expected true or false'); return qs.filter({ [key]: v === 'true' }) }
   if (s.kind === 'date') {
-    const now = new Date(), t = dayStart(now)
-    const from = v === 'today' ? t : v === 'past7' ? new Date(t.getTime() - 6 * 86_400_000) : v === 'month' ? new Date(t.getFullYear(), t.getMonth(), 1) : v === 'year' ? new Date(t.getFullYear(), 0, 1) : undefined
+    // Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
+    const day = (d: Date) => d.toISOString().slice(0, 10), t = new Date(), today = day(t)
+    const from = v === 'today' ? today : v === 'past7' ? day(new Date(t.getTime() - 6 * 86_400_000)) : v === 'month' ? today.slice(0, 8) + '01' : v === 'year' ? today.slice(0, 5) + '01-01' : undefined
     if (!from) throw bad(`filters.${n}`, 'not a choice')
-    return qs.filter({ [`${key}__gte`]: from, [`${key}__lt`]: new Date(t.getTime() + 86_400_000) })
+    const k = f.kind === 'date' ? key : `${key}__date`
+    return qs.filter({ [`${k}__gte`]: from, [`${k}__lte`]: today })
   }
   if (f.kind === 'enum' && !(f.values ?? []).includes(v)) throw bad(`filters.${n}`, 'not a choice')
   if (s.kind === 'related') { const pk = coercePk(f.target!(), v); if (pk === undefined) throw bad(`filters.${n}`, 'not a valid key'); return qs.filter({ [key]: pk }) }
@@ -190,10 +192,8 @@ function applyHierarchy(a: ModelAdmin, qs: QuerySet<any>, filters: Record<string
   }
   const y = num('year', 1, 9999), m = num('month', 1, 12), d = num('day', 1, 31)
   if (y === undefined) return qs
-  const from = new Date(y, (m ?? 1) - 1, d ?? 1)
-  const to = d !== undefined ? new Date(y, m! - 1, d + 1) : m !== undefined ? new Date(y, m, 1) : new Date(y + 1, 0, 1)
-  const key = a.model.fields[dh]!.key(dh)
-  return qs.filter({ [`${key}__gte`]: from, [`${key}__lt`]: to })
+  const key = a.model.fields[dh]!.key(dh)   // the ORM's __year/__month/__day lookups (UTC)
+  return qs.filter({ [`${key}__year`]: y, ...(m !== undefined && { [`${key}__month`]: m, ...(d !== undefined && { [`${key}__day`]: d }) }) })
 }
 // Django get_search_results: every term matches some field (^ startswith, = exact, @ full text → contains)
 function applySearch(a: ModelAdmin, qs: QuerySet<any>, q: string): QuerySet<any> {
@@ -283,28 +283,28 @@ async function relatedReprs(a: ModelAdmin, rows: Row[], cols: Col[]): Promise<Ma
 async function hierarchyFacets(a: ModelAdmin, ctx: Ctx, p: ListParams): Promise<Record<string, { value: string; label: string; count: number }[]>> {
   const dh = a.dateHierarchy!, key = a.model.fields[dh]!.key(dh), f = p.filters ?? {}
   const base = applyHierarchy(a, await changelistQs(a, ctx, { ...p, filters: Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${dh}__`))) }), {})
-  const range = (from: Date, to: Date) => base.filter({ [`${key}__gte`]: from, [`${key}__lt`]: to }).count()
+  const at = (o: Record<string, number>) => base.filter(Object.fromEntries(Object.entries(o).map(([k, n]) => [`${key}__${k}`, n]))).count()
   const y = f[`${dh}__year`], m = f[`${dh}__month`]
   const out: { value: string; label: string; count: number }[] = []
   if (y === undefined) {
     const { lo, hi } = await base.aggregate({ lo: Min(key), hi: Max(key) })
     if (!lo) return { [`${dh}__year`]: [] }
     // ponytail: one COUNT per year, capped at 50 years
-    for (let yr = Math.max(new Date(lo).getFullYear(), new Date(hi).getFullYear() - 49); yr <= new Date(hi).getFullYear(); yr++) {
-      const n = await range(new Date(yr, 0, 1), new Date(yr + 1, 0, 1))
+    for (let yr = Math.max(new Date(lo).getUTCFullYear(), new Date(hi).getUTCFullYear() - 49); yr <= new Date(hi).getUTCFullYear(); yr++) {
+      const n = await at({ year: yr })
       if (n) out.push({ value: String(yr), label: String(yr), count: n })
     }
     return { [`${dh}__year`]: out }
   }
   if (m === undefined) {
     for (let mo = 0; mo < 12; mo++) {
-      const n = await range(new Date(+y, mo, 1), new Date(+y, mo + 1, 1))
+      const n = await at({ year: +y, month: mo + 1 })
       if (n) out.push({ value: String(mo + 1), label: new Date(+y, mo, 1).toLocaleString('en', { month: 'long' }), count: n })
     }
     return { [`${dh}__month`]: out }
   }
   for (let d = 1; d <= new Date(+y, +m, 0).getDate(); d++) {
-    const n = await range(new Date(+y, +m - 1, d), new Date(+y, +m - 1, d + 1))
+    const n = await at({ year: +y, month: +m, day: d })
     if (n) out.push({ value: String(d), label: String(d), count: n })
   }
   return { [`${dh}__day`]: out }
@@ -471,8 +471,7 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
     count = await qs.count()
     if (p.all && count > a.listMaxShowAll) throw bad('all', `more than ${a.listMaxShowAll} rows`)
     if (page > 1 && (page - 1) * size >= count) throw bad('page', 'no such page')
-    // ponytail: the ORM has cursor paging only, so page N reads N*size rows; add QuerySpec.offset if admins page deep
-    rows = (await orderOf(a, qs, p.ordering).all(page * size)).slice((page - 1) * size)
+    rows = await orderOf(a, qs, p.ordering).slice((page - 1) * size, page * size).all()   // LIMIT/OFFSET
   }
   const rel = await relatedReprs(a, rows, cols)
   const out = []
@@ -532,7 +531,7 @@ async function storeFiles(a: ModelAdmin, ctx: Ctx, p: z.infer<typeof saveParams>
     const f = owner && formFields(owner).includes(m![3]!) ? owner.model.fields[m![3]!] : undefined
     const up = f && fieldMeta(m![3]!, f, metaOpts(owner!)).upload
     if (!up) throw bad(part.field, 'not a file field of this form')
-    const file = await storePart(part, { maxBytes: up.maxBytes ?? FILE_MAX, types: typesOf(up.accept) }, ctx.settings.media)
+    const file = await storePart(part, { maxBytes: up.maxBytes ?? FILE_MAX, types: typesOf(up.accept), uploadTo: f!.opts.uploadTo }, ctx.settings.media)
     stored.push(file.key)
     if (!m![1]) p.values[m![3]!] = file.key
     else {
@@ -624,9 +623,8 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
   if (target.agents === false && ctx.request.agent.is) throw forbidden()
   const size = 20
   const qs = applySearch(target, target.getQueryset(ctx), p.q).order(...(target.ordering ?? ['id']))
-  const rows = await qs.all(p.page * size + 1)
-  const pageRows = rows.slice((p.page - 1) * size, p.page * size)
-  return { results: pageRows.map((r: Row) => ({ pk: String(r.id), text: target.str(r) })), more: rows.length > p.page * size }
+  const rows = await qs.slice((p.page - 1) * size, p.page * size + 1).all()   // one extra row tells `more`
+  return { results: rows.slice(0, size).map((r: Row) => ({ pk: String(r.id), text: target.str(r) })), more: rows.length > size }
 }, read)
 
 export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {

@@ -186,7 +186,7 @@ export interface FilePart { field: string; filename: string; type: string; data:
 export const PARTS = Symbol.for('tvine.fileParts')
 export const filePartsOf = (request: object): FilePart[] => (request as { [PARTS]?: FilePart[] })[PARTS] ?? []
 
-export function storePart(p: FilePart, limits: { maxBytes: number; types: string[]; storage?: Storage }, media?: Media): Promise<UploadedFile> {
+export function storePart(p: FilePart, limits: { maxBytes: number; types: string[]; storage?: Storage; uploadTo?: string }, media?: Media): Promise<UploadedFile> {
   if (p.data.length > limits.maxBytes) return Promise.reject(new DomainError('too_large', `file exceeds ${limits.maxBytes} bytes`, p.field))
   return receiveUpload(Readable.from([p.data]), { upload: limits } as UploadDef, { field: p.field, media })
 }

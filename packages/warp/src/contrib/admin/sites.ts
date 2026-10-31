@@ -116,7 +116,7 @@ export class AdminSite {
         if (!has(p[0]!) && !relationOf(a.model, p[0]!)) throw new Error(`${where}.searchFields: "${s}" does not start with a field`)
         if (p.length === 1 && fields[p[0]!]?.kind === 'money') throw new Error(`${where}.searchFields: "${s}" is a money field`)
       }
-      if (a.dateHierarchy && fields[a.dateHierarchy]?.kind !== 'datetime') throw new Error(`${where}.dateHierarchy: "${a.dateHierarchy}" is not a datetime field`)
+      if (a.dateHierarchy && fields[a.dateHierarchy]?.kind !== 'datetime' && fields[a.dateHierarchy]?.kind !== 'date') throw new Error(`${where}.dateHierarchy: "${a.dateHierarchy}" is not a date or datetime field`)
       for (const n of [...a.autocompleteFields, ...a.rawIdFields]) if (!['fk', 'm2m'].includes(fields[n]?.kind ?? '')) throw new Error(`${where}: "${n}" is not a foreign key or many-to-many field`)
       for (const n of [...(a.fields ?? []), ...a.exclude, ...(a.fieldsets ?? []).flatMap(([, f]) => f.fields)]) {
         if (!has(n) && !a.readonlyFields.includes(n)) throw new Error(`${where}: "${n}" is not a field`)
