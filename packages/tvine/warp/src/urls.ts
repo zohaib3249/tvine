@@ -1,6 +1,6 @@
 // Django URLs (docs/design/conventions/urls.md): path / re_path / include / reverse, DRF routers. Every
 // route names an action the manifest already holds; transport/urls dispatches it like POST /tvine/api/<id>.
-// The project's urls.ts (next to settings.ts) is the ROOT_URLCONF; without one there are no URL routes.
+// The project's config/urls.ts (or urls.ts; settings.rootUrlconf) is the ROOT_URLCONF; without one there are no URL routes.
 import { dirname } from 'node:path'
 import { appModule, importApp, isActionDef } from './core/actions.js'
 import { installedApps } from './core/apps.js'
@@ -129,9 +129,12 @@ function methodsOf(e: UrlPattern, parts: Part[] | undefined): Map<string, Action
   return m
 }
 
-// Boot: the root urls.ts (dirname(appsDir)/urls) → a flat table. Every problem names its file.
-export async function loadUrls(appsDir: string, installed: readonly string[] = []): Promise<UrlTable | undefined> {
-  const root = appModule(dirname(appsDir), 'urls')
+// Boot: the ROOT_URLCONF → a flat table. Every problem names its file. settings.rootUrlconf (a path from the
+// project root, dirname(appsDir), without extension) must exist; unset, config/urls then urls are tried.
+export async function loadUrls(appsDir: string, installed: readonly string[] = [], rootUrlconf?: string): Promise<UrlTable | undefined> {
+  const base = dirname(appsDir)
+  const root = rootUrlconf ? appModule(base, rootUrlconf) : appModule(base, 'config/urls') ?? appModule(base, 'urls')
+  if (rootUrlconf && !root) throw new ImproperlyConfigured(`settings.rootUrlconf: no ${rootUrlconf}.ts in ${base}`)
   if (!root) return undefined
   const apps = new Map(installedApps(appsDir, installed).map((a) => [a.contrib ? `tvine.${a.label}` : a.label, a.dir]))
   const routes: Route[] = []

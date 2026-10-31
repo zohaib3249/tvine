@@ -1,7 +1,8 @@
-// Installed apps (Django INSTALLED_APPS): every apps/<label>/ folder of the project, plus the built-in apps
-// settings.installedApps enables. 'tvine.<name>' → <warp>/src|dist/contrib/<name>/, shaped like a project app
-// (models, views, rules, serializers, middleware, hooks, migrations/); its app label is <name>. Contrib
-// migrations ship with the package: makemigrations never writes them.
+// Installed apps (Django INSTALLED_APPS): exactly what settings.installedApps lists. A plain name 'blog' is the
+// project app apps/blog/; 'tvine.<name>' is a built-in app, <warp>/src|dist/contrib/<name>/, shaped like a project
+// app (models, views, rules, serializers, middleware, hooks, migrations/); its app label is <name>. Contrib
+// migrations ship with the package: makemigrations never writes them. A folder in apps/ that is not listed is
+// not loaded (tvine check warns: unlistedApps).
 import { readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,9 +18,9 @@ export const contrib = { root: join(dirname(fileURLToPath(import.meta.url)), '..
 // settings.installedApps → contrib entries, in the listed order. Unknown or repeated names fail at boot.
 export function contribApps(installed: readonly string[] = []): AppEntry[] {
   const seen = new Set<string>()
-  return installed.map((name) => {
+  return installed.filter((n) => n.startsWith('tvine.')).map((name) => {
     const m = INSTALLED_RE.exec(name)
-    if (!m) throw new Error(`settings.installedApps: "${name}" is not a built-in app name (tvine.<name>); project apps under apps/ are found without listing them`)
+    if (!m) throw new Error(`settings.installedApps: "${name}" is not a built-in app name (tvine.<name>)`)
     const label = m[1]!
     const dir = join(contrib.root, label)
     if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`settings.installedApps: unknown built-in app "${name}"`)
@@ -29,15 +30,25 @@ export function contribApps(installed: readonly string[] = []): AppEntry[] {
   })
 }
 
-// Project apps (sorted folder names) first, then the enabled contrib apps. A project folder with a contrib
-// app's label is a boot error: ids, tables and migrations would collide.
+// Listed project apps (in the listed order) first, then the listed built-in apps. A listed app with no folder,
+// a name listed twice, or a project app named like a listed built-in one is a boot error.
 export function installedApps(appsDir: string, installed: readonly string[] = []): AppEntry[] {
   const builtIn = contribApps(installed)
-  const own = readdirSync(appsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
-  for (const c of builtIn) {
-    if (own.includes(c.label)) throw new Error(`apps/${c.label} clashes with the built-in app tvine.${c.label} (settings.installedApps): rename the folder`)
+  const own = installed.filter((n) => !n.startsWith('tvine.'))
+  const seen = new Set<string>()
+  for (const label of own) {
+    if (seen.has(label)) throw new Error(`settings.installedApps: "${label}" is listed twice`)
+    seen.add(label)
+    if (builtIn.some((c) => c.label === label)) throw new Error(`apps/${label} clashes with the built-in app tvine.${label} (settings.installedApps): rename the folder`)
+    if (!statSync(join(appsDir, label), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`settings.installedApps: "${label}" has no folder ${join(appsDir, label)} (create it with tvine startapp ${label})`)
   }
   return [...own.map((label) => ({ label, dir: join(appsDir, label), contrib: false })), ...builtIn]
+}
+
+// apps/<x>/ folders that settings.installedApps does not list (tvine check warns about each)
+export function unlistedApps(appsDir: string, installed: readonly string[] = []): string[] {
+  if (!statSync(appsDir, { throwIfNoEntry: false })?.isDirectory()) return []
+  return readdirSync(appsDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !installed.includes(d.name)).map((d) => d.name).sort()
 }
 
 export const contribLabels = (installed: readonly string[] = []) => new Set(contribApps(installed).map((a) => a.label))

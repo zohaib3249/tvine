@@ -17,14 +17,37 @@ cd mysite
 pnpm tvine migrate
 pnpm tvine createsuperuser
 pnpm tvine dev                     # http://localhost:3000: the Tvine welcome page, /admin, /mcp
-pnpm tvine startapp notes --model Note    # apps/notes/: models, views, urls, admin, tests
+pnpm tvine startapp notes          # apps/notes/ stubs; adds 'notes' to installedApps and config/urls.ts
 pnpm tvine makemigrations && pnpm tvine migrate
 ```
 
 Node 22.15 or newer. From a clone: `pnpm install && pnpm -r build`, then
 `node packages/tvine/warp/bin/tvine.js startproject mysite ../mysite --local` (links the clone's package).
-What each command does: [cli.md](cli.md). The rest of this guide builds
-`examples/notes/` by hand, file by file.
+What each command does: [cli.md](cli.md).
+
+```
+mysite/
+├─ config/
+│  ├─ settings/
+│  │  ├─ base.ts            shared: installedApps, middleware, db, auth…
+│  │  ├─ dev.ts             base + debug, local hosts (tvine dev, migrate, shell…)
+│  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
+│  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
+│  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
+│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
+├─ apps/                    your Django apps, each listed in installedApps
+├─ app/                     Next.js pages (the welcome page)
+├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
+```
+
+**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+`tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
+(`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
+`config/settings/` (like examples/notes) uses its root `settings.ts`.
+
+The rest of this guide builds `examples/notes/` by hand, file by file. It keeps everything in one root
+`settings.ts` and `urls.ts`, which Tvine also finds when there is no `config/` folder.
 
 ## 1. Project files
 
@@ -53,9 +76,39 @@ import { defineSettings } from 'tvine'
 
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
-  installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin'],   // users, background jobs, /admin
+  installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin', 'notes'],   // users, background jobs, /admin, apps/notes
 })
 ```
+
+`'notes'` is the project app in `apps/notes/`: like Django's `INSTALLED_APPS`, only listed apps load.
+
+`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
+when the file has a shape it does not recognise; an entry already there is left alone):
+
+```
+apps/blog/
+├─ models.ts        // Create your models here.
+├─ views.ts         // Create your views here.
+├─ admin.ts         // Register your models here.
+├─ urls.ts          export const appName = 'blog'; export const urlpatterns = []
+├─ tests/blog.test.ts
+└─ migrations/
+```
+
+Optional app files (create them when you need them):
+
+| File | What it holds |
+|---|---|
+| `rules.ts` | app-wide action rules: rate limits, permissions (an action's own rules win) |
+| `serializers.ts` | per-node-type snapshot shaping: hide fields from agents, add computed ones |
+| `middleware.ts` | action middleware that wraps only this app's actions |
+| `tasks.ts` | background tasks (`defineTask`) |
+| `hooks.ts` | `postMigrate` and other app hooks |
+
+**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+`'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
+`tvine check` warns about a folder in `apps/` that is not listed.
 
 Everything else is a default: SQLite at `./tvine.db`, jobs in `./tasks.db`. All keys:
 [settings-and-env.md](settings-and-env.md).

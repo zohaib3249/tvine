@@ -50,9 +50,60 @@ cd my-app && pnpm install
 pnpm exec tvine migrate
 pnpm exec tvine createsuperuser
 pnpm exec tvine dev                             # opens the Tvine welcome page
-pnpm exec tvine startapp blog --model Post      # (new) adds apps/blog with a model, views, admin
-pnpm exec tvine shell                           # (new) a REPL with your models loaded
+pnpm exec tvine startapp blog                   # apps/blog stubs + installedApps + config/urls.ts
+pnpm exec tvine shell                           # a REPL with your models loaded
 ```
+
+The generated project:
+
+```
+mysite/
+├─ config/
+│  ├─ settings/
+│  │  ├─ base.ts            shared: installedApps, middleware, db, auth…
+│  │  ├─ dev.ts             base + debug, local hosts (tvine dev, migrate, shell…)
+│  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
+│  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
+│  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
+│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
+├─ apps/                    your Django apps, each listed in installedApps
+├─ app/                     Next.js pages (the welcome page)
+├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
+```
+
+**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+`tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
+(`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
+`config/settings/` (like examples/notes) uses its root `settings.ts`.
+
+`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
+when the file has a shape it does not recognise; an entry already there is left alone):
+
+```
+apps/blog/
+├─ models.ts        // Create your models here.
+├─ views.ts         // Create your views here.
+├─ admin.ts         // Register your models here.
+├─ urls.ts          export const appName = 'blog'; export const urlpatterns = []
+├─ tests/blog.test.ts
+└─ migrations/
+```
+
+Optional app files (create them when you need them):
+
+| File | What it holds |
+|---|---|
+| `rules.ts` | app-wide action rules: rate limits, permissions (an action's own rules win) |
+| `serializers.ts` | per-node-type snapshot shaping: hide fields from agents, add computed ones |
+| `middleware.ts` | action middleware that wraps only this app's actions |
+| `tasks.ts` | background tasks (`defineTask`) |
+| `hooks.ts` | `postMigrate` and other app hooks |
+
+**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+`'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
+`tvine check` warns about a folder in `apps/` that is not listed.
 
 ## A new project by hand
 
@@ -64,8 +115,8 @@ The smallest working app is [examples/notes](../examples/notes). Copy it and ren
 ```
 examples/notes/
 ├─ package.json        deps: tvine, next, react, zod
-├─ settings.ts         Django settings.py
-├─ urls.ts             optional REST paths
+├─ settings.ts         Django settings.py (a one-file project; startproject makes config/settings/)
+├─ urls.ts             optional REST paths (ROOT_URLCONF)
 ├─ next.config.ts
 ├─ apps/notes/         one app: models, views, urls, admin, tasks, migrations
 ├─ app/                Next.js pages

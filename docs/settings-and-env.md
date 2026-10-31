@@ -82,6 +82,15 @@ middleware: [
 ],
 ```
 
+A new project lists the whole set in `config/settings/base.ts`: the five defaults on, every other built-in
+commented out with a one-line note. Turn one on or off by (un)commenting its line; `dev.ts` / `prod.ts` can replace
+the list (`prod.ts` adds `SslRedirect`: `middleware: [...base.middleware, 'tvine.middleware.SslRedirect']`).
+
+Your own middleware lives in `config/middleware/` (startproject writes `index.ts` and an `example.ts` that is off).
+List it by dotted path: `'config.middleware.example'` loads the default export of `config/middleware/example.ts`
+(from the project root). A path with no file fails at boot, naming the file it expected. Importing the object and
+listing it directly works too.
+
 Order is the list order (outermost first), except `AllowedHosts`, which always runs first. `tvine check` prints
 the order it will use.
 
@@ -120,6 +129,17 @@ export const timing = defineMiddleware({
 ```
 
 `req.tvine` has `path`, `ip`, `https`, `host`, `id`, `locale`, `log`.
+
+Project middleware file (`config/middleware/example.ts`):
+
+```ts
+import { defineMiddleware } from 'tvine'
+
+export default defineMiddleware({
+  name: 'example',
+  processRequest(req) { /* runs before the view; end the response to stop the request */ },
+})
+```
 
 **Action middleware** wraps each backend action instead of each HTTP request: `settings.actionMiddleware` (global)
 or `apps/<app>/middleware.ts` with `export default [...]` (that app only). It runs after permission checks, so it
