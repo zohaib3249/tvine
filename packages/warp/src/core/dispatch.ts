@@ -30,6 +30,8 @@ export interface ServerCtx {
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
   route?: (path: string) => string | undefined   // the site's route matcher (createAgentServer): redirect targets must match
+  // transport/tab: true while a remote agent's forwarded command is running in a tab of this session
+  tabs?: { forcedAgent(sid: Sid): boolean }
   close(): void                    // stops this ctx's session watcher
 }
 
@@ -201,6 +203,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     return { sid: fresh.sid, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })] }
   }
   const { sid } = session
+  request = asAgent(cmd, server, request, sid)
   const hold: Hold = {}
   if (!cmd.cmdId) return { sid, events: await serial(sid, () => pipeline(cmd, server, request, session, '', hold)) }
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
@@ -216,6 +219,19 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     // held until the handler itself settles (not the timeout): a retry never runs it a second time
     void Promise.resolve(hold.settled).catch(() => undefined).then(() => { if (inFlight.get(key) === p) inFlight.delete(key) })
   }
+}
+
+// security.md invariant 3: the agent flag is downgrade-only. agentCmd (the client marks a request it sends for
+// an agent) can only make a request agent; and while a remote agent's forwarded command runs in a tab of this
+// session, EVERY request of the session is agent, whatever the client says (a page handler calling an api,
+// a form path, a client that drops the flag). So denyAgents holds on every path through a controlled tab.
+function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Request {
+  const forced = server.tabs?.forcedAgent(sid) === true
+  if (!forced && cmd.agentCmd === undefined) return request
+  const via = forced ? 'channel' : cmd.agentCmd?.via === 'webmcp' ? 'webmcp' : 'channel'
+  const out: Request = { ...request, agent: { ...request.agent, is: true, via } }
+  if (quiet.has(request)) quiet.add(out)
+  return out
 }
 
 async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {

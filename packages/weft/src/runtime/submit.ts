@@ -7,5 +7,7 @@ import type { Command } from '../types.js'
 // Next's server-action origin check guards this endpoint (not re-implemented here).
 export async function submitForm(cmd: Command): Promise<FormResult> {
   const cmdId = typeof cmd.cmdId === 'string' ? cmd.cmdId : undefined   // double-submit idempotency
-  return getDispatcher()({ action: String(cmd.action), params: { ...cmd.params }, bind: cmd.bind, cmdId })
+  // agentCmd is downgrade-only (it can make the request agent, never human): passed through as a marker
+  const agentCmd = cmd.agentCmd !== undefined ? { via: typeof cmd.agentCmd?.via === 'string' ? cmd.agentCmd.via : undefined } : undefined
+  return getDispatcher()({ action: String(cmd.action), params: { ...cmd.params }, bind: cmd.bind, cmdId, ...(agentCmd && { agentCmd }) })
 }

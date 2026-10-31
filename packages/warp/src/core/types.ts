@@ -41,6 +41,9 @@ export interface Command {
   cmdId?: string                    // idempotency key
   rev?: Rev                         // optimistic concurrency (stale_rev)
   auth?: string                     // RESERVED v2
+  // control-protocol.md: a client marks a request it sends FOR an agent. Downgrade-only: it can make a
+  // request agent (is=true), never human. via: 'webmcp' (in-browser agent) | 'channel' (remote agent via a tab)
+  agentCmd?: { cmdId?: string; via?: string }
 }
 
 export type Event =
@@ -185,7 +188,8 @@ export interface Settings {
   }
   logging: 'json' | 'pretty' | 'none'
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
-  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
+  // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
+  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation

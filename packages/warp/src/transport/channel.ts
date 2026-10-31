@@ -5,6 +5,7 @@ import { clientIp } from '../core/request.js'
 import { ev } from '../core/events.js'
 import { render } from '../serialize/envelope.js'
 import { ipKey } from '../security/ratelimit.js'
+import type { Frame, TabHub } from './tab.js'
 
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
 const HEARTBEAT_MS = 25_000
@@ -19,6 +20,7 @@ export interface ChannelDeps {
   isDev: boolean
   clock?: Clock
   watchInspector?: () => () => void   // called per open inspector stream; returns its release (the feed refcount)
+  tabs?: TabHub                       // transport/tab: `?tab=` cookie streams become controllable tabs
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1'])
@@ -65,6 +67,8 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const lookup = (f: SessionStore['resolve']) => (cookie !== undefined && f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
     const resolve = () => lookup(sessions.resolve)
     const session = inspector ? undefined : resolve()
+    // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
+    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && cookie !== undefined && session !== undefined && sessions.peek({ cookie }) === session
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
     const sid = session?.sid ?? ''
     const ctx = () => ({ sid, rev: session?.rev ?? 0, page: '' })
@@ -85,11 +89,12 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const safe = (fn: () => void) => { try { fn() } catch { close() } }
     let unsub = () => {}
     let release = () => {}
+    let untab = () => {}
     let timer: unknown
     const close = (graceful = false) => {
       if (closed) return
       closed = true
-      unsub(); release(); clock.clearInterval(timer)
+      unsub(); release(); untab(); clock.clearInterval(timer)
       open.set(ip, (open.get(ip) ?? 1) - 1)
       if (!open.get(ip)) open.delete(ip)
       // Forced close destroys the socket: end() would wait for a non-reading client to drain its buffer.
@@ -99,6 +104,14 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     req.on('close', () => close())
     res.on('error', () => close())
     open.set(ip, (open.get(ip) ?? 0) + 1) // after 'close' is wired: no leak window
+
+    if (asTab && !closed) {
+      // tab frames (hello/request/control/release/cmd) go to this stream only, never to the session group;
+      // JSON.stringify keeps every value on one data line (no frame injection from an agent's name)
+      const tf: Frame = (event, data) => { if (!closed) safe(() => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`) }) }
+      const tabId = deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined)
+      untab = () => deps.tabs!.gone(tabId, tf)
+    }
 
     const last = hdr('last-event-id')
     if (last !== undefined && /^\d+$/.test(last)) {
