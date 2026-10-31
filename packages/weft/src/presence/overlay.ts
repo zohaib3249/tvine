@@ -234,7 +234,8 @@ export class Overlay {
       point: async (el) => { if (el && el === pointed) return; pointed = el; await this.point(el, a) },
       type: async (el, text) => {
         const o = this.opts(a)
-        await typeInto(el, String(text), { signal, cps: o?.cps, instant: !o || this.reduced || o.typing === 'instant' })
+        // instant by default (agent steps never wait for animations); per-char typing only when the app opts in
+        await typeInto(el, String(text), { signal, cps: o?.cps, instant: !o || this.reduced || o.typing !== 'animate' })
       },
       say: () => {},
     }

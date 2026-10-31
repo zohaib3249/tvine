@@ -45,6 +45,7 @@ function headlessOf(h: HeadlessMap | undefined): string {
   if ('url' in h) return `url ?${h.url}`
   if ('rendered' in h) return 'rendered'
   if ('session' in h) return `session ${h.session}`
+  if ('call' in h) return `call ${h.call}`
   return `action ${(h.params as ActionHandle).id}${h.field ? ` .${h.field}` : ''}`
 }
 

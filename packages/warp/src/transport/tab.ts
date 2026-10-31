@@ -168,7 +168,8 @@ export class TabHub {
     const tab = h && this.tabs.get(h.tabId)
     if (!h || !tab) return fail('domain', 'not_connected', 'no tab under your control: call request_control')
     if (!tab.send) return fail('expired_sid', 'tab_closed', 'the tab is disconnected; retry shortly or call request_control again')
-    const rl = this.cmdRate.check({ sid: `tab:${tab.id}` })
+    // reads (read_page/expand) are free; only ui/do spend the per-tab bucket
+    const rl = op === 'read' || op === 'expand' ? { ok: true as const } : this.cmdRate.check({ sid: `tab:${tab.id}` })
     if (!rl.ok) return { ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` }
     h.used = Date.now()
     const cmdId = token(), sid = tab.sid
