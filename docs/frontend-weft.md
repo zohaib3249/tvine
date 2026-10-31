@@ -7,7 +7,7 @@ can do) and serves it to agents as compact JSON.
 
 ## Setup
 
-Three things, all already done in `apps/demo-shop` and `examples/notes`:
+Three things, all already done in `examples/notes`:
 
 1. **Dependencies:** `@tvine/weft`, `@tvine/warp`, `next`, `react`, `react-dom`.
 2. **`<WeftRoot>` in the root layout.** It runs the presence overlay, WebMCP tools, tab control and the dev

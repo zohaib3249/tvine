@@ -21,7 +21,7 @@ export default defineSettings({
 })
 ```
 
-Run the migrations, then make a staff login (from `apps/demo-shop`):
+Run the migrations, then make a staff login (in your app folder):
 
 ```bash
 pnpm exec tvine migrate
@@ -57,7 +57,7 @@ admin.site.register(Product, ProductAdmin)
 ```
 
 `tvine.auth` registers User and Group for you; `tvine.tasks` registers Job (read-only, with retry and revoke).
-The full demo setup is in `apps/demo-shop/apps/catalog/admin.ts` and `apps/demo-shop/apps/checkout/admin.ts`.
+A small working example: [examples/notes/apps/notes/admin.ts](../examples/notes/apps/notes/admin.ts).
 
 ![Orders changelist with charts](images/admin-orders.png)
 

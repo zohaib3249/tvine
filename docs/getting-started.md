@@ -361,5 +361,4 @@ Details: [human-only.md](design/frontend/v2/widgets/human-only.md).
 ## Next
 
 - Deploy: [deploy.md](deploy.md)
-- The full reference app: `apps/demo-shop` (catalog, cart, checkout, uploads, admin)
 - Everything else: the feature map in the [README](../README.md)

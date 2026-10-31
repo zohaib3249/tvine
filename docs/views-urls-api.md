@@ -19,8 +19,8 @@ Nothing to install beyond `@tvine/warp`. Warp finds `apps/<app>/views.ts` by its
 exported action and view class. Check what it found:
 
 ```bash
-cd apps/demo-shop
-pnpm exec tvine check        # ... ok: 57 actions
+cd examples/notes
+pnpm exec tvine check
 ```
 
 ## Function actions: `defineAction`
@@ -76,7 +76,7 @@ export class ProductDetail extends DetailView<Product> { // → catalog.get
 }
 ```
 
-(from `apps/demo-shop/apps/catalog/views.ts`)
+(from an example store app)
 
 | View | Actions it generates |
 |---|---|

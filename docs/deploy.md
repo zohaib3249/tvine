@@ -4,7 +4,7 @@ One Node process serves everything: the Next.js pages, `/tvine/*` (agent API, ta
 `/media`. Run one process by default; add copies plus Redis when one is not enough. A separate `tvine worker`
 runs background jobs.
 
-Commands below were run against `apps/demo-shop` unless marked otherwise.
+Commands below were run against an example store app built on Tvine unless marked otherwise.
 
 Related guides: [auth-and-security.md](auth-and-security.md) (hosts, CSP, CORS, secrets),
 [tasks-cache-email.md](tasks-cache-email.md) (worker, Redis cache, SMTP), [admin.md](admin.md) (System pages).
@@ -198,19 +198,8 @@ streams and timers, and exits 0; if closing takes over 5 s it exits 1. So:
 
 ## 9. Docker
 
-`apps/demo-shop/Dockerfile` (multi-stage, pnpm, `next build`, non-root user, `/data` volume, healthcheck).
-Build from the repo root:
-
-```bash
-docker build -f apps/demo-shop/Dockerfile -t tvine-demo .
-docker run -p 3000:3000 -e TVINE_SECRET=$(openssl rand -hex 32) -e TVINE_ALLOWED_HOSTS=localhost -v tvine-data:/data tvine-demo
-docker run -e TVINE_SECRET=… -v tvine-data:/data tvine-demo node_modules/.bin/tvine worker
-```
-
-The volume holds `tvine.db` (+ WAL), `tasks.db` and `media/` (env `DATABASE_URL`, `TASKS_DB`, `MEDIA_DIR`).
-Ignore rules: `apps/demo-shop/Dockerfile.dockerignore` (BuildKit uses it for this Dockerfile).
-
-The image was not built while writing this (Docker hangs on the docs machine). Its steps were run by hand instead:
-`pnpm install --frozen-lockfile`, `pnpm --filter "@tvine/demo-shop..." build`,
-`pnpm --filter @tvine/demo-shop deploy --prod <dir>`, then `tvine migrate && tvine start` and the
-`HEALTHCHECK` command from that directory with `NODE_ENV=production` — all worked.
+A Dockerfile is not shipped yet. The steps a multi-stage image needs (each was run by hand, Docker itself was not):
+`pnpm install --frozen-lockfile`, `pnpm --filter "<your-app>..." build`, `pnpm --filter <your-app> deploy --prod <dir>`,
+then in `<dir>` with `NODE_ENV=production`: `tvine migrate && tvine start`. Mount a volume for `tvine.db` (+ WAL),
+`tasks.db` and `media/` (env `DATABASE_URL`, `TASKS_DB`, `MEDIA_DIR`), run as a non-root user, and use
+`/tvine/health` as the healthcheck. Run the worker as a second container: `tvine worker`.

@@ -1,6 +1,6 @@
 # Testing
 
-Tvine's own tests and the demo use [Vitest](https://vitest.dev). `@tvine/warp/testing` is Django's test client:
+Tvine's own tests use [Vitest](https://vitest.dev). `@tvine/warp/testing` is Django's test client:
 it drives your app the way an agent does, in-process, with no port.
 
 ## Run the repo's tests
@@ -8,7 +8,6 @@ it drives your app the way an agent does, in-process, with no port.
 ```bash
 pnpm test                          # every package
 pnpm --filter @tvine/warp test    # one package
-cd apps/demo-shop && pnpm test     # the demo: 9 files, 38 tests, about 40 s (does a real next build first)
 ```
 
 Postgres, MySQL and Redis suites are opt-in: they run when `TVINE_TEST_PG_URL`, `TVINE_TEST_MYSQL_URL` or
@@ -67,11 +66,9 @@ Signatures: [design/conventions/testing.md](design/conventions/testing.md).
 
 ## Full-stack tests
 
-The demo boots a real `tvine start` child process on a temp database and a random port, then drives it over
-HTTP and with headless Chrome (`playwright-core`). Copy its harness:
-[apps/demo-shop/test/shop.ts](../apps/demo-shop/test/shop.ts) (boot, migrate, seed, stop) and
-[apps/demo-shop/vitest.config.ts](../apps/demo-shop/vitest.config.ts) (one `next build` in `globalSetup`,
-files run one after another).
+For end-to-end tests, boot a real `tvine start` child process on a temp database (`DATABASE_URL=file:/tmp/x.db`)
+and a free port, run `tvine migrate` first, then drive it over HTTP or with headless Chrome (`playwright-core`).
+Do one `next build` in Vitest's `globalSetup` and run the files one after another.
 
 ## In CI
 

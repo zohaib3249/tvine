@@ -12,6 +12,25 @@ Global flag: `--apps ./apps` (where your apps live; that is the default).
 
 All examples below were run in `examples/notes`.
 
+## Getting the `tvine` command
+
+A bare `tvine` in a shell says "command not found" until you pick one:
+
+1. Inside a project: `pnpm exec tvine <cmd>` / `npx tvine <cmd>`, or a script like `"dev": "tvine dev"` then `pnpm dev`.
+2. Global from a clone: `cd packages/warp && npm link`; undo with `npm unlink -g @tvine/warp`.
+3. After the npm release: `npm i -g @tvine/warp`.
+
+## Scaffolding (new)
+
+Not on this branch yet; marked (new) until the scaffolding release merges.
+
+| Command | What it does |
+|---|---|
+| `npm create tvine@latest my-app` (new) | new project with a welcome page |
+| `tvine startproject <name> [--db …] [--no-admin] [--local]` (new) | same, from the CLI |
+| `tvine startapp <name> [--model Name]` (new) | adds `apps/<name>/` (models, views, admin, urls) |
+| `tvine shell` (new) | REPL with settings and models loaded |
+
 ## Serve
 
 | Command | What it does |
