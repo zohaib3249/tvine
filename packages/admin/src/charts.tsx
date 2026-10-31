@@ -26,7 +26,7 @@ const nf = new Map<string, Intl.NumberFormat>()
 const numFmt = (o: Intl.NumberFormatOptions) => { const k = JSON.stringify(o); let f = nf.get(k); if (!f) nf.set(k, (f = new Intl.NumberFormat(undefined, o))); return f }
 export function fmtValue(v: number, unit: Unit = 'number', currency?: string, compact = false): string {
   if (!Number.isFinite(v)) return '—'
-  if (unit === 'money' && currency) return numFmt({ style: 'currency', currency, ...(compact && Math.abs(v) >= 10_000 ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 2 }) }).format(v)
+  if (unit === 'money' && currency) return numFmt({ style: 'currency', currency, ...(compact ? (Math.abs(v) >= 10_000 ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 0 }) : { maximumFractionDigits: 2 }) }).format(v)
   if (unit === 'ms') return `${numFmt({ maximumFractionDigits: v < 10 ? 1 : 0 }).format(v)} ms`
   if (unit === 'percent') return `${numFmt({ maximumFractionDigits: 1 }).format(v)}%`
   if (compact && Math.abs(v) >= 10_000) return numFmt({ notation: 'compact', maximumFractionDigits: 1 }).format(v)
@@ -106,10 +106,12 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
   const [hi, setHi] = useState<number | null>(null)
   const n = d.points.length
   const compact = W < 420
-  const padL = 46, padR = 12, padT = 10, padB = 24
-  const iw = Math.max(10, W - padL - padR), ih = height - padT - padB
   const tops = d.points.map((p) => (stacked ? p.values.reduce((a, b) => a + Math.max(0, b), 0) : Math.max(0, ...p.values)))
   const ticks = niceTicks(Math.max(0, ...tops), height < 160 ? 2 : 4)
+  const tickUnit = d.unit === 'ms' ? 'number' : d.unit
+  const tickText = (t: number) => fmtValue(t, tickUnit, d.currency, true)
+  const padL = 12 + 6.4 * Math.max(...ticks.map((t) => tickText(t).length)), padR = 12, padT = 10, padB = 24
+  const iw = Math.max(10, W - padL - padR), ih = height - padT - padB
   const top = ticks[ticks.length - 1]!
   const y = (v: number) => padT + ih - (v / top) * ih
   const band = iw / Math.max(1, n)
@@ -127,7 +129,8 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
   if (!n) return <div ref={ref}><Empty title="No data in this range" icon="grid" /></div>
   const line = (k: number) => d.points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.values[k] ?? 0).toFixed(1)}`).join('')
   const sub = d.series.length
-  const gw = stacked ? Math.min(24, band - 4) : Math.min(24, (band - 4) / sub - 2)
+  const gap = band > 10 ? 4 : 1   // dense series: keep a hairline of air, never a negative width
+  const gw = Math.max(1, stacked ? Math.min(24, band - gap) : Math.min(24, (band - gap) / sub - (band > 10 ? 2 : 0)))
   return (
     <div ref={ref} className="relative">
       <svg width="100%" height={height} viewBox={`0 0 ${W} ${height}`} role="img" tabIndex={0} className="tva-plot"
@@ -136,7 +139,7 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
         {ticks.map((t) => (
           <g key={t}>
             <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} className={t === 0 ? 'tva-axis' : 'tva-grid'} />
-            <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="tva-tick">{fmtValue(t, d.unit === 'money' ? 'money' : d.unit === 'ms' ? 'number' : d.unit, d.currency, true)}</text>
+            <text x={padL - 6} y={y(t) + 4} textAnchor="end" className="tva-tick">{tickText(t)}</text>
           </g>
         ))}
         {d.points.map((p, i) => i % every === 0 && <text key={p.x} x={x(i)} y={height - 6} textAnchor="middle" className="tva-tick">{fmtX(p.x, d.groupBy)}</text>)}
@@ -274,19 +277,19 @@ export function Stat({ s, label }: { s: StatData; label?: string }) {
   const good = delta === undefined ? undefined : (delta >= 0) === (s.upIsGood ?? true)
   const exact = Number.isInteger(s.value) ? Math.round(shown) : shown
   return (
-    <div className="flex items-end justify-between gap-3">
-      <div className="min-w-0">
-        <p className="tva-stat-value" aria-label={`${label ?? 'Value'}: ${fmtValue(s.value, s.unit, s.currency)}`}>{fmtValue(exact, s.unit, s.currency, true)}</p>
-        {delta !== undefined && (
-          <p className={cx('tva-delta', good ? 'is-good' : 'is-bad')}>
-            <Icon name={delta >= 0 ? 'up' : 'down'} size={12} />
-            <span>{delta >= 0 ? '+' : ''}{fmtValue(Math.round(delta * 10) / 10, 'percent')}</span>
-            <span className="font-normal text-muted">vs previous period</span>
-          </p>
-        )}
-        {delta === undefined && s.previous === 0 && s.value > 0 && <p className="tva-delta is-good"><Icon name="up" size={12} /><span>new</span><span className="font-normal text-muted">vs previous period</span></p>}
+    <div className="min-w-0">
+      <div className="flex items-end justify-between gap-3">
+        <p className="tva-stat-value min-w-0 truncate" aria-label={`${label ?? 'Value'}: ${fmtValue(s.value, s.unit, s.currency)}`}>{fmtValue(exact, s.unit, s.currency, true)}</p>
+        {s.spark && s.spark.length > 1 && <Sparkline values={s.spark} width={96} label={label} />}
       </div>
-      {s.spark && s.spark.length > 1 && <Sparkline values={s.spark} label={label} />}
+      {delta !== undefined && (
+        <p className={cx('tva-delta whitespace-nowrap', good ? 'is-good' : 'is-bad')}>
+          <Icon name={delta >= 0 ? 'up' : 'down'} size={12} />
+          <span>{delta >= 0 ? '+' : ''}{fmtValue(Math.round(delta * 10) / 10, 'percent')}</span>
+          <span className="font-normal text-muted">vs prev. period</span>
+        </p>
+      )}
+      {delta === undefined && s.previous === 0 && s.value > 0 && <p className="tva-delta is-good"><Icon name="up" size={12} /><span>new</span><span className="font-normal text-muted">vs prev. period</span></p>}
     </div>
   )
 }
@@ -317,7 +320,7 @@ export function summary(d: ChartData, type: string): Record<string, string | num
 
 // One chart by type (no card chrome)
 export function Chart({ d, type, height }: { d: ChartData; type: ChartType; height?: number }) {
-  if (type === 'donut') return <DonutChart d={d} />
+  if (type === 'donut') return <DonutChart d={d} size={height && height < 168 ? Math.max(110, height - 20) : 168} />
   if (type === 'stat') { const s = statOf(d); return s ? <Stat s={s} label={d.title} /> : null }
   if (type === 'table') return <ChartTable d={d} />
   if (type === 'stacked') return <XYChart d={d} kind="bar" stacked height={height} />

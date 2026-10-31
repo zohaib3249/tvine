@@ -82,6 +82,7 @@ body.tva-page { margin: 0; }
   .tva :focus-visible { outline: 2px solid var(--tva-brand); outline-offset: 2px; border-radius: 4px; }
   .tva ::placeholder { color: var(--tva-muted); opacity: .8; }
   .tva dialog { color: var(--tva-fg); }
+  .tva :is(h1, h2, h3, h4) { font-size: inherit; font-weight: inherit; }
   @media (prefers-reduced-motion: reduce) { .tva * { transition: none !important; animation: none !important; } }
 }
 
@@ -191,7 +192,7 @@ body.tva-page { margin: 0; }
   @media (min-width: 1024px) {
     .tva-dash { grid-template-columns: repeat(12, minmax(0, 1fr)); }
     .tva-dash > [data-size="sm"] { grid-column: span 3; } .tva-dash > [data-size="md"] { grid-column: span 6; }
-    .tva-dash > [data-size="lg"] { grid-column: span 8; } .tva-dash > [data-size="xl"] { grid-column: span 12; }
+    .tva-dash > [data-size="lg"] { grid-column: span 9; } .tva-dash > [data-size="xl"] { grid-column: span 12; }
   }
   .tva-enter { animation: tva-rise .42s cubic-bezier(.2,.7,.2,1) both; }
   @keyframes tva-rise { from { opacity: 0; transform: translateY(8px); } }
