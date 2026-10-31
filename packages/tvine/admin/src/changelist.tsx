@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Dialog, Drawer, toast } from '../../weft/dist/widgets/index.js'
 import { safeHref } from '../../weft/dist/forms/index.js'
 import { href, listParams, queryOf, toggleSort, urlFor } from './routes.js'
@@ -30,7 +30,7 @@ export function show(v: Display | undefined, empty = '—', f?: { kind?: string;
 }
 const raw = (v: Display | undefined) => (v && typeof v === 'object' ? (v.value ?? v.text) : v)
 
-export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: ListResult; error?: { code: string; message: string } }) {
+export function Changelist({ meta, list, error, pending }: { meta: ModelMeta; list?: ListResult; error?: { code: string; message: string }; pending?: boolean }) {
   const ctx = useAdmin()
   const { query, setQuery, prefs, call, base, navigate, refresh } = ctx
   const d = meta.display
@@ -51,6 +51,13 @@ export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: List
     if (!('p' in patch)) delete next.p
     setQuery(next as Record<string, string>)
   }
+  // pagination: bring the top of the table into view (smoothly) when it has scrolled above the fold
+  const card = useRef<HTMLDivElement>(null)
+  const page = (patch: Record<string, string | undefined>) => {
+    set(patch)
+    const el = card.current, top = document.getElementById('tva-main')?.getBoundingClientRect().top ?? 0
+    if (el && el.getBoundingClientRect().top < top) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   const activeFilters = Object.keys(p.filters ?? {}).length
   const modelUrls = (meta.urls ?? []).filter((u) => !u.path.includes('<'))
 
@@ -69,7 +76,9 @@ export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: List
 
         <div className="flex gap-5">
           <div className="min-w-0 flex-1">
-            <div className="tva-card overflow-hidden">
+            <div ref={card} className="tva-card relative overflow-hidden" aria-busy={pending || undefined}
+              style={{ overflowAnchor: 'none' }}>{/* rows swap under a fixed scroll; Chrome's anchoring would chase a surviving row */}
+              {pending && <div className="tva-progress" role="progressbar" aria-label="Loading" />}
               <Toolbar meta={meta} total={list?.count} activeFilters={activeFilters} hidden={hidden}
                 setHidden={(h) => { setHidden(h); prefs.set(`cols:${meta.key}`, h) }} set={set}
                 filterDrawer={d.filters.length > 0 && (
@@ -93,15 +102,15 @@ export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: List
                       : meta.perms.add && <button type="button" agentId="add-first" className="tva-btn tva-btn-primary mt-2" onClick={() => navigate(href(base, { name: 'add', model: meta.key }))}>Add {meta.name}</button>}
                   </Empty>
                 ) : (
-                  <EditableTable meta={meta} rows={rows} cols={cols} links={links} ordering={ordering} selected={selected} setSelected={(s) => { setSelected(s); setAllPages(false) }}
+                  <EditableTable pending={pending} meta={meta} rows={rows} cols={cols} links={links} ordering={ordering} selected={selected} setSelected={(s) => { setSelected(s); setAllPages(false) }}
                     sort={(c, multi) => set({ o: toggleSort(ordering, c, multi).join(',') })} />
                 )}
-              {list && list.count > 0 && <Pager list={list} meta={meta} all={!!p.all} set={set} />}
+              {list && list.count > 0 && <Pager list={list} meta={meta} all={!!p.all} set={page} />}
             </div>
           </div>
           {d.filters.length > 0 && (
             <aside className={cx('hidden w-64 shrink-0 lg:block', slotClass('filters'))}>
-              <div className="tva-card sticky top-4 p-4">{filters('admin:filters')}</div>
+              <div className="tva-card sticky top-4 overflow-auto p-4" style={{ maxHeight: 'calc(100dvh - 6rem)' }}>{filters('admin:filters')}</div>
             </aside>
           )}
         </div>
@@ -154,8 +163,8 @@ function Toolbar({ meta, total, activeFilters, hidden, setHidden, set, filterDra
   )
 }
 
-function EditableTable({ meta, rows, cols, links, ordering, selected, setSelected, sort }: {
-  meta: ModelMeta; rows: Row[]; cols: ModelMeta['display']['listDisplay']; links: string[]; ordering: string[]
+function EditableTable({ meta, rows, cols, links, ordering, selected, setSelected, sort, pending }: {
+  pending?: boolean; meta: ModelMeta; rows: Row[]; cols: ModelMeta['display']['listDisplay']; links: string[]; ordering: string[]
   selected: Set<string>; setSelected(s: Set<string>): void; sort(col: string, multi: boolean): void
 }) {
   const { base, navigate, call, refresh } = useAdmin()
@@ -186,7 +195,7 @@ function EditableTable({ meta, rows, cols, links, ordering, selected, setSelecte
   return (
     <Slotted slot="table" meta={meta}>
       <div className="overflow-x-auto">
-        <table className={cx('w-full text-sm', slotClass('table'))}>
+        <table className={cx('w-full text-sm transition-opacity', pending && 'opacity-60', slotClass('table'))}>
           <thead>
             <tr>
               {hasActions && <th className="tva-th w-10"><input type="checkbox" className="tva-check" agentId="select-page" aria-label="Select all on this page" checked={allOnPage}

@@ -112,6 +112,9 @@ body.tva-page { margin: 0; }
   .tva-chip { display: inline-flex; align-items: center; gap: .25rem; height: 1.5rem; padding: 0 .5rem; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--tva-brand-soft); color: var(--tva-accent); }
   .tva-kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 0 .35rem; border: 1px solid var(--tva-line); border-bottom-width: 2px; border-radius: 4px; color: var(--tva-muted); background: var(--tva-surface); }
   .tva-skel { background: linear-gradient(90deg, var(--tva-sunken), var(--tva-line), var(--tva-sunken)); background-size: 200% 100%; animation: tva-shimmer 1.2s infinite linear; border-radius: 6px; }
+  .tva-progress { position: absolute; inset: 0 0 auto; z-index: 2; height: 2px; overflow: hidden; background: var(--tva-brand-soft); }
+  .tva-progress::after { content: ''; position: absolute; inset: 0; width: 40%; background: var(--tva-brand); animation: tva-indet 1s infinite ease-in-out; }
+  @keyframes tva-indet { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
   @keyframes tva-shimmer { to { background-position: -200% 0; } }
   .tva-nav-link { display: flex; align-items: center; gap: .6rem; padding: .4rem .6rem; border-radius: var(--tva-radius); color: var(--tva-muted); font-weight: 500; }
   .tva-nav-link:hover { background: var(--tva-sunken); color: var(--tva-fg); }
