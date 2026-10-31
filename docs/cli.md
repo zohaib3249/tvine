@@ -1,6 +1,6 @@
 # CLI: `tvine`
 
-`tvine` is Django's `manage.py`. It comes with `@tvine/warp`; run it from your app folder (the one with
+`tvine` is Django's `manage.py`. It comes with `tvine`; run it from your app folder (the one with
 `settings.ts`):
 
 ```bash
@@ -17,8 +17,7 @@ All examples below were run in `examples/notes`.
 A bare `tvine` in a shell says "command not found" until you pick one:
 
 1. Inside a project: `pnpm exec tvine <cmd>` / `npx tvine <cmd>`, or a script like `"dev": "tvine dev"` then `pnpm dev`.
-2. Global from a clone: `cd packages/warp && npm link`; undo with `npm unlink -g @tvine/warp`.
-3. After the npm release: `npm i -g @tvine/warp`.
+2. Global: `npm i -g tvine`. From a clone: `cd packages/tvine && npm link`; undo with `npm unlink -g tvine`.
 
 ## Scaffolding (new)
 
@@ -26,7 +25,7 @@ Not on this branch yet; marked (new) until the scaffolding release merges.
 
 | Command | What it does |
 |---|---|
-| `npm create tvine@latest my-app` (new) | new project with a welcome page |
+| `npx tvine startproject my-app` | new project with a welcome page |
 | `tvine startproject <name> [--db …] [--no-admin] [--local]` (new) | same, from the CLI |
 | `tvine startapp <name> [--model Name]` (new) | adds `apps/<name>/` (models, views, admin, urls) |
 | `tvine shell` (new) | REPL with settings and models loaded |
@@ -37,7 +36,7 @@ Not on this branch yet; marked (new) until the scaffolding release merges.
 |---|---|
 | `start [--port 3000] [--host h] [--api-only]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s |
 | `dev [--port 3000] [--host h]` | Django `runserver`: Next dev server with hot reload, `tvine-api.d.ts` regenerated on save |
-| `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed. Needs `@tvine/inspect` as a dev dependency |
+| `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed |
 
 ```bash
 pnpm exec tvine dev --port 4612
@@ -143,3 +142,7 @@ pnpm exec tvine encryption rotate     # → re-encrypted 0 row(s) with the newes
 - `changepassword` needs an interactive terminal; in scripts use `createsuperuser --noinput` or the admin.
 - `audit prune` without `tvine.audit` installed exits 1 with "add 'tvine.audit' to settings.installedApps".
 - `inspect` binds to 127.0.0.1 and is for development only.
+
+## Releasing
+
+Bump `packages/tvine/package.json`, commit to `main`, then `git tag vX.Y.Z && git push --tags`. See [releasing.md](releasing.md).

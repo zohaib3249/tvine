@@ -39,7 +39,7 @@ curl -s -c jar -b jar -X POST http://localhost:4631/tvine/api/auth.login \
 # {"ok":true,"data":{"id":"1","username":"admin","email":"admin@example.com","isStaff":true,"isSuperuser":true}}
 ```
 
-In a page: `currentUser()` from `@tvine/weft/api` (server), `useUser()` (client), or `api.auth.login(...)`.
+In a page: `currentUser()` from `tvine/api` (server), `useUser()` (client), or `api.auth.login(...)`.
 
 | Action | What it does |
 |---|---|
@@ -75,7 +75,7 @@ The token is shown once. It is stored hashed, expires after 90 days by default (
 
 ## Permissions
 
-DRF-style classes from `@tvine/warp`: `allowAny`, `isAuthenticated`, `isStaff`, `isSuperuser`, `denyAgents`,
+DRF-style classes from `tvine`: `allowAny`, `isAuthenticated`, `isStaff`, `isSuperuser`, `denyAgents`,
 `hasPerm('app.change_x')`, `modelPermissions(Model)`, `allOf`, `anyOf`. Attach them at four levels (first deny wins):
 
 ```ts
@@ -123,7 +123,7 @@ Condensed; the full table with every setting is
 | Privacy | Export my data; erase (anonymize) a user | `Meta.personalData`, `Meta.onErase` | on with tvine.auth |
 | Media | Magic-byte sniffing, size cap; private files behind signed links | `defineUpload({ private: true })` | on |
 | Outbound | `safeFetch`: no private / loopback / metadata IPs, redirects re-checked | `safeFetch(url, opts)` | 10 s, 5 MB |
-| Signing | `signing.dumps / loads`, `Signer`, `TimestampSigner` | `@tvine/warp` | — |
+| Signing | `signing.dumps / loads`, `Signer`, `TimestampSigner` | `tvine` | — |
 
 What the demo sends on a page (checked with `curl -sI http://localhost:4631/`):
 

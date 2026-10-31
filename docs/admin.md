@@ -10,8 +10,7 @@ Depth: [design/contrib/admin.md](design/contrib/admin.md).
 
 ## Setup
 
-Add `tvine.admin` to `installedApps` (it needs `tvine.auth` for logins) and `@tvine/admin` to the app's
-dependencies. No page file is needed: Warp serves the panel itself.
+Add `tvine.admin` to `installedApps` (it needs `tvine.auth` for logins) (the panel ships with `tvine`). No page file is needed: Warp serves the panel itself.
 
 ```ts
 // settings.ts
@@ -36,7 +35,7 @@ Open `http://localhost:<port>/admin` and sign in.
 
 ```ts
 // apps/catalog/admin.ts
-import { admin, adminAction, display, ModelAdmin } from '@tvine/warp/contrib/admin'
+import { admin, adminAction, display, ModelAdmin } from 'tvine/contrib/admin'
 import { Product } from './models.ts'
 
 export const restock = adminAction({ description: 'Restock to 20', permissions: ['change'] }, async (_a, _ctx, qs) => {
@@ -185,7 +184,7 @@ The pages update live over `/tvine/channel?group=admin:live`.
 - Theme: `settings.admin.theme = { brand, radius, dark: 'auto' | 'on' | 'off' }`.
 - Custom pages: `admin.site.registerPage({ path: 'reports/', title, icon, section, component: 'module#Export' })`.
 - Custom admin views: `getUrls()` on a ModelAdmin.
-- Own Next page: put `app/admin/[[...path]]/page.tsx` exporting `@tvine/admin/page` and use
+- Own Next page: put `app/admin/[[...path]]/page.tsx` exporting `tvine/admin/page` and use
   `configureAdmin({ components, slots })` to plug in your own React components.
 
 The panel is phone-friendly: the sidebar and filters become drawers.

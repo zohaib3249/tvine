@@ -1,7 +1,7 @@
 node_modules
 dist
 .next/
-!packages/*/test/fixtures/**/.next/
+!packages/tvine/*/test/fixtures/**/.next/
 .superpowers/
 /media/
 *.db

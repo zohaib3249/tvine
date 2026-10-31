@@ -192,7 +192,7 @@ Depth: [runtime-webmcp.md](design/frontend/runtime-webmcp.md), [transports.md](d
 ## The inspector (dev only)
 
 A split view: the human page on the left, the agent's view of it on the right, and a live feed of every agent
-command. Add `@tvine/inspect` as a dev dependency (the notes example has it), then:
+command. It ships with `tvine`:
 
 ```bash
 cd examples/notes
@@ -220,7 +220,7 @@ See [admin.md](admin.md).
 
 | Command | Use |
 |---|---|
-| `tvine inspect [url] [--port 7357]` | the inspector (needs `@tvine/inspect`) |
+| `tvine inspect [url] [--port 7357]` | the inspector (needs `tvine/inspect`) |
 | `tvine check` | lists the actions found (they become tools) |
 
 All commands: [cli.md](cli.md).

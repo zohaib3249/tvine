@@ -43,8 +43,8 @@ pnpm exec tvine dev --port 4400
 
 - App: http://localhost:4400, admin: http://localhost:4400/admin
 - What an agent sees: `curl -H 'x-tvine: 1' http://localhost:4400/`
-- `tvine: command not found`? Use `pnpm exec tvine …`, or `cd packages/warp && npm link` once. See [Getting the `tvine` command](docs/installation.md#getting-the-tvine-command).
-- New project from scratch (new, after the scaffolding release): `npm create tvine@latest my-app`. See [installation.md](docs/installation.md).
+- `tvine: command not found`? Use `pnpm exec tvine …`, or `npm i -g tvine` once. See [Getting the `tvine` command](docs/installation.md#getting-the-tvine-command).
+- New project from scratch: `npx tvine startproject my-app`. See [installation.md](docs/installation.md).
 
 **Connect Claude.** Put this `.mcp.json` in the folder where you run `claude`:
 
@@ -99,11 +99,11 @@ Two modes: **headless** (the agent works on the server-rendered page, no browser
 ## Project layout
 
 ```
-packages/
-  warp/      @tvine/warp     server: ORM + migrations, views, MCP/HTTP, auth, admin, tasks, CLI (tvine)
-  weft/      @tvine/weft     frontend: widgets, api.* client, tab control, WebMCP
-  admin/     @tvine/admin    the /admin panel UI
-  inspect/   @tvine/inspect  dev inspector (tvine inspect)
+packages/tvine/     the one npm package `tvine`
+  warp/      tvine, tvine/auth, tvine/migrations, …   server: ORM + migrations, views, MCP/HTTP, auth, admin, tasks, CLI
+  weft/      tvine/weft, tvine/api, tvine/widgets, tvine/forms   frontend: widgets, api.* client, tab control, WebMCP
+  admin/     tvine/admin, tvine/admin.css               the /admin panel UI
+  inspect/   tvine/inspect                              dev inspector (tvine inspect)
 examples/
   notes/     the getting-started app
 docs/        guides; docs/design/ has the module design docs
@@ -121,7 +121,7 @@ Issues and pull requests are welcome. Before a PR:
 
 ```bash
 pnpm -r build
-pnpm --filter @tvine/warp test
+pnpm -C packages/tvine test
 ```
 
 Keep changes small, add a test, and update the matching guide in `docs/`.

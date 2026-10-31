@@ -18,57 +18,8 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(jsdom@30.1.3)(lightningcss@1.30.1)(tsx@4.23.15)
 
-  apps/demo-shop:
-    dependencies:
-      '@tvine/admin':
-        specifier: workspace:*
-        version: link:../../packages/admin
-      '@tvine/warp':
-        specifier: workspace:*
-        version: link:../../packages/warp
-      '@tvine/weft':
-        specifier: workspace:*
-        version: link:../../packages/weft
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
-      next:
-        specifier: 16.4.2
-        version: 16.4.2(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      react:
-        specifier: 19.3.1
-        version: 19.3.1
-      react-dom:
-        specifier: 19.3.1
-        version: 19.3.1(react@19.3.1)
-      zod:
-        specifier: 3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@types/react':
-        specifier: ^19
-        version: 19.3.0
-      '@types/react-dom':
-        specifier: ^19
-        version: 19.3.0(@types/react@19.3.0)
-      playwright-core:
-        specifier: 1.56.1
-        version: 1.56.1
-
   examples/notes:
     dependencies:
-      '@tvine/admin':
-        specifier: workspace:*
-        version: link:../../packages/admin
-      '@tvine/warp':
-        specifier: workspace:*
-        version: link:../../packages/warp
-      '@tvine/weft':
-        specifier: workspace:*
-        version: link:../../packages/weft
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
       next:
         specifier: 16.4.2
         version: 16.4.2(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -78,13 +29,13 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
+      tvine:
+        specifier: workspace:*
+        version: link:../../packages/tvine
       zod:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
-      '@tvine/inspect':
-        specifier: workspace:*
-        version: link:../../packages/inspect
       '@types/react':
         specifier: ^19
         version: 19.3.0
@@ -92,50 +43,7 @@ importers:
         specifier: ^19
         version: 19.3.0(@types/react@19.3.0)
 
-  packages/admin:
-    dependencies:
-      '@tvine/weft':
-        specifier: workspace:*
-        version: link:../weft
-    devDependencies:
-      '@tailwindcss/cli':
-        specifier: 4.1.14
-        version: 4.1.14
-      '@types/react':
-        specifier: ^19
-        version: 19.3.0
-      '@types/react-dom':
-        specifier: ^19
-        version: 19.3.0(@types/react@19.3.0)
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
-      jsdom:
-        specifier: ^30.1.3
-        version: 30.1.3
-      react:
-        specifier: 19.3.1
-        version: 19.3.1
-      react-dom:
-        specifier: 19.3.1
-        version: 19.3.1(react@19.3.1)
-      tailwindcss:
-        specifier: 4.1.14
-        version: 4.1.14
-
-  packages/create-tvine:
-    dependencies:
-      '@tvine/warp':
-        specifier: workspace:*
-        version: link:../warp
-
-  packages/inspect:
-    devDependencies:
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-
-  packages/warp:
+  packages/tvine:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
@@ -143,47 +51,31 @@ importers:
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       nanoid:
         specifier: ^5
         version: 5.1.16
+      next:
+        specifier: '>=15'
+        version: 16.4.2(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
       zod:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@tailwindcss/cli':
+        specifier: 4.1.14
+        version: 4.1.14
       '@types/better-sqlite3':
         specifier: ^9.6.0
         version: 9.6.0
       '@types/pg':
         specifier: ^8
         version: 8.23.1
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
-      mysql2:
-        specifier: ^3
-        version: 3.24.6(@types/node@22.20.5)
-      pg:
-        specifier: ^8.13.0
-        version: 8.23.1
-      react:
-        specifier: ^19
-        version: 19.3.1
-      react-dom:
-        specifier: ^19
-        version: 19.3.1(react@19.3.1)
-      redis:
-        specifier: 6.3.0
-        version: 6.3.0
-
-  packages/weft:
-    dependencies:
-      '@tvine/warp':
-        specifier: workspace:*
-        version: link:../warp
-      server-only:
-        specifier: ^0.0.1
-        version: 0.0.1
-    devDependencies:
       '@types/react':
         specifier: ^19
         version: 19.3.0
@@ -193,15 +85,24 @@ importers:
       jsdom:
         specifier: ^30.1.3
         version: 30.1.3
+      mysql2:
+        specifier: ^3
+        version: 3.24.6(@types/node@22.20.5)
+      pg:
+        specifier: ^8.13.0
+        version: 8.23.1
       react:
-        specifier: ^19
+        specifier: 19.3.1
         version: 19.3.1
       react-dom:
-        specifier: ^19
+        specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
+      redis:
+        specifier: 6.3.0
+        version: 6.3.0
+      tailwindcss:
+        specifier: 4.1.14
+        version: 4.1.14
 
 packages:
 
@@ -1638,11 +1539,6 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
-
-  playwright-core@1.56.1:
-    resolution: {integrity: sha512-hutraynyn31F+Bifme+Ps9Vq59hKuUCz7H1kDOcBs+2oGguKkWTU50bBWrtz34OUWmIwpBTWDxaRPXrIXkgvmQ==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   postcss@8.5.23:
     resolution: {integrity: sha512-g50586zr4bZmwFiTlflMu8E0bDTb5I5gertgwAKmsdUlTQIhZtunzUlD1WSzwcVWPoAVpsrA6vlfCD7oXvRwgg==}
@@ -3211,8 +3107,6 @@ snapshots:
   picomatch@4.0.7: {}
 
   pkce-challenge@5.0.1: {}
-
-  playwright-core@1.56.1: {}
 
   postcss@8.5.23:
     dependencies:

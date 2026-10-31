@@ -22,7 +22,7 @@ Run `pnpm exec tvine migrate`. Jobs live in their own SQLite file, `./tasks.db`,
 ```ts
 // apps/notes/tasks.ts
 import { z } from 'zod'
-import { defineTask } from '@tvine/warp/tasks'
+import { defineTask } from 'tvine/tasks'
 import { Note } from './models.ts'
 
 export const countWords = defineTask('countWords', async ({ id }) => {
@@ -112,7 +112,7 @@ tasks: {
 ## Cache
 
 ```ts
-import { cache, caches } from '@tvine/warp'
+import { cache, caches } from 'tvine'
 
 await cache.set('greeting', 'hi', 60)                    // timeout in SECONDS; null = forever; 0 = do not store
 await cache.get('greeting')                              // 'hi'
@@ -151,7 +151,7 @@ Gotchas:
 ## Email
 
 ```ts
-import { sendMail, mailAdmins, EmailMultiAlternatives } from '@tvine/warp'
+import { sendMail, mailAdmins, EmailMultiAlternatives } from 'tvine'
 
 await sendMail({ subject: 'Hello', message: 'Body', to: ['a@example.com'] })     // → 1 (messages sent)
 await sendMail({ subject, message, to, html }, { background: true })              // via tvine.tasks, 3 retries

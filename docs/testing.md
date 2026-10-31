@@ -1,13 +1,13 @@
 # Testing
 
-Tvine's own tests use [Vitest](https://vitest.dev). `@tvine/warp/testing` is Django's test client:
+Tvine's own tests use [Vitest](https://vitest.dev). `tvine/testing` is Django's test client:
 it drives your app the way an agent does, in-process, with no port.
 
 ## Run the repo's tests
 
 ```bash
 pnpm test                          # every package
-pnpm --filter @tvine/warp test    # one package
+pnpm -C packages/tvine test
 ```
 
 Postgres, MySQL and Redis suites are opt-in: they run when `TVINE_TEST_PG_URL`, `TVINE_TEST_MYSQL_URL` or
@@ -24,8 +24,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { createAgentServer, type AgentServer } from '@tvine/warp'
-import { agentClient } from '@tvine/warp/testing'
+import { createAgentServer, type AgentServer } from 'tvine'
+import { agentClient } from 'tvine/testing'
 
 let server: AgentServer
 beforeAll(async () => {

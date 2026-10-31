@@ -7,7 +7,7 @@ boot, with defaults for every key you leave out.
 
 ```ts
 // settings.ts
-import { defineSettings } from '@tvine/warp'
+import { defineSettings } from 'tvine'
 
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
@@ -70,7 +70,7 @@ Backends (memory vs redis): [design/conventions/backends.md](design/conventions/
 Read typed values with `env`, like django-environ:
 
 ```ts
-import { defineSettings, env } from '@tvine/warp'
+import { defineSettings, env } from 'tvine'
 
 export default defineSettings({
   trustProxy: env.int('TVINE_TRUST_PROXY', 0),

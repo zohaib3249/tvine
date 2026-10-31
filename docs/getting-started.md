@@ -12,7 +12,7 @@ Every command below was run as written.
 ## 0. Start a project
 
 ```bash
-npm create tvine@latest mysite     # or: pnpm create tvine mysite  /  tvine startproject mysite
+npx tvine startproject mysite      # or, with a global CLI (npm i -g tvine): tvine startproject mysite
 cd mysite
 pnpm tvine migrate
 pnpm tvine createsuperuser
@@ -21,8 +21,8 @@ pnpm tvine startapp notes --model Note    # apps/notes/: models, views, urls, ad
 pnpm tvine makemigrations && pnpm tvine migrate
 ```
 
-Node 22.15 or newer. Until the packages are on npm, run it from a clone: `pnpm install && pnpm -r build`, then
-`node packages/warp/bin/tvine.js startproject mysite ../mysite --local` (links the clone's packages).
+Node 22.15 or newer. From a clone: `pnpm install && pnpm -r build`, then
+`node packages/tvine/warp/bin/tvine.js startproject mysite ../mysite --local` (links the clone's package).
 What each file is: [conventions/scaffolding.md](design/conventions/scaffolding.md). The rest of this guide builds
 `examples/notes/` by hand, file by file.
 
@@ -30,7 +30,7 @@ What each file is: [conventions/scaffolding.md](design/conventions/scaffolding.m
 
 ```
 examples/notes/
-├─ package.json        deps: @tvine/warp, @tvine/weft, @tvine/admin, next, react, zod
+├─ package.json        deps: tvine, tvine/weft, tvine/admin, next, react, zod
 ├─ settings.ts         Django settings.py
 ├─ urls.ts             Django ROOT_URLCONF (optional)
 ├─ next.config.ts
@@ -49,7 +49,7 @@ examples/notes/
 `settings.ts`:
 
 ```ts
-import { defineSettings } from '@tvine/warp'
+import { defineSettings } from 'tvine'
 
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
@@ -64,7 +64,6 @@ Everything else is a default: SQLite at `./tvine.db`, jobs in `./tasks.db`. All 
 
 ```ts
 export default {
-  serverExternalPackages: ['@tvine/warp'],   // Warp is Node-only: never bundled
   compress: false,                            // Warp compresses; Next must not gzip twice
 } satisfies NextConfig
 ```
@@ -74,7 +73,7 @@ export default {
 `apps/notes/models.ts`:
 
 ```ts
-import { defineModel, field, type Infer } from '@tvine/warp'
+import { defineModel, field, type Infer } from 'tvine'
 
 export const Note = defineModel('note', {
   id: field.id(),
@@ -101,7 +100,7 @@ Same as Django: migrations are code files you commit; `showmigrations`, `sqlmigr
 
 ```ts
 import { z } from 'zod'
-import { action, defineAction, DomainError, ListView, type ViewCtx } from '@tvine/warp'
+import { action, defineAction, DomainError, ListView, type ViewCtx } from 'tvine'
 import { Note } from './models.ts'
 import { countWords } from './tasks.ts'
 
@@ -160,7 +159,7 @@ pnpm exec tvine show_urls
 `apps/notes/admin.ts`:
 
 ```ts
-import { admin, ModelAdmin } from '@tvine/warp/contrib/admin'
+import { admin, ModelAdmin } from 'tvine/contrib/admin'
 import { Note } from './models.ts'
 
 class NoteAdmin extends ModelAdmin {
@@ -194,9 +193,9 @@ pnpm exec tvine generate           # → wrote tvine-api.d.ts
 
 ```tsx
 import { connection } from 'next/server'
-import { Page } from '@tvine/weft'
-import { Card } from '@tvine/weft/widgets'
-import { api, must } from '@tvine/weft/api'
+import { Page } from 'tvine/weft'
+import { Card } from 'tvine/widgets'
+import { api, must } from 'tvine/api'
 import { AddNote, ClearAll, NoteButtons } from '../components/notes.tsx'
 
 type NoteRow = { id: number; title: string; body: string; pinned: boolean; words: number }
@@ -291,7 +290,7 @@ button; after the human clicks it the agent drives the real page (and **Stop** t
 pnpm exec tvine inspect http://127.0.0.1:4400 --port 7400   # → inspector on http://127.0.0.1:7400
 ```
 
-It needs `@tvine/inspect` as a dev dependency (the example has it).
+It ships with `tvine`.
 
 ## 8. A background task
 
@@ -299,7 +298,7 @@ It needs `@tvine/inspect` as a dev dependency (the example has it).
 
 ```ts
 import { z } from 'zod'
-import { defineTask } from '@tvine/warp/tasks'
+import { defineTask } from 'tvine/tasks'
 import { Note } from './models.ts'
 
 export const countWords = defineTask('countWords', async ({ id }) => {

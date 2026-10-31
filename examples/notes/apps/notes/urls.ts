@@ -1,4 +1,4 @@
-import { path } from '@tvine/warp'
+import { path } from 'tvine'
 import { NoteList } from './views.ts'
 
 export const appName = 'notes'
