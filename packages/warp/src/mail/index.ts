@@ -12,6 +12,7 @@ import type { EmailSettings, Settings } from '../core/types.js'
 import { onCommit } from '../data/engine.js'
 import { DEFAULTS, emailBackendDefault } from '../settings.js'
 import { smtpSend } from './smtp.js'
+import { metrics } from '../core/metrics.js'
 
 export class BadHeaderError extends Error {
   constructor(msg: string) { super(msg); this.name = 'BadHeaderError' }
@@ -232,7 +233,12 @@ async function deliver(conf: EmailSettings, msgs: EmailMessage[]): Promise<numbe
 export async function sendMessages(msgs: EmailMessage[], failSilently = false): Promise<number> {
   const todo = msgs.filter((m) => m.recipients().length)
   if (!todo.length) return 0
-  try { return await deliver(reg.conf, todo) } catch (e) {
+  try {
+    const n = await deliver(reg.conf, todo)
+    metrics.inc('tvine_mail_sent_total', {}, n)
+    return n
+  } catch (e) {
+    metrics.inc('tvine_mail_failed_total', {}, todo.length)
     if (failSilently) return 0
     throw e
   }

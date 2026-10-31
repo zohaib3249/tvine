@@ -2,7 +2,8 @@
 // relay and (only when a task is durable) the outbox relay, add the /tvine/health section. Stopped with the server.
 // broker 'memory' lives in this process only, so the web server runs its jobs itself (an embedded worker).
 import type { ServerCtx } from '../../core/dispatch.js'
-import { closeBroker } from './broker.js'
+import { brokerKind, closeBroker } from './broker.js'
+import { metrics } from '../../core/metrics.js'
 import { healthSection, OutboxRelay, ProgressRelay, relayClaim } from './relay.js'
 import { configureTasks, discoverTasks } from './task.js'
 import { Worker } from './worker.js'
@@ -22,5 +23,12 @@ export async function ready(server: ServerCtx): Promise<void> {
     await worker.start()
   }
   server.onClose(async () => { progress.stop(); await outbox.stop(); await worker?.stop(); await closeBroker() })
-  server.health.set('tasks', healthSection(t.leaseMs, server.log))
+  const health = healthSection(t.leaseMs, server.log)
+  server.health.set('tasks', health)
+  // queue depth per status from the same cached stats as /tvine/health (a scrape never waits on the store)
+  metrics.gauge('tvine_tasks_jobs', () => {
+    const s = health() as Partial<Record<'queued' | 'scheduled' | 'running' | 'dead', number>>
+    const broker = brokerKind() ?? 'file'
+    return (['queued', 'scheduled', 'running', 'dead'] as const).filter((k) => typeof s[k] === 'number').map((k) => [{ broker, status: k }, s[k]!])
+  })
 }
