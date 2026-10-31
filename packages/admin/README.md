@@ -3,7 +3,23 @@
 Django-admin-style panel for Tvine, built on Weft widgets and the admin API (`docs/design/contrib/admin.md`).
 It talks to the backend only through `api.admin.*` / `api.auth.*`. It never touches models or the ORM.
 
-## Mount (Next App Router)
+## Mount
+
+Nothing to mount. Put `'tvine.admin'` in `settings.installedApps` and add `@tvine/admin` to the app's dependencies.
+Warp then serves the panel at `settings.admin.path` (default `/admin`), before Next:
+
+- An HTML shell for every page under the path. Its `<script>` carries the request's CSP nonce.
+- `<path>/_static/admin.js` (React and the panel, prebuilt by this package's `pnpm build`) and `<path>/_static/admin.css`
+  (Tailwind already applied, scoped under `.tva`).
+- The browser renders the panel, and all data comes through `api.*` (`/tvine/api`). Not signed in, or not staff:
+  the panel shows its own login (`auth.login`).
+
+Register models in `apps/<app>/admin.ts` (docs/design/contrib/admin.md §1). In two-server mode, forward the admin path
+from the Next server to the API server, the same way `/tvine/*` is forwarded.
+
+### Override with your own page (SSR + customization)
+
+A Next page at the same path wins: Warp sees the route and passes the request on.
 
 ```ts
 // app/admin/[[...path]]/page.tsx
@@ -12,11 +28,12 @@ export { default, generateMetadata } from '@tvine/admin/page'
 export { default } from '@tvine/admin/layout'
 ```
 
-- The layout loads `@tvine/admin/admin.css`. Tailwind v4 is already compiled into that file, and so is `@tvine/weft/forms/forms.css`. The host app needs no Tailwind config.
-- The CSS has no global reset. Every rule is scoped under `.tva`, so the host's own pages keep their styles.
-- Keep `<WeftRoot>` in the host's root layout. It provides tab control, WebMCP and presence.
-- The first paint is rendered on the server (`admin.site` + the route's reads, in-process). After that the panel navigates on the client with `history.pushState` and loads data through `api.*` from the browser.
-- Mounting at a path other than `/admin`: `export default adminPage({ base: '/staff' })`, with `adminPage` imported from `@tvine/admin/page`.
+- This mount renders the first paint on the server (`admin.site` and the route's reads, in-process). After that the
+  panel navigates on the client.
+- `configureAdmin` (custom pages, widgets, `getUrls` views, slots) needs this mount, because the prebuilt bundle cannot
+  import your components.
+- Keep `<WeftRoot>` in the host's root layout. (The prebuilt shell renders its own.)
+- At another path: `export default adminPage({ base: '/staff' })`, and set `settings.admin.path` to the same path.
 
 ## Routes
 
@@ -86,7 +103,7 @@ Changelist query parameters follow Django:
 
 ## Customize
 
-Do this in a `'use client'` module of the host app. Render that module once in `app/admin/[[...path]]/layout.tsx`, so it loads before the panel:
+Needs the override mount above. Do this in a `'use client'` module of the host app, and render that module once in `app/admin/[[...path]]/layout.tsx` so it loads before the panel:
 
 ```tsx
 'use client'
