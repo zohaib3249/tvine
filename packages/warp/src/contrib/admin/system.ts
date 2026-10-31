@@ -14,19 +14,19 @@ import { showMigrations } from '../../data/migrate.js'
 import { isProduction } from '../../env.js'
 import { memoryLog, LEVELS, type Level } from '../../log.js'
 import { staffGuard } from './hardening.js'
+import { denyAgents } from '../../security/permissions.js'
 import { AdminStat } from './models.js'
 import {
   AGENT_VIA, Collector, merge, newAcc, quantile, rangeOf, round, timeSeries, topOf, type Acc, type ChartData, type Range, type StatRow, type Table,
 } from './stats.js'
-import { DASH_RATE } from './stats.js'
 import { rangeParam } from './stats.js'
 
 // set by hooks.ts ready(): the server this admin runs in and its collector
 export const runtime: { ctx?: ServerCtx; collector?: Collector; startedAt: number; lag?: ReturnType<typeof monitorEventLoopDelay> } = { startedAt: Date.now() }
 
 const isSuperuser: Permission = (c) => c.user.isSuperuser === true && c.user.isActive !== false
-const staff = { permissions: [staffGuard], readOnly: true, rate: DASH_RATE }
-const superuser = { permissions: [staffGuard, isSuperuser], readOnly: true, rate: DASH_RATE }
+const staff = { permissions: [staffGuard], readOnly: true }
+const superuser = { permissions: [staffGuard, isSuperuser], readOnly: true }
 const forbidden = () => new DomainError('forbidden', 'forbidden: not allowed')
 const col = () => runtime.collector ?? new Collector()
 const ms = (n: number) => Math.round(n * 10) / 10
@@ -181,7 +181,7 @@ const errorsOf = (rows: StatRow[], action: string, agentOnly: boolean) =>
 export const systemRevokeTab = defineAction('admin.system.revokeTab', z.object({ id: z.string().regex(/^[0-9a-f]{16}$/) }), async ({ id }) => {
   if (!tabsOf().revoke?.(id)) throw new DomainError('not_found', 'no agent controls that tab now')
   return { ok: true }
-}, { permissions: [staffGuard] })
+}, { permissions: [staffGuard, isSuperuser, denyAgents] })   // a human superuser only: it ends someone's agent session
 
 // ---- metrics (10-second ticks, this process, last hour) --------------------------------------------------------------------
 export const systemMetrics = defineAction('admin.system.metrics', z.object({}), async () => {

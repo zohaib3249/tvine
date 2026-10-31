@@ -46,6 +46,7 @@ import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 import { adminSnapshot } from './contrib/admin/agent.js'
+import { adminGroupAllowed } from './contrib/admin/hardening.js'
 
 type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
 export type HeadersLike = Iterable<[string, string]>   // a fetch Headers, or Next's headers()
@@ -238,11 +239,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
   const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs,
     // tvine.admin live groups: admin:live = active staff, admin:logs = active superuser (the user from the cookie session)
-    groupAllowed: adminBase ? async (group, session) => {
-      const request = await buildRequest({ url: adminBase, route: adminBase, headers: {}, ip: '127.0.0.1', isAgent: false }, settings)
+    groupAllowed: adminBase ? async (group, session, ip) => {
+      const request = await buildRequest({ url: adminBase, route: adminBase, headers: {}, ip, isAgent: false }, settings)
       await authenticate(settings, request, session)
-      const u = request.user
-      return u.isActive !== false && u.isStaff === true && (group !== 'admin:logs' || u.isSuperuser === true)
+      return adminGroupAllowed(group, { sid: session.sid, session, route: adminBase, user: request.user, agent: request.agent, ip: request.ip })
     } : undefined })
   const mcp = mcpHandler(ctx, { route, tabs })
   const fail = (res: ServerResponse) => (e: unknown) => {

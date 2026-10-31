@@ -300,7 +300,10 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
     if (r.hit === true) return { sid: known.sid, events: r.events }
   }
   // 3a. ip + default sid bucket first: abusive traffic never creates sessions or queues (3b, an action's own rate, runs later)
-  const rl = renderRead.has(request) ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  // a remote agent's command forwarded through a tab (agentCmd channel, while the tab hub has one running for this
+  // session) is not charged to the human's ip/session bucket: TabHub's own per-tab limit already counted it
+  const forwarded = cmd.agentCmd?.via === 'channel' && !!server.tabs && await (async () => { const s = await peeked(); return !!s && (await server.tabs!.forcedAgent(s)) === true })()
+  const rl = renderRead.has(request) || forwarded ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
   if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
   const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })

@@ -60,6 +60,9 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   const beat = o.beat ? new Beat({ log }) : undefined
   const outbox = new OutboxRelay(log)
   const cache = workerCache(settings, log)
+  // tvine.admin's dashboard counts this worker's queries / mail / cache too (its rollups add up across processes)
+  const stats = settings.installedApps.includes('tvine.admin') && settings.admin.stats.enabled
+    ? await import('../admin/stats.js').then((m) => m.startStats(m.newCollector(settings), settings.admin.stats.flushMs, log)) : undefined
   await w.start()
   beat?.start()
   outbox.start()
@@ -73,6 +76,7 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
       await beat?.stop()
       await outbox.stop()
       await w.stop()
+      await stats?.()
       await cache.settle?.()
       cache.close?.()
       await closeBroker()

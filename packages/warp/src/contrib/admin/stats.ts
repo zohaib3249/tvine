@@ -6,11 +6,14 @@
 //    the current hour), so longer ranges survive restarts and add up across servers. Old rows go after retentionDays.
 // Only low-cardinality labels are kept: route patterns, registered action ids, declared agent names (unverified), SQL
 // fingerprints (literals → ?, IN lists collapsed). Never a raw path, a sid (hashed), a param or a bound value.
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { sidHash } from '../../core/audit.js'
-import type { Stat } from '../../core/metrics.js'
+import { stats, type Stat } from '../../core/metrics.js'
+import type { Settings } from '../../core/types.js'
+import { connections } from '../../data/db.js'
 import type { MemoryRecord } from '../../log.js'
+import { atomic } from '../../data/engine.js'
 import { AdminStat } from './models.js'
 
 export const EDGES = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]   // ms; one more bucket above the last
@@ -40,14 +43,50 @@ export function quantile(a: Acc, q: number): number {
   return a.max
 }
 
-// SQL → fingerprint: string / number literals and $n / ? params → ?, IN lists → (?…), whitespace collapsed
-export function fingerprint(sql: string): string {
-  return sql.replace(/'(?:[^']|'')*'/g, '?').replace(/\$\d+/g, '?').replace(/\b\d+(?:\.\d+)?\b/g, '?')
-    .replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, '(?…)').replace(/\s+/g, ' ').trim().slice(0, 300)
+// SQL → fingerprint, by scanning (not regex-replacing) the statement: every literal becomes ?, whatever its quoting —
+// '…' with '' or \' escapes, E'…', $tag$…$tag$, MySQL "…" strings (mysql: true; elsewhere "…" is an identifier),
+// numbers incl. hex and 1e5 — params ($n, ?) stay ?, comments go, IN lists collapse to (?…). The ORM already sends
+// params, so this mostly normalizes; an unterminated literal swallows the rest (never leaks it).
+export function fingerprint(sql: string, o: { mysql?: boolean } = {}): string {
+  let out = '', i = 0
+  const n = sql.length
+  const isWord = (c: string | undefined) => !!c && /[\w$]/.test(c)
+  const quoted = (q: string, backslash: boolean) => {   // i at the opening quote; returns the index after the closing one
+    let j = i + 1
+    while (j < n) {
+      const c = sql[j]!
+      if (backslash && c === '\\') { j += 2; continue }
+      if (c === q) { if (sql[j + 1] === q) { j += 2; continue } return j + 1 }
+      j++
+    }
+    return n
+  }
+  while (i < n) {
+    const c = sql[i]!, prev = out[out.length - 1]
+    if (c === '-' && sql[i + 1] === '-') { const e = sql.indexOf('\n', i); i = e < 0 ? n : e; continue }
+    if (c === '/' && sql[i + 1] === '*') { const e = sql.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; out += ' '; continue }
+    if ((c === 'E' || c === 'e') && sql[i + 1] === "'" && !isWord(prev)) { i++; i = quoted("'", true); out += '?'; continue }
+    if (c === "'") { i = quoted("'", true); out += '?'; continue }
+    if (c === '"') {
+      if (o.mysql) { i = quoted('"', true); out += '?'; continue }
+      const e = quoted('"', false); out += sql.slice(i, e); i = e; continue   // an identifier
+    }
+    if (c === '`') { const e = quoted('`', false); out += sql.slice(i, e); i = e; continue }
+    if (c === '$') {
+      const m = /^\$(\d+)/.exec(sql.slice(i, i + 12))
+      if (m) { out += '?'; i += m[0].length; continue }
+      const t = /^\$([A-Za-z_]\w*)?\$/.exec(sql.slice(i, i + 66))
+      if (t && !isWord(prev)) { const e = sql.indexOf(t[0], i + t[0].length); i = e < 0 ? n : e + t[0].length; out += '?'; continue }
+    }
+    if (/[0-9.]/.test(c) && !isWord(prev)) {
+      const m = /^(?:0x[0-9a-f]+|\d+(?:\.\d*)?(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)/i.exec(sql.slice(i, i + 64))
+      if (m) { out += '?'; i += m[0].length; continue }
+    }
+    out += c; i++
+  }
+  return out.replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, '(?…)').replace(/\s+/g, ' ').trim().slice(0, 300)
 }
 const clean = (s: string, n = 60) => s.replace(/[\0-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '').trim().slice(0, n)
-// one dashboard load reads ~20 widgets (each a staff-only read): its own per-session budget, not the site's 60/min
-export const DASH_RATE = { limit: 600, windowMs: 60_000 }
 export const AGENT_VIA = new Set(['agent', 'webmcp', 'tab'])
 const MAX_DIMS = 300                 // distinct dims per key per cell; more fold into { other: '1' }
 const HOUR = 3_600_000, MIN = 60_000, TICK = 10_000
@@ -72,7 +111,12 @@ export class Collector {
   private lastPrune = 0
   onLive?: (type: 'agent' | 'security' | 'tick') => void
 
-  constructor(readonly o: { slowMs: number; retentionDays: number; now?: () => number } = { slowMs: 100, retentionDays: 30 }) {}
+  constructor(readonly o: {
+    slowMs: number; retentionDays: number; now?: () => number
+    mysql?: (alias: string) => boolean          // the alias's dialect quotes strings with "…" too
+    route?: (path: string) => string | undefined // a page path → its route pattern (agent sessions show patterns)
+    key?: string                                 // HMAC key for token labels (settings.secret): stable across servers
+  } = { slowMs: 100, retentionDays: 30 }) {}
   private now(): number { return this.o.now?.() ?? Date.now() }
 
   private inc(key: string, dims: Dims, ms?: number, by = 1): void {
@@ -132,7 +176,7 @@ export class Collector {
       return
     }
     if (s.k === 'db') {
-      const f = fingerprint(s.sql)
+      const f = fingerprint(s.sql, { mysql: this.o.mysql?.(s.alias) })
       if (/\badmin_stat\b/.test(f)) return   // the rollup's own writes are not the app's queries
       this.inc('db', { f, d: s.alias }, s.ms)
       if (s.ms >= this.o.slowMs) {
@@ -145,7 +189,7 @@ export class Collector {
     this.inc('action', { a: s.action, o: s.outcome, v: s.via }, s.ms)
     const k = this.tick()
     if (agent) k.agent++; else k.human++
-    if (s.token) this.inc('token', { u: clean(s.token, 40) })
+    if (s.token) this.inc('token', { u: `token user #${createHmac('sha256', this.o.key ?? this.node).update(s.token).digest('hex').slice(0, 10)}` })   // never the user id
     if (!agent) return
     const name = clean(s.agent ?? '') || '(unnamed)'
     this.inc('agent', { n: name, v: s.via })
@@ -167,7 +211,11 @@ export class Collector {
   // an agent's page read (ServerCtx 'read' hook): where its session is now
   read(sid: string, page: string): void {
     const x = this.sessions.get((sidHash(sid) ?? '').slice(0, 12))
-    if (x) { x.page = clean(page.split('?')[0]!, 200); x.lastAt = this.now() }
+    if (!x) return
+    const path = page.split('?')[0]!
+    let pattern: string | undefined
+    try { pattern = this.o.route?.(path) } catch { pattern = undefined }
+    x.page = clean(pattern ?? '(unmatched)', 200); x.lastAt = this.now()   // a route pattern, never the raw path
   }
 
   // a tvine.security log record (memory log ring subscriber)
@@ -201,8 +249,11 @@ export class Collector {
       for (const h of todo) {
         if (!h.cells.size) continue
         const bucket = new Date(h.start)
-        await AdminStat.objects.filter({ bucket, node: this.node }).delete()   // scope: ok (internal rollup table)
-        await AdminStat.objects.bulkCreate([...h.cells.values()].map((c) => ({ bucket, node: this.node, key: c.key, dims: c.dims, ...structuredClone(c.acc) })), { batchSize: 200 })   // scope: ok
+        const rows = [...h.cells.values()].map((c) => ({ bucket, node: this.node, key: c.key, dims: c.dims, ...structuredClone(c.acc) }))
+        await atomic(async () => {   // one transaction: a reader never sees this hour's rows half-replaced
+          await AdminStat.objects.filter({ bucket, node: this.node }).delete()   // scope: ok (internal rollup table)
+          await AdminStat.objects.bulkCreate(rows, { batchSize: 200 })   // scope: ok
+        })
       }
       const now = this.now()
       if (now - this.lastPrune > HOUR) {
@@ -278,4 +329,26 @@ export function topOf(rows: StatRow[], label: (r: StatRow) => string | undefined
     merge(m.get(k) ?? (m.set(k, newAcc()), m.get(k)!), r)
   }
   return [...m].sort((a, b) => by(b[1]) - by(a[1])).slice(0, n)
+}
+
+// the collector for this process's settings (the web server's ready() and `tvine worker`)
+export function newCollector(settings: Settings, route?: (path: string) => string | undefined): Collector {
+  const secret = settings.secret
+  return new Collector({
+    slowMs: settings.db.slowQueryMs || 100, retentionDays: settings.admin.stats.retentionDays, route,
+    mysql: (alias) => { try { return connections.get(alias).dialect.name === 'mysql' } catch { return false } },
+    key: Array.isArray(secret) ? secret[0] : secret,
+  })
+}
+// tap + periodic flush; the returned stop() unhooks and flushes once more
+export function startStats(col: Collector, flushMs: number, log: (level: 'warn', msg: string, data?: Record<string, unknown>) => void): () => Promise<void> {
+  const tap = (s: Stat) => col.record(s)
+  stats.tap = tap
+  const timer = setInterval(() => { col.flush().catch((e: unknown) => log('warn', 'admin stats flush failed', { error: (e as Error).message })) }, flushMs)
+  timer.unref?.()
+  return async () => {
+    clearInterval(timer)
+    if (stats.tap === tap) stats.tap = undefined
+    await col.flush().catch(() => { /* the database may already be closed */ })
+  }
 }

@@ -2,7 +2,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api as browserApi } from '@tvine/weft/api'
 import { Dialog, Drawer, Menu, Toaster, toast } from '@tvine/weft/widgets'
-import { caller, keyOf, loadRoute, type Call, type RouteData } from './data.js'
+import { caller, keyOf, loadRoute, loadSite, type Call, type RouteData } from './data.js'
 import { href, parse, type Query, type Route } from './routes.js'
 import type { ModelMeta, Site, User } from './types.js'
 import { AdminCtx, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
@@ -24,7 +24,16 @@ export function AdminApp(p: AdminAppProps) {
   const call = useMemo<Call>(() => caller(p.api ?? browserApi), [p.api])
   const base = (p.base ?? '/admin').replace(/\/$/, '')
   const [site, setSite] = useState(p.site)
+  const [siteError, setSiteError] = useState(p.error)
+  const tries = useRef(0)
   const [user, setUser] = useState(p.user ?? null)
+  useEffect(() => {
+    if (site || !retryable(siteError)) return
+    const wait = Math.min(30_000, Math.max((siteError as { retryAfterMs?: number }).retryAfterMs ?? 0, 2000 * 2 ** tries.current++)) + 250   // back-off
+    toast({ title: 'The server is busy', description: `Retrying in ${Math.ceil(wait / 1000)} s…` })
+    const t = setTimeout(() => { void loadSite(call).then((r) => { if (r.site) { setSite(r.site); setUser(r.user ?? null) } setSiteError(r.error) }) }, wait)
+    return () => clearTimeout(t)
+  }, [site, siteError, call])
   // auth.me can fail on its own (a rate limit) while admin.site answered: retry once
   useEffect(() => {
     if (!site || user) return
@@ -111,7 +120,9 @@ export function AdminApp(p: AdminAppProps) {
   const root = (body: ReactNode) => <div className={cx('tva', slotClass('shell'))} data-theme={theme} style={style}>{body}<Toaster name="toasts" label="Notifications" /></div>
 
   if (!site) {
-    return root(<Login error={p.error} user={p.user ?? null} call={call} onDone={() => location.reload()} />)
+    // Login only when the API says who you are is the problem; a rate limit or an outage retries with back-off
+    if (retryable(siteError)) return root(<Retrying error={siteError!} />)
+    return root(<Login error={siteError} user={user ?? null} call={call} onDone={() => location.reload()} />)
   }
 
   return (
@@ -389,3 +400,16 @@ function Shortcuts() {
 }
 
 export { toast }
+
+// a failure worth retrying (never a Login screen): rate limits, a network error, a server error
+export const retryable = (e?: { code: string; reason?: string }) => !!e && (e.code === 'rate_limited' || e.code === 'internal' || e.reason === 'network')
+function Retrying({ error }: { error: { code: string; message: string } }) {
+  return (
+    <div role="status" className="grid h-full place-items-center p-6">
+      <div className="tva-card max-w-sm p-6 text-center">
+        <p className="font-semibold">{error.code === 'rate_limited' ? 'Too many requests right now' : 'The server did not answer'}</p>
+        <p className="mt-1 text-muted">Trying again automatically…</p>
+      </div>
+    </div>
+  )
+}

@@ -23,9 +23,11 @@ export interface ChannelDeps {
   watchInspector?: () => () => void   // called per open inspector stream; returns its release (the feed refcount)
   tabs?: TabHub                       // transport/tab: `?tab=` cookie streams become controllable tabs
   // tvine.admin's live groups (`?group=admin:live|admin:logs`): may this cookie session's user join? (server.ts)
-  groupAllowed?: (group: string, session: Session) => Promise<boolean>
+  // ip = the client's address (request.ip rules); re-asked every ADMIN_RECHECK_MS while the stream is open
+  groupAllowed?: (group: string, session: Session, ip: string) => Promise<boolean>
 }
 const ADMIN_GROUPS = new Set(['admin:live', 'admin:logs'])
+const ADMIN_RECHECK_MS = 10_000
 
 
 // The inspector rule (dev surfaces only): socket loopback (never X-Forwarded-For), no proxy header (a local reverse
@@ -77,7 +79,9 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const wanted = url.searchParams.get('group')
     const adminGroup = wanted !== null && ADMIN_GROUPS.has(wanted) ? wanted : undefined
     // an admin group: cookie sessions only (the panel), and only for a user the gate lets in
-    if (adminGroup && !(cookieSession && deps.groupAllowed && await deps.groupAllowed(adminGroup, session!))) return json(403, ev.err('domain', 'forbidden'))
+    const realIp = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
+    const allowed = async (s: Session | undefined) => { try { return !!s && !!deps.groupAllowed && await deps.groupAllowed(adminGroup!, s, realIp) } catch { return false } }
+    if (adminGroup && !(cookieSession && await allowed(session))) return json(403, ev.err('domain', 'forbidden'))
     const sid = session?.sid ?? ''
     // I3: a stream authenticated by the httpOnly cookie never carries the sid (page script, XSS included, must
     // not learn it); an agent's sid-keyed stream already knows its own sid.
@@ -150,6 +154,13 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     for (const r of queued) live(r.e, r.seq)
     if (inspector && deps.watchInspector && !closed) release = deps.watchInspector()
 
+    // an admin group re-checks its user (staff / superuser, allowIps, 2FA, idle) and ends when it no longer passes
+    let recheck: unknown
+    if (adminGroup) recheck = clock.setInterval(() => {
+      void lookup(sessions.peek).then(async (s) => { if (!closed && !(await allowed(s))) close(true) }, () => { /* store hiccup: next round */ })
+    }, ADMIN_RECHECK_MS)
+    const untimer = unsub
+    unsub = () => { untimer(); if (recheck !== undefined) clock.clearInterval(recheck) }
     timer = clock.setInterval(() => {
       if (closed) return
       // Expiry doesn't notify subscribers (core-session): poll here and end the stream.

@@ -17,7 +17,6 @@ import { labelOf } from './meta.js'
 import { checkPerm, type ChartSpec, type Ctx, type ModelAdmin } from './options.js'
 import { site } from './sites.js'
 import { bucketsOf, floorTo, rangeOf, rangeParam, round, type ChartData, type Range } from './stats.js'
-import { DASH_RATE } from './stats.js'
 import { changelistQs, choicesOf, filterSpecs } from './views.js'
 
 type Spec = ChartSpec & { id: string; title: string; aggregate: NonNullable<ChartSpec['aggregate']> }
@@ -147,7 +146,7 @@ async function gateChart(ctx: Ctx, model: string): Promise<ModelAdmin> {
   return a
 }
 const modelKey = z.string().regex(/^[a-z][a-z0-9_]*\.[a-zA-Z0-9_]+$/).max(100)
-const read = { permissions: [staffGuard], readOnly: true, rate: DASH_RATE }
+const read = { permissions: [staffGuard], readOnly: true }
 
 // data: true = each chart's result inline (the changelist strip: one round trip)
 export const charts = defineAction('charts', z.object({

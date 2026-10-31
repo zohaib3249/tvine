@@ -70,6 +70,7 @@ export class TabHub {
   private asks = new Map<string, Ask>()                  // requestId → open request
   private held = new Map<Sid, Held>()                    // agent sid → the tab it controls
   private notes = new Map<Sid, { reason: string; at: number }>()
+  private moved = new Map<Sid, Sid>()                    // rotated sid → the sid its in-flight count was copied to
   private busy = new Map<Sid, number>()                  // session sid → forwarded commands running in its tabs
   private tail = new Map<Sid, number>()                  // session sid → stays agent until (after its last command)
   private fails = new Map<string, { n: number; until: number }>()   // ip → wrong pairing codes
@@ -95,7 +96,7 @@ export class TabHub {
     // dropped (expired), never re-keyed: whoever held the old sid's stream must not reach the new session.
     this.unrotate = server.sessions.onRotate((from, to) => {
       const b = this.busy.get(from), t = this.tail.get(from)
-      if (b) this.busy.set(to, (this.busy.get(to) ?? 0) + b)
+      if (b) { this.busy.set(to, (this.busy.get(to) ?? 0) + b); this.moved.set(from, to) }   // unbusy(from) settles `to` too
       if (t !== undefined) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, t))
       if (b) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, Date.now() + TAB_LIMITS.driftMs))   // its in-flight count stays on the old key
       if (b || t !== undefined) void this.share(to)
@@ -248,8 +249,15 @@ export class TabHub {
     return t !== undefined && t > Date.now()
   }
   private unbusy(sid: Sid): void {
-    const n = (this.busy.get(sid) ?? 1) - 1
-    if (n > 0) this.busy.set(sid, n); else this.busy.delete(sid)
+    // a command that started before a login rotation answers on the old sid: its count was copied to the new sid
+    // (onRotate), so the new one comes down too, along the rotation chain
+    for (let k: Sid | undefined = sid, hops = 0; k !== undefined && hops < 8; hops++) {
+      const n = (this.busy.get(k) ?? 1) - 1
+      if (n > 0) this.busy.set(k, n); else this.busy.delete(k)
+      const next = this.moved.get(k)
+      if (n <= 0) this.moved.delete(k)
+      k = next
+    }
   }
   // this server's marking of `sid`, published: busy → until the command's answer could still come (cmdMs + drift);
   // else the tail. Only the server holding the session's tabs writes it (tabs are pinned to their stream).

@@ -12,7 +12,6 @@ import { AdminPref } from './models.js'
 import { checkPerm, type Ctx } from './options.js'
 import { site, type AdminWidget } from './sites.js'
 import { AGENT_VIA, rangeOf, timeSeries, type ChartData, type Range } from './stats.js'
-import { DASH_RATE } from './stats.js'
 import { rangeParam } from './stats.js'
 import { actionTables, loginChart, statRows, systemAgents, systemQueries, trafficCharts } from './system.js'
 
@@ -86,7 +85,7 @@ export const dashboard = defineAction('dashboard', z.object({ range: rangeParam.
     try { return await runWidget(ctx, w, range) } catch (e) { return { error: (e as Error).message.slice(0, 200) } }
   }))
   return { widgets: out.map((w, i) => (results[i] === undefined ? w : { ...w, result: results[i] })), layout: pref?.value ?? null, autoRefreshMs: 60_000 }
-}, { permissions: [staffGuard], readOnly: true, rate: DASH_RATE })
+}, { permissions: [staffGuard], readOnly: true })
 
 async function runWidget(ctx: Ctx, w: Spec, range: Range | undefined): Promise<unknown> {
   const p = w.data!.params ?? {}
@@ -105,5 +104,5 @@ export const widget = defineAction('widget', z.object({ id: z.string().max(200),
   const w = site.widgets.find((x) => x.id === id)
   if (!w || !readFn(w) || !(await may(ctx, w.permission))) throw new DomainError('not_found', `no widget ${id}`)
   return (w.data as (ctx: Ctx, p: { range?: Range }) => unknown)(ctx, { range })
-}, { permissions: [staffGuard], readOnly: true, rate: DASH_RATE })
+}, { permissions: [staffGuard], readOnly: true })
 
