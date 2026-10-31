@@ -13,7 +13,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp } from '../core/request.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
-import { ipKey, RateLimiter } from '../security/ratelimit.js'
+import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
+import { limiterFor } from '../backends/index.js'
+
+// a hub limiter from settings.limits.backend, its keys namespaced so two hub limiters never share a bucket
+type TabLimiter = { check(k: { sid: string }): ReturnType<Limiter['check']> }
+function tabLimiter(server: ServerCtx, ns: string, rate: { limit: number; windowMs: number }): TabLimiter {
+  const l = limiterFor(server.settings, rate)
+  return { check: (k) => l.check({ sid: `tab-${ns}|${k.sid}` }) }
+}
 
 export const TAB_LIMITS = {
   requestTtlMs: 300_000,      // approveUrl / requestId lifetime
@@ -60,16 +68,21 @@ export class TabHub {
   private busy = new Map<Sid, number>()                  // session sid → forwarded commands running in its tabs
   private tail = new Map<Sid, number>()                  // session sid → stays agent until (after its last command)
   private fails = new Map<string, { n: number; until: number }>()   // ip → wrong pairing codes
-  private askRate = new RateLimiter({ limit: 5, windowMs: 60_000 })     // request_control per agent sid / per ip
-  private codeRate = new RateLimiter({ limit: 5, windowMs: 60_000 })    // pairing tries per tab / per ip
+  // settings.limits.backend: shared across servers on 'redis' (each limiter in its own key space)
+  private askRate: TabLimiter     // request_control per agent sid / per ip
+  private codeRate: TabLimiter    // pairing tries per tab / per ip
   private cmdRate = new RateLimiter({ limit: 10, windowMs: 3_334 })     // forwarded commands per tab: 10 burst, 3/s
-  readonly helloRate = new RateLimiter({ limit: 30, windowMs: 10_000 })  // hello (mints sessions) per ip
-  readonly tabRate = new RateLimiter({ limit: 30, windowMs: 10_000 })    // request/approve/result per tab (release is exempt)
+  readonly helloRate: TabLimiter  // hello (mints sessions) per ip
+  readonly tabRate: TabLimiter    // request/approve/result per tab (release is exempt)
   private timer: ReturnType<typeof setInterval>
   private unwatch: () => void
   private unrotate: () => void
 
   constructor(private server: ServerCtx) {
+    this.askRate = tabLimiter(server, 'ask', { limit: 5, windowMs: 60_000 })
+    this.codeRate = tabLimiter(server, 'code', { limit: 5, windowMs: 60_000 })
+    this.helloRate = tabLimiter(server, 'hello', { limit: 30, windowMs: 10_000 })
+    this.tabRate = tabLimiter(server, 'tab', { limit: 30, windowMs: 10_000 })
     this.unwatch = server.sessions.watch((sid, kind) => { if (kind === 'expired') this.expired(sid) })
     // login/logout rotated a session: its agent marking (running forwarded commands, tail) follows it, so the
     // new sid is never treated as human while the agent's command is still settling. Tabs on the old sid are
@@ -133,11 +146,11 @@ export class TabHub {
   // `sid` is called only after the ip check passed: a refused request creates no session.
   async request(sid: () => Promise<Sid>, o: { name?: unknown; ip: string; base?: string }): Promise<TabAnswer & { sid?: Sid }> {
     if (!this.on) return fail('domain', 'forbidden', 'this site does not allow agents to control browser tabs')
-    const limited = (k: string) => { const r = this.askRate.check({ sid: k }); return r.ok ? undefined : { ok: false as const, code: 'rate_limited' as const, message: `rate limited: retry after ${r.retryAfterMs}ms` } }
-    const byIp = limited(`ip:${ipKey(o.ip)}`)
+    const limited = async (k: string) => { const r = await this.askRate.check({ sid: k }); return r.ok ? undefined : { ok: false as const, code: 'rate_limited' as const, message: `rate limited: retry after ${r.retryAfterMs}ms` } }
+    const byIp = await limited(`ip:${ipKey(o.ip)}`)
     if (byIp) return byIp
     const agentSid = await sid()
-    const bySid = limited(`sid:${agentSid}`)
+    const bySid = await limited(`sid:${agentSid}`)
     if (bySid) return { ...bySid, sid: agentSid }
     for (const a of [...this.asks.values()]) if (a.agentSid === agentSid) this.asks.delete(a.id)   // newer replaces older
     this.notes.delete(agentSid)
@@ -279,7 +292,7 @@ export class TabHub {
     return [200, { requestId: ask.id, name: ask.name, verified: false }]
   }
 
-  approve(session: Session, b: Record<string, unknown>, ip: string): [number, unknown] {
+  async approve(session: Session, b: Record<string, unknown>, ip: string): Promise<[number, unknown]> {
     const tab = this.own(session, b.tabId)
     if (!tab) return [403, { error: 'not your tab' }]
     const now = Date.now()
@@ -287,7 +300,7 @@ export class TabHub {
     if (typeof b.code === 'string') {
       const k = ipKey(ip), f = this.fails.get(k)
       if (f && f.n >= TAB_LIMITS.codeFails && f.until > now) return [429, { error: 'too many wrong codes; try again later' }]
-      for (const key of [`tab:${tab.id}`, `ip:${k}`]) if (!this.codeRate.check({ sid: key }).ok) return [429, { error: 'too many tries; wait a minute' }]
+      for (const key of [`tab:${tab.id}`, `ip:${k}`]) if (!(await this.codeRate.check({ sid: key })).ok) return [429, { error: 'too many tries; wait a minute' }]
       const typed = normCode(b.code)
       const want = Buffer.from(/^[0-9A-Z]{8}$/.test(typed) ? typed : '########')   // malformed: compared as a never-matching code (equal lengths, no throw)
       for (const a of this.asks.values()) {
@@ -400,7 +413,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     let session = cookie !== undefined ? await sessions.resolve({ cookie }) : undefined
     if (op === 'hello') {
       // a tab needs a cookie session to be controlled: mint one (after the origin + ip checks), never echo it
-      if (!hub.helloRate.check({ sid: `ip:${ipKey(ip)}` }).ok) return tooMany(res)
+      if (!(await hub.helloRate.check({ sid: `ip:${ipKey(ip)}` })).ok) return tooMany(res)
       if (session) return send(res, 200, { ok: true })
       if (!(await server.limiter.check({ ip })).ok) return tooMany(res)   // as the <Form> path, before minting
       session = await sessions.create()
@@ -409,12 +422,12 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     }
     if (!session) return send(res, 401, { error: 'no session' })
     if (!hub.own(session, tabId)) return send(res, 403, { error: 'not your tab' })
-    if (op !== 'release' && !hub.tabRate.check({ sid: `tab:${tabId}` }).ok) return tooMany(res)
+    if (op !== 'release' && !(await hub.tabRate.check({ sid: `tab:${tabId}` })).ok) return tooMany(res)
     const b = await body(req, op === 'result' ? TAB_LIMITS.resultBytes : settings.limits.bodyBytes)
     if (!b) { res.setHeader('connection', 'close'); return send(res, 400, { error: 'body must be a JSON object' }) }
     b.tabId = tabId
     const [status, out] = op === 'request' ? hub.show(session, b)
-      : op === 'approve' ? hub.approve(session, b, ip)
+      : op === 'approve' ? await hub.approve(session, b, ip)
       : op === 'result' ? hub.result(session, b)
       : hub.stop(session, b)
     send(res, status, out)

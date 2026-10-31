@@ -32,7 +32,7 @@ class Script {
 // ---- sessions ------------------------------------------------------------------------------------------------
 // s:<sid> hash {rev, data (v8 structured clone, base64), created, seen, ver}; c:<cookie> → sid; sc:<sid> set of
 // cookies; sx zset sid → last seen (flood cap + the sweep that fires `expired` exactly once cluster-wide);
-// lock:<sid> the cross-server command lock. ver counts saves: a cached Session is refreshed only by a newer one.
+// lock:<sid> the cross-server command lock. Times (seen, expiry) are Redis's clock (TIME), never a server's. ver counts saves: a cached Session is refreshed only by a newer one.
 const DEL_SESSION = `
 local function del(p, sid)
   local sc = p .. 'sc:' .. sid
@@ -41,7 +41,9 @@ local function del(p, sid)
   redis.call('ZREM', p .. 'sx', sid)
 end`
 const LOAD = new Script(`
-local p, sid, now, ttl = ARGV[1], ARGV[2], tonumber(ARGV[4]), tonumber(ARGV[5])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local p, sid, ttl = ARGV[1], ARGV[2], tonumber(ARGV[5])
 if sid == '' then sid = redis.call('GET', p .. 'c:' .. ARGV[3]); if not sid then return false end end
 local k = p .. 's:' .. sid
 local h = redis.call('HMGET', k, 'rev', 'data', 'created', 'seen', 'ver')
@@ -58,7 +60,9 @@ if ARGV[6] == '1' then
 end
 return {sid, h[1], h[2], h[3], h[4], h[5]}`)
 const CREATE = new Script(`${DEL_SESSION}
-local p, sid, now, ttl, max = ARGV[1], ARGV[2], tonumber(ARGV[3]), tonumber(ARGV[4]), tonumber(ARGV[5])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local p, sid, ttl, max = ARGV[1], ARGV[2], tonumber(ARGV[4]), tonumber(ARGV[5])
 local k = p .. 's:' .. sid
 redis.call('HSET', k, 'rev', 0, 'data', ARGV[6], 'created', now, 'seen', now, 'ver', 0)
 redis.call('PEXPIRE', k, ttl)
@@ -87,7 +91,9 @@ redis.call('SADD', sc, ARGV[3])
 redis.call('PEXPIRE', sc, ttl)
 return ARGV[3]`)
 const ROTATE = new Script(`${DEL_SESSION}
-local p, old, new, now, ttl = ARGV[1], ARGV[2], ARGV[3], tonumber(ARGV[4]), tonumber(ARGV[5])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local p, old, new, ttl = ARGV[1], ARGV[2], ARGV[3], tonumber(ARGV[5])
 local h = redis.call('HMGET', p .. 's:' .. old, 'rev', 'data', 'created', 'ver')
 if not h[1] then return false end
 del(p, old)
@@ -100,8 +106,10 @@ const DELETE = new Script(`${DEL_SESSION}
 if redis.call('EXISTS', ARGV[1] .. 's:' .. ARGV[2]) == 0 then return 0 end
 del(ARGV[1], ARGV[2]); return 1`)
 const SWEEP = new Script(`${DEL_SESSION}
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local p, out = ARGV[1], {}
-for _, sid in ipairs(redis.call('ZRANGEBYSCORE', p .. 'sx', '-inf', ARGV[2], 'LIMIT', 0, ARGV[3])) do
+for _, sid in ipairs(redis.call('ZRANGEBYSCORE', p .. 'sx', '-inf', now - tonumber(ARGV[2]), 'LIMIT', 0, ARGV[3])) do
   del(p, sid); table.insert(out, sid)
 end
 return out`)
@@ -212,7 +220,7 @@ export class RedisSessionStore extends SessionStore {
     const now = Date.now()
     let n = 0
     for (;;) {   // the claimed ones are this server's to announce; 500 per round trip
-      const gone = await SWEEP.run<string[]>(await this.client(), [], [this.prefix, now - this.ttl, 500])
+      const gone = await SWEEP.run<string[]>(await this.client(), [], [this.prefix, this.ttl, 500])
       for (const sid of gone) this.evict(sid)
       n += gone.length
       if (gone.length < 500) break
