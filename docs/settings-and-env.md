@@ -62,8 +62,94 @@ and which backend each subsystem uses.
 | `admin` | `allowIps`, `require2fa`, `idleMs` for staff | off |
 | `frontend.boundary` | `tvine check` fails (`'error'`) or warns when a page imports a model | `'error'` |
 
-Every key, with its exact shape: [design/conventions/settings.md](design/conventions/settings.md).
-Backends (memory vs redis): [design/conventions/backends.md](design/conventions/backends.md).
+Backends (memory vs redis) for production: [deploy.md](deploy.md).
+
+## Middleware
+
+`settings.middleware` is Django's `MIDDLEWARE`. Leave it out and you get the safe default list (the first five
+below). Only listed entries run; `middleware: []` turns every one off, security headers included.
+
+```ts
+middleware: [
+  'tvine.middleware.RequestId',
+  'tvine.middleware.AllowedHosts',
+  'tvine.middleware.Security',
+  'tvine.middleware.Cors',
+  'tvine.middleware.GZip',
+  ['tvine.middleware.RateLimit', { limit: 300, windowMs: 60_000 }],          // [name, options]
+  ['tvine.middleware.IpFilter', { allow: ['10.0.0.0/8'], paths: ['/admin'] }],
+  timing,                                                                   // your own, below
+],
+```
+
+Order is the list order (outermost first), except `AllowedHosts`, which always runs first. `tvine check` prints
+the order it will use.
+
+| Name | Default | What it does | Options |
+|---|---|---|---|
+| `RequestId` | on | `x-request-id` on every request and response, in logs and audit | — |
+| `AllowedHosts` | on | unknown `Host` → 400 | `hosts` |
+| `Security` | on | security headers from `settings.security.headers` (CSP with nonce, HSTS on https, …) | — |
+| `Cors` | on | applies `settings.cors` | — |
+| `GZip` | on | gzip / brotli from `settings.compression` | — |
+| `SslRedirect` | off | http → 301 https (set `trustProxy` behind a proxy) | `exempt`, `host` |
+| `ConditionalGet` | off | `ETag` → 304 | — |
+| `RateLimit` | off | per-IP limit on every path → 429 + `Retry-After` | `limit`, `windowMs`, `exempt` |
+| `IpFilter` | off | allow / deny by address or CIDR → 403 | `allow`, `deny`, `paths` |
+| `Maintenance` | off | 503 while `enabled` or while `file` exists | `enabled`, `file`, `retryAfter`, `allowIps`, `allowPaths`, `allowStaff`, `message` |
+| `BodyLimit` | off | body over the cap → 413 | `maxBytes`, `paths: { '/upload': n }` |
+| `Timeout` | off | no response in `ms` → 503 (streams are never cut) | `ms`, `exempt` |
+| `AccessLog` | off | one log line per request (never the query string) | — |
+| `Locale` | off | `Accept-Language` → `request.locale` | `languages`, `default` |
+| `ServerTiming` | off | `Server-Timing` header, debug only | — |
+| `BotGuard` | off | known scanner user agents → 403 (agent paths never) | `block` (RegExp) |
+
+Your own middleware:
+
+```ts
+import { defineMiddleware } from 'tvine'
+
+export const timing = defineMiddleware({
+  name: 'Timing',
+  async process(req, res, next) {
+    req.tvine.onHeaders(() => res.setHeader('x-took', String(performance.now() - req.tvine.start)))
+    await next()
+  },
+})
+// or Django-style hooks: processRequest(req, res), processResponse(req, res), processException(req, res, err)
+```
+
+`req.tvine` has `path`, `ip`, `https`, `host`, `id`, `locale`, `log`.
+
+**Action middleware** wraps each backend action instead of each HTTP request: `settings.actionMiddleware` (global)
+or `apps/<app>/middleware.ts` with `export default [...]` (that app only). It runs after permission checks, so it
+cannot skip them. Use it for things like a "shop closed" switch.
+
+## Logging
+
+```ts
+logging: 'json'          // or 'pretty' | 'none'. Default: pretty in dev, json in production
+logging: {               // or Django LOGGING
+  level: 'info',
+  handlers: [
+    { type: 'console' },
+    { type: 'file', path: './log/app.log', level: 'warn', maxBytes: 10_000_000, daily: true, keep: 7 },
+    { type: 'custom', level: 'error', write: (record) => sentry.capture(record) },
+  ],
+  loggers: { 'tvine.request': 'info', 'tvine.db': 'warn', myapp: 'debug', noisy: 'off' },
+  redact: ['iban'],      // extra field names to blank
+}
+```
+
+```ts
+import { getLogger } from 'tvine'
+const log = getLogger('myapp.orders')
+log.info('order placed', { orderId, total })     // debug / info / warn / error
+```
+
+Passwords, tokens, cookies, keys and similar fields are replaced with `[redacted]` before any handler sees them.
+Built-in loggers: `tvine` (runtime errors), `tvine.request`, `tvine.security` (logins, refused hosts, …),
+`tvine.db` (queries slower than `db.slowQueryMs`, default 500 ms), `tvine.tasks` (the worker).
 
 ## Environment variables
 
@@ -96,8 +182,6 @@ Also `env.str`, `env.url`, `env.json`, `env.has`. An empty value counts as unset
 | `TVINE_LOAD_DOTENV` | `1`: load `.env` files in production too |
 | `PORT`, `HOST` | listen port (3000) and address; `--port` / `--host` win |
 | `TVINE_SUPERUSER_USERNAME` / `_EMAIL` / `_PASSWORD` | for `createsuperuser --noinput` |
-
-The full table: [design/conventions/env.md](design/conventions/env.md).
 
 ### `.env` files
 

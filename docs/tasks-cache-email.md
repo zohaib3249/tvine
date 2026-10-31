@@ -3,8 +3,7 @@
 Three Django-style subsystems: `tvine.tasks` (Celery-like jobs), the cache (`django.core.cache`) and mail
 (`django.core.mail`). None needs a third-party service to start; Redis is optional for several machines.
 
-Depth: [design/contrib/tasks.md](design/contrib/tasks.md), [design/conventions/cache.md](design/conventions/cache.md),
-[design/conventions/email.md](design/conventions/email.md), [design/conventions/backends.md](design/conventions/backends.md).
+Settings keys: [settings-and-env.md](settings-and-env.md). Redis for several processes: [deploy.md](deploy.md).
 
 ## Background tasks
 

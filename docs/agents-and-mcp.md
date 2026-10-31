@@ -19,8 +19,16 @@ The examples below are from an example store app on port 3000 (tools like `catal
 
 Claude Code then lists the app's tools.
 
-**Claude Desktop and other clients:** add a remote MCP server (streamable HTTP) pointing at
-`https://<your-site>/mcp`. `/mcp` needs no auth: agents act as an anonymous visitor until they log in
+Or from the shell: `claude mcp add --transport http tvine-shop http://localhost:3000/mcp`.
+
+**Claude Desktop:** for a deployed site, add a custom connector (Settings → Connectors) with the URL
+`https://<your-site>/mcp`. For a local app, bridge it with `mcp-remote` in `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "tvine-shop": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:3000/mcp"] } } }
+```
+
+**Other clients:** add a remote MCP server (streamable HTTP) pointing at `https://<your-site>/mcp`. `/mcp` needs no auth: agents act as an anonymous visitor until they log in
 (`auth_login`) or a user lets them drive their tab.
 
 ## Check it without an agent
@@ -84,8 +92,6 @@ mcp: { tools: 'both', exclude: [], maxTools: 40 }   // defaults
 | `rules: { mcp: false }` on an action | not callable over MCP at all |
 | `export const mcp = false` in `apps/<app>/rules.ts` | the whole app off MCP |
 
-Depth: [transport-mcp.md](design/server/transport-mcp.md).
-
 ## What the agent sees
 
 Same URL as the human page, with the `x-tvine: 1` header:
@@ -120,10 +126,6 @@ curl -s -X POST http://localhost:3000/ -H 'x-tvine: 1' -H "x-tvine-sid: $SID" \
   -d '{"ui":{"target":"select:sort","control":"select","args":{"value":"price"}},"cmdId":"u1"}'
 ```
 
-Format details: [snapshot-format.md](design/frontend/v2/core/snapshot-format.md),
-[progressive-disclosure.md](design/frontend/v2/core/progressive-disclosure.md),
-[transport-http.md](design/server/transport-http.md).
-
 ## Headless vs tab control
 
 | | Headless (default) | Tab control |
@@ -135,8 +137,7 @@ Format details: [snapshot-format.md](design/frontend/v2/core/snapshot-format.md)
 | What the user sees | nothing | the agent's cursor, outlines, typing, and an "Agent connected · Stop" pill |
 
 Headless agents still reach content held in widgets: each widget declares where its value lives (a URL
-parameter, the server HTML, a form param, or the session), so `ui` works without a browser. See
-[headless-parity.md](design/frontend/v2/core/headless-parity.md).
+parameter, the server HTML, a form param, or the session), so `ui` works without a browser.
 
 ### The Allow flow
 
@@ -177,8 +178,6 @@ Rules that always hold:
 
 Errors come back as `{kind:'err', code, reason, message}` with reasons `awaiting_approval`, `human_denied`,
 `busy`, `stopped`, `not_connected`, `timeout`, `tab_closed`.
-Depth: [agent-presence.md](design/frontend/v2/core/agent-presence.md),
-[transport-channel.md](design/server/transport-channel.md), [security.md](design/frontend/v2/core/security.md).
 
 ## WebMCP (in-browser agents)
 
@@ -187,7 +186,6 @@ Depth: [agent-presence.md](design/frontend/v2/core/agent-presence.md),
 into the browser then works on the user's own tab directly, as that user, with no Allow step (it already runs
 inside the user's browser). `read_page`, `expand` and `ui` run locally on the page with no network call. The
 pill shows "Agent connected · Stop". Without WebMCP support it does nothing.
-Depth: [runtime-webmcp.md](design/frontend/runtime-webmcp.md), [transports.md](design/frontend/v2/core/transports.md).
 
 ## The inspector (dev only)
 
@@ -205,8 +203,6 @@ pnpm exec tvine inspect http://127.0.0.1:4400 --port 7400
 - It binds to 127.0.0.1 only; secrets, sids and tokens are redacted in the feed.
 - The **Widgets** tab shows the live control tree. **Alt+Shift+W** on the page opens the widget gallery,
   where you can try `ui` calls.
-
-Depth: [inspector.md](design/inspect/inspector.md).
 
 ## Watching agents in the admin
 

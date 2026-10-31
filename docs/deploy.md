@@ -20,7 +20,7 @@ Related guides: [auth-and-security.md](auth-and-security.md) (hosts, CSP, CORS, 
 | Build | `pnpm build` (`next build`) before `tvine start`; without `.next/` the server runs API-only. |
 | `trustProxy` | `settings.trustProxy` = how many proxies sit in front (1 behind one load balancer/CDN). It decides `request.ip` (rate limits), https detection, the `Secure` cookie flag and HSTS. Leave `0` when clients reach Node directly — a client can then not fake `X-Forwarded-*`. |
 | HTTPS | Terminate TLS at the proxy and set `trustProxy`. HSTS is sent only on https requests (checked: with `TVINE_TRUST_PROXY=1` and `X-Forwarded-Proto: https` the demo answers `strict-transport-security: max-age=31536000; includeSubDomains`; on plain http it does not). |
-| CSP / headers | On by default: nonce CSP with `strict-dynamic`, `X-Content-Type-Options`, `Referrer-Policy`, COOP/CORP, `Permissions-Policy`, `X-Frame-Options`. Tune under `settings.security.headers` ([security-headers.md](design/server/security-headers.md)). CORS is closed by default (`settings.cors`). |
+| CSP / headers | On by default: nonce CSP with `strict-dynamic`, `X-Content-Type-Options`, `Referrer-Policy`, COOP/CORP, `Permissions-Policy`, `X-Frame-Options`. Tune under `settings.security.headers` ([auth-and-security.md](auth-and-security.md#allowed_hosts-csp-cors)). CORS is closed by default (`settings.cors`). |
 | Compression | Warp compresses (gzip/br, with its BREACH rule). Set `compress: false` in `next.config.ts` (boot warns otherwise). |
 | Email | Set `settings.email` (below). Boot warns while `defaultFrom` is still `webmaster@localhost`. |
 | Gate | `NODE_ENV=production pnpm exec tvine check` in CI: settings, secret, every backend + Redis ping, pending migrations, frontend-imports-models boundary. Exit 1 on any problem. |
@@ -57,7 +57,6 @@ real database (Postgres/MySQL) too — several copies cannot share one SQLite fi
 **Sticky routing for tab control.** A browser tab's agent connection lives on the copy that holds its event stream.
 Route these to the same copy per session (cookie `tvine_s`, or header `x-tvine-sid`): `/tvine/channel`,
 `/tvine/tab/*`, `/tvine/agent/*`, and `/mcp` (for `request_control`). Everything else can go anywhere.
-Details: [backends.md](design/conventions/backends.md).
 
 Split mode (Next on one server, `tvine start --api-only` on another) exists but is not recommended yet; don't
 start there.
@@ -115,8 +114,8 @@ pnpm add mysql2      # mysql://user:pass@host:3306/db      (or mariadb://)
 DATABASE_URL='postgres://app:secret@db.internal:5432/shop' pnpm exec tvine migrate
 ```
 
-Migrations are the same files on every engine. Pool: `settings.db.pool` (`max: 10` by default). Engines:
-[db-engines.md](design/conventions/db-engines.md).
+Migrations are the same files on every engine. Pool: `settings.db.pool` (`max: 10` by default). Engines and
+URLs: [models-and-orm.md](models-and-orm.md).
 
 ## 5. The worker
 

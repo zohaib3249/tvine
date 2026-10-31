@@ -23,7 +23,7 @@ pnpm tvine makemigrations && pnpm tvine migrate
 
 Node 22.15 or newer. From a clone: `pnpm install && pnpm -r build`, then
 `node packages/tvine/warp/bin/tvine.js startproject mysite ../mysite --local` (links the clone's package).
-What each file is: [conventions/scaffolding.md](design/conventions/scaffolding.md). The rest of this guide builds
+What each command does: [cli.md](cli.md). The rest of this guide builds
 `examples/notes/` by hand, file by file.
 
 ## 1. Project files
@@ -58,7 +58,7 @@ export default defineSettings({
 ```
 
 Everything else is a default: SQLite at `./tvine.db`, jobs in `./tasks.db`. All keys:
-[conventions/settings.md](design/conventions/settings.md).
+[settings-and-env.md](settings-and-env.md).
 
 `next.config.ts`:
 
@@ -133,7 +133,7 @@ export const clearAll = defineAction('clearAll', z.object({}), async () => ({ de
 
 Action ids are `<app folder>.<name>`. Each request is one transaction (Django `ATOMIC_REQUESTS`). Params are
 validated by the zod schema before your code runs. Generic views and every DRF hook:
-[conventions/generic-views.md](design/conventions/generic-views.md).
+[views-urls-api.md](views-urls-api.md).
 
 Every action already answers at `POST /tvine/api/notes.add`. `urls.ts` adds REST paths if you want them:
 
@@ -178,7 +178,7 @@ TVINE_SUPERUSER_USERNAME=admin TVINE_SUPERUSER_EMAIL=admin@example.com \
 TVINE_SUPERUSER_PASSWORD='change-me-please-42' pnpm exec tvine createsuperuser --noinput
 ```
 
-(or plain `pnpm exec tvine createsuperuser` to be prompted). More: [contrib/admin.md](design/contrib/admin.md).
+(or plain `pnpm exec tvine createsuperuser` to be prompted). More: [admin.md](admin.md).
 
 ## 5. A page with `api.*`
 
@@ -227,7 +227,7 @@ export default async function Notes() {
 `components/notes.tsx` is a client component: a plain `<form>` that calls `api.notes.add`, and Weft `<Button>`s
 that call `api.notes.pin` / `api.notes.remove` then `router.refresh()`. `<Page>`, `<Card>` and `<Button>` are what
 agents see; `entity="note:1"` gives each card a stable id. Widgets:
-[frontend/v2/README.md](design/frontend/v2/README.md), the client: [api-client.md](design/frontend/v2/core/api-client.md).
+[frontend-weft.md](frontend-weft.md), the client: [views-urls-api.md](views-urls-api.md).
 
 `tvine check` fails if a page or component imports a model (the frontend/backend boundary).
 
@@ -282,7 +282,7 @@ curl -s -X POST http://localhost:4400/mcp -H 'content-type: application/json' \
 
 **Tab control.** With the page open in a browser, an agent calls `request_control`; the tab shows an **Allow**
 button; after the human clicks it the agent drives the real page (and **Stop** takes it back). See
-[agent-presence.md](design/frontend/v2/core/agent-presence.md).
+[agents-and-mcp.md](agents-and-mcp.md).
 
 **Inspector** (dev only): a split view of the human page and the agent's snapshot, with a live command feed.
 
@@ -322,7 +322,7 @@ pnpm exec tvine tasks list         # queued / running / dead jobs
 ```
 
 Ctrl-C stops claiming and lets running jobs finish (30 s grace). Retries, cron, chains:
-[contrib/tasks.md](design/contrib/tasks.md).
+[tasks-cache-email.md](tasks-cache-email.md).
 
 ## 9. Sensitive actions: confirm and HumanOnly
 
@@ -359,7 +359,7 @@ curl -s -X POST http://localhost:4400/ -H 'x-tvine: 1' -H "x-tvine-sid: $SID" \
 ```
 
 The wrapper alone is a UI guard; the `humanOnly` flag on the action is the real one. Always set the flag.
-Details: [human-only.md](design/frontend/v2/widgets/human-only.md).
+Details: [frontend-weft.md](frontend-weft.md).
 
 > Note: `POST /tvine/api/<id>` is the **frontend's** API (what `api.*` calls). It counts as a human request even
 > with `x-tvine: 1`, so `humanOnly` does not stop it there — protect actions with permissions, not with

@@ -6,8 +6,6 @@ a dashboard, and a System section (health, traffic, agents, queries, jobs, logs,
 
 ![Admin dashboard](images/admin-dashboard-light.png)
 
-Depth: [design/contrib/admin.md](design/contrib/admin.md).
-
 ## Setup
 
 Add `tvine.admin` to `installedApps` (it needs `tvine.auth` for logins) (the panel ships with `tvine`). No page file is needed: Warp serves the panel itself.
@@ -98,7 +96,7 @@ Methods you can override: `getQueryset(ctx)` (scope rows per user), `hasViewPerm
 
 The change form is generated from the model's field types: text, numbers, money, dates, choices, fk / m2m pickers,
 tags, color, file and image drop zones, markdown, code, JSON, and more. Pick a different widget per field with
-`widgets`; the full list of kinds is in [frontend/v2/widgets/forms.md](design/frontend/v2/widgets/forms.md).
+`widgets`; the full list of kinds is in [frontend-weft.md](frontend-weft.md#input-kinds).
 
 ![Product change form](images/admin-product-form.png)
 

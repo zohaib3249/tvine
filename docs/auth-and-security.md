@@ -4,10 +4,7 @@
 TOTP 2FA and personal access tokens for agents. On top, Warp ships secure defaults for every request: host
 allow-list, CSP and security headers, closed CORS, rate limits, session hardening and an audit trail.
 
-Depth: [design/contrib/auth.md](design/contrib/auth.md),
-[design/conventions/security-features.md](design/conventions/security-features.md) (the full list),
-[design/conventions/permissions.md](design/conventions/permissions.md),
-[design/server/security-headers.md](design/server/security-headers.md).
+Related: [settings-and-env.md](settings-and-env.md) (keys, middleware, logging), [deploy.md](deploy.md) (production checklist).
 
 ## Setup
 
@@ -95,7 +92,7 @@ confirm token, `by: 'human'` when only the user may say yes), `rate`. See
 ## Security features
 
 Condensed; the full table with every setting is
-[design/conventions/security-features.md](design/conventions/security-features.md).
+[models-and-orm.md](models-and-orm.md).
 
 | Area | Protection | Setting | Default |
 |---|---|---|---|
@@ -139,7 +136,7 @@ content-security-policy: default-src 'self'; script-src 'self' … 'nonce-…' '
 `settings.middleware` is a list, like Django's `MIDDLEWARE`. Built-ins: `tvine.middleware.Security`,
 `tvine.middleware.AllowedHosts`, `tvine.middleware.Cors`, `tvine.middleware.RequestId`,
 `tvine.middleware.GZip`, `tvine.middleware.RateLimit`, `tvine.middleware.IpFilter`. Add your own per app.
-Details: [design/conventions/middleware-hooks.md](design/conventions/middleware-hooks.md).
+The full catalog with options, and custom middleware: [settings-and-env.md](settings-and-env.md#middleware).
 
 ## ALLOWED_HOSTS, CSP, CORS
 

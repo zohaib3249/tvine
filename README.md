@@ -97,7 +97,7 @@ Two modes: **headless** (the agent works on the server-rendered page, no browser
 | Every CLI command | [cli.md](docs/cli.md) |
 | Production | [deploy.md](docs/deploy.md) |
 | Tutorial: a notes app in 15 minutes | [getting-started.md](docs/getting-started.md) |
-| Design docs (the source of truth) | [docs/design](docs/design/00-overview.md) |
+| All guides | [docs/README.md](docs/README.md) |
 
 ## Project layout
 
@@ -109,7 +109,7 @@ packages/tvine/     the one npm package `tvinejs` (imported as `tvine`)
   inspect/   tvine/inspect                              dev inspector (tvine inspect)
 examples/
   notes/     the getting-started app
-docs/        guides; docs/design/ has the module design docs
+docs/        user guides (index: docs/README.md)
 ```
 
 ## Requirements

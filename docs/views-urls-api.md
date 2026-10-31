@@ -48,10 +48,8 @@ export const clearAll = defineAction('clearAll', z.object({}),
 | `humanOnly: true \| 'reason'` | every agent path gets `human_only` (403); a person's click works |
 | `rate: { limit, windowMs }` | per-action rate limit |
 | `mcp: false` | not exposed over MCP at all |
-| `permissions: [...]` | DRF-style permission classes ([permissions.md](design/conventions/permissions.md)) |
+| `permissions: [...]` | DRF-style permission classes ([auth-and-security.md](auth-and-security.md)) |
 | `bind` | keys that come only from a server-signed bind, never from the caller |
-
-Full list: [core-actions.md](design/server/core-actions.md), [permissions.md](design/conventions/permissions.md).
 
 ## Class views (DRF generics)
 
@@ -113,7 +111,7 @@ getQueryset(ctx) { return Order.objects.filter({ owner: ctx.request.user.id }) }
 ### `@action`
 
 `@action(schema, { rules?, permissions?, detail?, methods? })` on a public method. The method's `this` is the
-view, so `this.getQueryset()` works. Depth: [generic-views.md](design/conventions/generic-views.md).
+view, so `this.getQueryset()` works.
 
 ## URLs: `urls.ts` (optional)
 
@@ -151,7 +149,7 @@ pnpm exec tvine show_urls
 | `SimpleRouter` / `DefaultRouter().register('products', View)` | DRF routers: `list`/`create` on `products/`, `get`/`update`/`delete` on `products/<id>/` |
 
 Converters: `int`, `str`, `slug`, `uuid`, `path`. Built-in includes: `tvine.auth.urls`, `tvine.tasks.urls`.
-Methods: `GET` for read actions, else `POST`; a wrong method gets `405`. Depth: [urls.md](design/conventions/urls.md).
+Methods: `GET` for read actions, else `POST`; a wrong method gets `405`.
 
 ## The `api.*` client
 
@@ -182,7 +180,7 @@ pnpm exec tvine generate            # → wrote tvine-api.d.ts
 pnpm exec tvine generate --check    # exit 1 when the file is stale (use in CI)
 ```
 
-`tvine dev` regenerates it on save. Depth: [api-client.md](design/frontend/v2/core/api-client.md).
+`tvine dev` regenerates it on save.
 
 ### Calling `/tvine/api` by hand
 

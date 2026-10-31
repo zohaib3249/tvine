@@ -89,7 +89,7 @@ Each widget has a `name` (its id on the page, e.g. `select:sort`), a `label`, an
 content is already in the server HTML, the default for Tabs/Accordion), `params` (the value is a form param),
 `session` (stored in the session). A widget that changes content with no map gets a dev error.
 
-One doc per widget: [frontend v2 index](design/frontend/v2/README.md). Live gallery in dev: press
+Live gallery in dev: press
 **Alt+Shift+W** on any page.
 
 ### Your own widgets: `useWidget`
@@ -105,9 +105,7 @@ export function ListOf({ name, label, children }) {
 ```
 
 The spec takes `kind`, `name` or `entity`, `label`, `state`, `data`, `controls` (named functions an agent may
-call), `sum` (one-line summary), `hidden`, `sensitive`. `defineWidget(def)` makes a reusable kind. Contract:
-[widget-contract.md](design/frontend/v2/core/widget-contract.md), custom control logic and veto hooks:
-[custom-logic.md](design/frontend/v2/core/custom-logic.md).
+call), `sum` (one-line summary), `hidden`, `sensitive`. `defineWidget(def)` makes a reusable kind. What agents see and do with them: [agents-and-mcp.md](agents-and-mcp.md).
 
 ## Forms (`tvine/forms`)
 
@@ -153,8 +151,23 @@ Extra kinds. Every kind is one agent target `field:<name>` with `set({value})` a
 | `percent`, `ip`, `slugAuto` | number + %, IPv4/6, slug built from another field | |
 | `signature` | canvas → PNG | none: human only |
 
-Agents are validated by the same rules as people and get the same error messages. Full table and limits:
-[forms.md](design/frontend/v2/widgets/forms.md).
+Agents are validated by the same rules as people and get the same error messages. Built-in checks (Django messages): required, min/max, maxLength, decimals, email/url/slug/uuid/json/date,
+choices, upload `accept` / `maxBytes`.
+
+### ORM fields that pick a kind
+
+`field.color`, `field.phone`, `field.tags({ maxItems, choices })`, `field.ip`, `field.country`, `field.markdown`,
+`field.richText` (rich), `field.code({ language })`, `field.address`, `field.percent`, `field.dateRange`. Each
+validates on every save with the same message as the form. Kinds with no ORM field are set per field:
+
+```ts
+formfieldOverrides = { pin: { kind: 'otp' }, mood: { kind: 'rating' } }
+```
+
+### Values the API sends
+
+int/decimal → number, money → `{ value, currency }`, datetime → ISO UTC string, duration → seconds, json → parsed,
+fk → pk, m2m → pk[], file → a `File` (leave out to keep, `null` clears), daterange → `{ start, end }`.
 
 ## Sensitive actions: `confirm` and `HumanOnly`
 
@@ -178,7 +191,6 @@ import { Button } from 'tvine/widgets'
 
 The agent sees `"humanOnly":"Deleting every note"` on the button and no controls. The wrapper is a UI guard;
 the `humanOnly` flag on the action is the real one. Always set the flag.
-Details: [human-only.md](design/frontend/v2/widgets/human-only.md).
 
 ## `<WeftRoot>` options
 
@@ -191,7 +203,7 @@ Details: [human-only.md](design/frontend/v2/widgets/human-only.md).
 
 Theme the agent overlay with CSS variables on `:root`: `--tvine-agent-color`, `--tvine-agent-contrast`,
 `--tvine-agent-danger-color`, `--tvine-agent-ring`, `--tvine-agent-radius`, `--tvine-agent-font`,
-`--tvine-agent-cursor-size`. See [agent-presence.md](design/frontend/v2/core/agent-presence.md).
+`--tvine-agent-cursor-size`.
 
 ## Settings that affect the frontend
 
