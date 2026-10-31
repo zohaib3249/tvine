@@ -54,9 +54,10 @@ export function DatePicker(props: DefinedProps<DatePickerProps, C>) {
   const fid = useId()
   const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     const d = e.target.value
-    // Humans get the same rule as agents: an unavailable day marks the field invalid.
-    e.target.setCustomValidity(d && isDisabled?.(d) ? `${d} is unavailable` : '')
-    setV(d); onValueChange?.(d || null)
+    // Humans get the same rule as agents: an unavailable day marks the field invalid and is not a value.
+    const off = !!d && !!isDisabled?.(d)
+    e.target.setCustomValidity(off ? `${d} is unavailable` : '')
+    setV(d); onValueChange?.(d && !off ? d : null)
   }
   return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': 'date', 'data-disabled': flag(disabled), 'data-filled': flag(v) }, { className, ...slots?.root }, s, <>
     {w.embed}

@@ -25,14 +25,32 @@ type Internal = FileUploadProps & { s: S }
 const SR_ONLY = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const
 const UPLOAD_MAX = 5 * 1024 * 1024   // security.md: settings.agent.ui.uploadMaxBytes
 
-// accept tokens: ".jpg", "image/*", "image/png" (same matching as the browser's picker).
-const accepts = (accept: string | undefined, f: Meta) => !accept || accept.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).some((t) =>
-  t.startsWith('.') ? f.name.toLowerCase().endsWith(t) : t.endsWith('/*') ? f.type.toLowerCase().startsWith(t.slice(0, -1)) : f.type.toLowerCase() === t)
+// A file's type by extension. A MIME accept token ("image/*", "image/png") needs BOTH the declared type and the
+// extension's type to match, so "evil.exe" sent as image/png is refused.
+// ponytail: small fixed map; an extension missing here only passes ".ext" accept tokens. Extend as uploads need.
+const EXT: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml', heic: 'image/heic',
+  pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv', json: 'application/json', zip: 'application/zip',
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mp3: 'audio/mpeg', wav: 'audio/wav',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+const mimeOk = (tok: string, type: string) => tok.endsWith('/*') ? type.startsWith(tok.slice(0, -1)) : type === tok
+// accept tokens: ".jpg", "image/*", "image/png" (same tokens as the browser's picker).
+const accepts = (accept: string | undefined, f: Meta) => {
+  if (!accept) return true
+  const name = f.name.toLowerCase(), type = f.type.toLowerCase(), extType = EXT[name.slice(name.lastIndexOf('.') + 1)]
+  return accept.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).some((t) =>
+    t.startsWith('.') ? name.endsWith(t) : !!extType && mimeOk(t, extType) && (!type || mimeOk(t, type)))
+}
+// A plain file name: no path separators, no control characters, not "." / "..".
+const BAD_NAME = /[\/\\\u0000-\u001f\u007f]/
 
 function check(p: FileUploadProps, fs: Meta[]): string | undefined {
   if (!p.multiple && fs.length > 1) return 'only one file is allowed'
   if (p.maxFiles !== undefined && fs.length > p.maxFiles) return `at most ${p.maxFiles} files`
   for (const f of fs) {
+    if (!f.name || f.name === '.' || f.name === '..' || BAD_NAME.test(f.name)) return `${JSON.stringify(f.name)} is not a plain file name`
     if (!accepts(p.accept, f)) return `${f.name}: type not accepted (${p.accept})`
     if (p.maxBytes !== undefined && f.size > p.maxBytes) return `${f.name} is larger than ${p.maxBytes} bytes`
   }
@@ -71,7 +89,10 @@ const useFileUpload = defineWidget<Internal, S, C>({
     }
     if (p.s.files.length) {
       c.remove = { kind: 'clear', params: { name: { type: 'string', enum: p.s.files.map((f) => f.name) } },
-        run: async (a: { name: string }, ctx) => { put(field(ctx), current(ctx).filter((f) => f.name !== a.name)) } }
+        run: async (a: { name: string }, ctx) => {
+          const fs = current(ctx), i = fs.findIndex((f) => f.name === a.name)   // the first match only, like one click on its ×
+          put(field(ctx), fs.filter((_, k) => k !== i))
+        } }
       c.clear = { kind: 'clear', run: async (_a, ctx) => { put(field(ctx), []) } }
     }
     return c
