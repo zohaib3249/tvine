@@ -13,6 +13,12 @@ const decode = (s: string) => s.replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.f
 const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const text = (s: string) => s.replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+// A link target from app code (admin list cells, …) set as a DOM attribute (no entity decoding there): the SAFE rule
+// on the URL as the browser parses it (C0 controls, space and DEL ignored). undefined → show the text, no link.
+export function safeHref(url: unknown): string | undefined {
+  return typeof url === 'string' && SAFE.test(url.replace(/[\u0000- \u007f]/g, '')) ? url : undefined
+}
+
 export function sanitizeHtml(html: string): string {
   const src = String(html ?? '').replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(DROP, '')
   let out = '', last = 0
@@ -22,8 +28,8 @@ export function sanitizeHtml(html: string): string {
     if (!KEEP.has(tag)) continue
     if (close) { if (tag !== 'br') out += `</${tag}>`; continue }
     if (tag === 'a') {
-      const h = HREF.exec(attrs!), url = h ? decode(h[1] ?? h[2] ?? h[3] ?? '').replace(/[\u0000- \u007f]/g, '') : ''
-      out += SAFE.test(url) ? `<a href="${attr(url)}" rel="noopener noreferrer nofollow">` : '<a>'
+      const h = HREF.exec(attrs!), url = h ? safeHref(decode(h[1] ?? h[2] ?? h[3] ?? '').replace(/[\u0000- \u007f]/g, '')) : undefined
+      out += url ? `<a href="${attr(url)}" rel="noopener noreferrer nofollow">` : '<a>'
     } else out += `<${tag}>`
   }
   return out + text(src.slice(last))
