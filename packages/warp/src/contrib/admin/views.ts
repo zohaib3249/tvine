@@ -411,7 +411,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
     if (!rows) continue
     if (!Array.isArray(rows) || rows.length > MAX_PKS) throw bad(name, 'rows must be a list')
     const fk = fkTo(i, a.model)!, fkKey = i.model.fields[fk]!.key(fk)
-    const own = i.model.objects.filter({ [fkKey]: parent.id })
+    const own = i.getQueryset(ctx).filter({ [fkKey]: parent.id })
     for (const [n, r] of rows.entries()) {
       const at = `${name}.${n}.`
       const existing = r.pk !== undefined ? await own.filter({ id: coercePk(i.model, r.pk) ?? -1 }).first() : undefined
@@ -553,7 +553,7 @@ export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }
   for (const i of site.inlinesOf(a)) {
     if (!(await i.hasViewPermission(ctx, obj))) continue
     const fk = fkTo(i, a.model)!
-    const rows = await i.model.objects.filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
+    const rows = await i.getQueryset(ctx).filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
     const vs = []
     for (const r of rows) { const v = await valuesOf(i, r); delete v[fk]; vs.push({ pk: String(r.id), ...v }) }   // the payload's Row shape: { pk, ...values }
     inlines[inlineName(i)] = { rows: vs }
