@@ -8,7 +8,7 @@ import type { ModelMeta, Site, User } from './types.js'
 import { AdminCtx, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
 import { Changelist } from './changelist.js'
 import { ChangeForm } from './form.js'
-import { AppIndex, Dashboard, DeleteView, HistoryView, Login } from './pages.js'
+import { AppIndex, Dashboard, DeleteView, HistoryView, Login, PasswordChange } from './pages.js'
 
 export type AdminAppProps = {
   base?: string; site?: Site; user?: User | null; segments: string[]; query: Query
@@ -248,9 +248,11 @@ function Crumbs({ meta, obj }: { meta?: ModelMeta; obj?: string }) {
 }
 
 const lazyCache = new Map<string, ReturnType<typeof lazy>>()
+// screens for the contrib admins' getUrls views, so the Warp-served panel needs no configureAdmin (an app's own wins)
+const BUILTIN: Record<string, React.ComponentType<any>> = { 'auth.user:password_change': PasswordChange }
 export function CustomComponent({ name, data, args, meta }: { name: string; data?: unknown; args?: Record<string, string>; meta?: ModelMeta }) {
   const ctx = useAdmin()
-  const C = getConfig().components?.[name]
+  const C = getConfig().components?.[name] ?? BUILTIN[name]
   if (!C) return <Empty title="No component registered" icon="file">Register <code className="tva-kbd">{name}</code> with <code className="tva-kbd">configureAdmin({'{ components }'})</code>.</Empty>
   return <Suspense fallback={<Skeleton rows={4} />}><C {...custom(ctx, meta)} data={data} args={args} /></Suspense>
 }
