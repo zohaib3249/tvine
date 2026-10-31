@@ -38,6 +38,7 @@ export class AuthUser implements TvineUser {
   #groups?: Promise<string[]>
   #settings: Settings
 
+  tokenKey?: string   // via 'token': the key of the token this request runs on
   constructor(row: UserRow, settings: Settings, readonly via: 'session' | 'token', readonly scopes?: readonly string[]) {
     this.id = String(row.id); this.name = this.username = row.username; this.email = row.email
     this.isActive = row.isActive; this.isStaff = row.isStaff; this.isSuperuser = row.isSuperuser
@@ -161,7 +162,9 @@ export async function tokenUser(settings: Settings, token: string): Promise<Auth
   if (!user?.isActive) return undefined
   // at most once a minute, outside the request's transaction; a failed stamp never fails the request
   if (!row.lastUsed || Date.now() - row.lastUsed.getTime() > LAST_USED_MS) void Token.objects.filter({ id: row.id }).update({ lastUsed: new Date() }).catch(() => undefined)
-  return new AuthUser(user, settings, 'token', Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [])
+  const u = new AuthUser(user, settings, 'token', Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [])
+  u.tokenKey = row.key
+  return u
 }
 
 export function backendFor(settings: Settings): AuthBackend {

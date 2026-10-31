@@ -7,6 +7,7 @@ import { collect, dispatch, rateLimited, renderCtx, type ServerCtx } from '../co
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
@@ -84,19 +85,12 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     }
     return undefined
   }
-  // https per the same trusted hops as request.ip (request.md): rightmost-`trustProxy` X-Forwarded-Proto.
-  const https = (req: IncomingMessage) => {
-    if ((req.socket as { encrypted?: boolean }).encrypted) return true
-    if (settings.trustProxy <= 0) return false
-    const parts = String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-    return parts[parts.length - settings.trustProxy] === 'https'
-  }
   // Only when the browser has no live cookie session: an explicit agent sid never steals a human's cookie.
   const setCookie = async (req: IncomingMessage, res: ServerResponse, sid: string) => {
     const c = cookieOf(req)
     if (!sid || (c !== undefined && await sessions.peek({ cookie: c }))) return
     if (!(await sessions.peek({ sid }))) return
-    res.setHeader('set-cookie', `${cookieName}=${await sessions.cookieFor(sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${https(req) ? '; Secure' : ''}`)
+    res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(sid)))
   }
 
   const pickFormat = (req: IncomingMessage, q: URLSearchParams, forced?: Format): Format => {
@@ -128,6 +122,9 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     let sid = ''
     // I3: a sid known only through the httpOnly cookie is never written into a response body.
     let reveal = !cookieOf(req)
+    // secreview H2: a sid the caller named (?sid=, x-tvine-sid, body sid) never becomes a browser cookie (fixation /
+    // login CSRF through a plain link). Agents carry their sid; a cookie only goes out for a session this request made.
+    const named = new Set<string>()
     const upload: Upload = {}
     // C1: a stored upload survives only as the result of a successful command; removed before replying
     const cleanup = async () => {
@@ -141,7 +138,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const reply = async (status: number, events: Event[], headers: Record<string, string> = {}) => {
       for (const e of events) if (e.kind === 'snapshot') sessions.remember(e.snapshot)   // expand serves from it
       sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
-      await setCookie(req, res, sid).catch((e: unknown) => server.log('error', 'session cookie failed', { error: String(e) }))
+      if (!named.has(sid)) await setCookie(req, res, sid).catch((e: unknown) => server.log('error', 'session cookie failed', { error: String(e) }))
       const shown = reveal ? events : events.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
       res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape }))
@@ -172,6 +169,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       // header first: a ?sid= lands in logs and Referers (#14)
       const sidKey = (req.headers['x-tvine-sid'] as string | undefined) ?? (isGet ? u.searchParams.get('sid') : null) ?? undefined
       const cookie = cookieOf(req)
+      if (sidKey) named.add(sidKey)
       const bySid = sidKey ? await sessions.peek({ sid: sidKey }) : undefined
       const known = bySid ?? (cookie !== undefined ? await sessions.peek({ cookie }) : undefined)
       if (bySid) reveal = true
@@ -183,7 +181,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       } else {
         const got = await readCommand(req, request, sidKey ?? undefined, upload)
         if ('ui' in got) {
-          if (got.sid !== undefined) reveal = true
+          if (got.sid !== undefined) { reveal = true; named.add(got.sid) }
           action = 'ui'
           const out = await headlessUi(got, request, raw, cookie)
           ctx = out.ctx
@@ -194,7 +192,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         }
         const cmd = got
         action = cmd.action
-        if (cmd.sid !== undefined) reveal = true
+        if (cmd.sid !== undefined) { reveal = true; named.add(cmd.sid) }
         const events = await collect(dispatch(cmd, server, request))
         const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
         upload.keep = upload.file !== undefined && (ok?.result as UploadedFile | undefined)?.key === upload.file.key

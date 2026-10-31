@@ -17,6 +17,14 @@ export interface SessionStoreOptions {
 
 export type SessionKey = { sid?: Sid; cookie?: string }
 
+// THE session cookie's attributes (secreview M2): from settings only, never guessed per request.
+export const cookieOpts = (s: Settings) =>
+  ({ httpOnly: true as const, sameSite: s.session.sameSite, secure: s.session.secure, path: '/', maxAge: Math.floor(s.session.ttlMs / 1000) })
+export function cookieHeader(s: Settings, value: string): string {
+  const o = cookieOpts(s)
+  return `${s.session.cookieName}=${value}; Path=/; Max-Age=${o.maxAge}; HttpOnly; SameSite=${o.sameSite[0]!.toUpperCase()}${o.sameSite.slice(1)}${o.secure ? '; Secure' : ''}`
+}
+
 export class SessionStore {
   protected byId = new Map<Sid, Session>()
   protected byCookie = new Map<string, Sid>()
@@ -82,7 +90,13 @@ export class SessionStore {
   }
 
   protected alive(s: Session): boolean {
-    return Date.now() - s.lastSeen <= this.settings.ttlMs
+    return Date.now() - s.lastSeen <= this.settings.ttlMs && !this.tooOld(s.createdAt)
+  }
+  // settings.session.maxAgeMs: an absolute lifetime on top of the sliding idle ttl (a busy session still ends).
+  // Counted from the session's creation (a login rotation keeps it).
+  protected tooOld(createdAt: number): boolean {
+    const max = this.settings.maxAgeMs
+    return max !== undefined && max > 0 && Date.now() - createdAt > max
   }
 
   link(cookie: string, sid: Sid): void {

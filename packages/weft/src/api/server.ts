@@ -13,7 +13,7 @@ const API = Symbol.for('tvine.api')
 type InProc = (call: { id: string; params: unknown; bind?: string; cmdId?: string }) => Promise<ApiResult>
 
 interface NextHeaders { get(name: string): string | null }
-interface NextCookies { get(name: string): { value: string } | undefined; set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax'; secure: boolean; path: string; maxAge: number }): unknown }
+interface NextCookies { get(name: string): { value: string } | undefined; set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax' | 'strict' | 'none'; secure: boolean; path: string; maxAge: number }): unknown }
 export interface NextAccess { headers(): Promise<NextHeaders>; cookies(): Promise<NextCookies> }
 
 const nextAccess = async (): Promise<NextAccess> => {
@@ -37,7 +37,10 @@ function trusted(v: string | null): string | undefined {
 }
 
 export function forwardTransport(o: { url: string; secret: string; cookieName?: string; next?: () => Promise<NextAccess> }): Transport {
-  const name = o.cookieName ?? 'tvine_s'
+  // the API server's settings.session (secreview M2): secure in production → the __Host- name; env overrides both
+  const secure = process.env.TVINE_SESSION_SECURE !== undefined ? process.env.TVINE_SESSION_SECURE === '1' : process.env.NODE_ENV === 'production'
+  const name = o.cookieName ?? (secure ? '__Host-tvine_s' : 'tvine_s')
+  const sameSite = (process.env.TVINE_SESSION_SAMESITE ?? 'lax') as 'lax' | 'strict' | 'none'
   return async (id, params, opts?: ApiOpts) => {
     const n = await (o.next ?? nextAccess)()
     const h = await n.headers(), jar = await n.cookies()
@@ -48,7 +51,9 @@ export function forwardTransport(o: { url: string; secret: string; cookieName?: 
     // rate-limit key). ponytail: headers() has no socket ip; set TVINE_TRUST_PROXY behind a proxy for per-client keys
     const ip = trusted(h.get('x-forwarded-for')) ?? 'unknown'
     const as = h.get('x-tvine-session') ?? undefined   // an agent's snapshot render; the API server checks its nonce
-    const fwd = signForward({ cookie: jar.get(name)?.value, ...(as && { as }), ip, agent: false, path, mode: action ? 'action' : 'render' }, o.secret)
+    // secreview H1: a caller that declares itself an agent (x-tvine or the tvine Accept) is forwarded as one
+    const agent = h.get('x-tvine') !== null || /text\/tvine|application\/tvine\+json/.test(h.get('accept') ?? '')
+    const fwd = signForward({ cookie: jar.get(name)?.value, ...(as && { as }), ip, agent, path, mode: action ? 'action' : 'render' }, o.secret)
     try {
       const r = await fetch(`${o.url.replace(/\/$/, '')}/tvine/api/${encodeURIComponent(id)}`, {
         method: 'POST', signal: opts?.signal,
@@ -56,7 +61,7 @@ export function forwardTransport(o: { url: string; secret: string; cookieName?: 
         body: JSON.stringify({ params, bind: opts?.bind, cmdId: opts?.cmdId }),
       })
       const minted = r.headers.get('x-tvine-cookie')
-      if (minted) jar.set(name, minted, { httpOnly: true, sameSite: 'lax', secure: trusted(h.get('x-forwarded-proto')) === 'https', path: '/', maxAge: Number(process.env.TVINE_SESSION_TTL_S ?? 86_400) })
+      if (minted) jar.set(name, minted, { httpOnly: true, sameSite, secure: secure || name.startsWith('__Host-'), path: '/', maxAge: Number(process.env.TVINE_SESSION_TTL_S ?? 86_400) })
       return (await r.json()) as ApiResult
     } catch (e) { return network(e) }
   }

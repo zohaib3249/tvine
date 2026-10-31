@@ -229,6 +229,7 @@ export interface CompressionSettings { enabled: boolean; threshold: number; brot
 
 export interface Settings {
   site: { name: string; description: string }
+  siteUrl?: string                  // the public origin ('https://shop.example') for links the server builds; else the Host
   health?: { token?: string }      // /tvine/health details for `Authorization: Bearer <token>`; anonymous gets { ok } only
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
@@ -237,7 +238,12 @@ export interface Settings {
   // whose backend is 'redis' names one of these (its `redis` key, default 'default').
   redis: Record<string, RedisConnection>
   session: { ttlMs: number; cookieName: string; max: number   // max: live sessions kept; past it the least recently used is evicted
-    backend: Backend; redis: string }
+    backend: Backend; redis: string
+    // the cookie's Secure flag (default: true in production). On, the name gets the __Host- prefix (Path=/, no Domain).
+    secure: boolean
+    sameSite: 'lax' | 'strict' | 'none'
+    maxAgeMs: number                // absolute lifetime on top of the idle ttlMs (default 14 days; 0 = none)
+  }
   channels: { backend: Backend; redis: string }                 // pub/sub fan-out + Last-Event-ID replay
   limits: {
     bodyBytes: number
