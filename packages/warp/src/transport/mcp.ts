@@ -170,15 +170,16 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       const host = headers.host ?? headers.Host
       const base = host && /^[\w.:[\]-]+$/.test(host) ? `${/^(localhost|127\.|\[::1\])/.test(host) ? 'http' : 'https'}://${host}` : ''
       const r = tabs.request(session.sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base })
-      if (!r.ok) return reply(server, [ev.err(r.code, r.message, { reason: r.reason })], blank('/'))
+      if (!r.ok) return json({ kind: 'err', ...r, ok: undefined })
       return json({ kind: 'ok', action: 'request_control', sid: session.sid, ...(r.data as object), message: CONTROL_HINT })
     }
     // a sid that controls a tab (or waits for one) is answered by that tab, never headless
     const st = tabs?.state(typeof args.sid === 'string' ? args.sid : undefined)
     if (st && st.kind !== 'control') {
-      return reply(server, [st.kind === 'awaiting'
-        ? ev.err('domain', `waiting for the human to click Allow: ask them to open ${st.approveUrl} (or type code ${st.code} in the site's Connect box)`, { reason: 'awaiting_approval' })
-        : ev.err(st.reason === 'tab_closed' ? 'expired_sid' : 'domain', NOTE[st.reason] ?? 'no tab under your control', { reason: st.reason })], blank('/'))
+      // tab errors are JSON with a machine-readable reason (control-protocol.md §Errors), like forwarded results
+      return json(st.kind === 'awaiting'
+        ? { kind: 'err', code: 'domain', reason: 'awaiting_approval', message: `waiting for the human to click Allow: ask them to open ${st.approveUrl} (or type code ${st.code} in the site's Connect box)`, approveUrl: st.approveUrl }
+        : { kind: 'err', code: st.reason === 'tab_closed' ? 'expired_sid' : 'domain', reason: st.reason, message: NOTE[st.reason] ?? 'no tab under your control' })
     }
     if (st && (name === 'read_page' || name === 'expand' || name === 'ui')) {
       const op: TabOp = name === 'read_page' ? 'read' : name
@@ -186,8 +187,7 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       if (!p.success) return bad(server, p.error)
       const { url: _u, sid, ...payload } = p.data as { url: string; sid: string }
       const a = await tabs!.forward(sid, op, payload)
-      if (!a.ok) return reply(server, [ev.err(a.code, a.message, { reason: a.reason })], blank('/'))
-      return json({ sid, via: 'tab', ...(a.data as object) })
+      return json(a.ok ? { ...(a.data as object), sid, via: 'tab' } : { kind: 'err', code: a.code, reason: a.reason, message: a.message })
     }
     if (name === 'read_page') {
       const p = readPage.safeParse(args)
