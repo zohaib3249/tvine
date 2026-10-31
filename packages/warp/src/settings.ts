@@ -97,6 +97,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   metrics: { enabled: false, path: '/tvine/metrics', allowIps: [] },
   robots: { allow: [], disallow: [], extra: [] },
   installedApps: [],
+  encryption: { keys: [] },
 }
 
 const corsPolicy = z.object({
@@ -206,6 +207,7 @@ const schema: z.ZodType<Settings> = z.object({
   robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
     sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
+  encryption: z.object({ keys: z.array(z.string().min(32, 'encryption.keys: each key at least 32 chars')).refine((k) => new Set(k).size === k.length, 'encryption.keys: duplicate key') }).strict(),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
     user: fn<(req: Request) => Promise<TvineUser | null>>().optional(),
@@ -258,6 +260,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
     merged.actionMiddleware = [...((rest.actionMiddleware as unknown[] | undefined) ?? []), ...action]
     merged.middleware = http.length || !action.length ? http : DEFAULT_MIDDLEWARE
   }
+  if ((rest as { encryption?: { keys?: unknown } }).encryption?.keys === undefined && env.has('TVINE_ENCRYPTION_KEYS')) merged.encryption = { keys: env.list('TVINE_ENCRYPTION_KEYS') }
   if (rest.allowedHosts === undefined && env.has('TVINE_ALLOWED_HOSTS')) merged.allowedHosts = env.list('TVINE_ALLOWED_HOSTS')
   if (rest.debug === undefined) merged.debug = env.has('TVINE_DEBUG') ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
   // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)

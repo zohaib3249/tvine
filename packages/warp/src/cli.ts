@@ -59,7 +59,8 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
-  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)`
+  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
+  encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -83,6 +84,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
   tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
   audit: { options: { days: str }, args: [1, 1] },
+  encryption: { options: {}, args: [1, 1] },
 }
 
 class Usage extends Error {}
@@ -190,6 +192,17 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const { pruneAudit } = await import('./contrib/audit/prune.js')
         try { io.out(`deleted ${await pruneAudit(days)} audit row(s) older than ${days} day(s)`) } finally { await connections.closeAll() }
         return undefined
+      }
+      case 'encryption': {
+        if (args[0] !== 'rotate') throw new Usage('usage: tvine encryption rotate')
+        const settings = await loadSettings()
+        connections.configure(settings)
+        const { rotateEncryption } = await import('./security/rotate.js')
+        try {
+          const models = Object.values(await discoverModels(apps, { installed: settings.installedApps })).flat()
+          io.out(`re-encrypted ${await rotateEncryption(models, io.out)} row(s) with the newest key`)
+        } finally { await connections.closeAll() }
+        return 0
       }
       case 'inspect': {
         const port = o.port === undefined ? 7357 : Number(o.port)

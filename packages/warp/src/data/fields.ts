@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import {
   BoolField, DateField, DatetimeField, DecimalField, DurationField, EmailField, EnumField, FileField, FkField, FloatField, IdField,
-  ImageField, IntField, JsonField, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
+  ImageField, IntField, EncryptedField, type EncryptedOpts, JsonField, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
 } from './fields/index.js'
 
 export { concrete, isAuto, keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type ModelMeta, type Money, type OnDelete, type Opts } from './fields/index.js'
@@ -34,6 +34,13 @@ export const field = {
   url: mk<string, 'url'>(UrlField),
   slug: mk<string, 'slug'>(SlugField),
   file: mk<string, 'file'>(FileField),             // storage key; upload with defineUpload({ uploadTo })
+  // encrypted at rest (AES-256-GCM; security-features.md): { of: 'text' | 'json', deterministic?, context? }
+  encrypted: <const P extends EncryptedOpts | undefined = undefined>(opts?: P) =>
+    new EncryptedField(opts ?? {}) as unknown as Typed<P extends { of: 'json' } ? unknown : string, 'encrypted', P>,
+  encryptedText: <const P extends Omit<EncryptedOpts, 'of'> | undefined = undefined>(opts?: P) =>
+    new EncryptedField({ ...opts, of: 'text' }) as unknown as Typed<string, 'encrypted', P>,
+  encryptedJson: <const P extends Omit<EncryptedOpts, 'of'> | undefined = undefined>(opts?: P) =>
+    new EncryptedField({ ...opts, of: 'json' }) as unknown as Typed<unknown, 'encrypted', P>,
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
     new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>

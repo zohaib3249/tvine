@@ -7,7 +7,7 @@ import type { Dialect } from '../sql/dialect.js'
 import type { Op } from '../queryset.js'
 
 export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk' | 'm2m'
-  | 'date' | 'time' | 'duration' | 'decimal' | 'email' | 'url' | 'slug' | 'file'
+  | 'date' | 'time' | 'duration' | 'decimal' | 'email' | 'url' | 'slug' | 'file' | 'encrypted'
 export type OnDelete = 'CASCADE' | 'PROTECT' | 'SET_NULL' | 'SET_DEFAULT' | 'RESTRICT' | 'DO_NOTHING'
 export type DbName = Dialect['name']
 

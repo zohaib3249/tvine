@@ -10,8 +10,9 @@ export class SignatureExpired extends BadSignature { constructor(msg = 'signatur
 
 // settings.secret, set at boot (loadSettings) or by configureSigning in scripts/tests; read lazily so the
 // non-enumerable "missing secret" getter fires at first use, not at configure time
-let source: Pick<Settings, 'secret'> | undefined
-export function configureSigning(settings: Pick<Settings, 'secret'>): void { source = settings }
+let source: (Pick<Settings, 'secret'> & Partial<Pick<Settings, 'encryption'>>) | undefined
+export function configureSigning(settings: Pick<Settings, 'secret'> & Partial<Pick<Settings, 'encryption'>>): void { source = settings }
+export const encryptionSetting = () => source?.encryption
 export function secretKeys(): string[] {
   if (!source) throw new Error('signing: settings are not loaded (call loadSettings() or configureSigning(settings))')
   return [source.secret].flat()

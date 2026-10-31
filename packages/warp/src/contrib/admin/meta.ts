@@ -31,6 +31,7 @@ function kindOf(n: string, f: AnyField): MetaKind {
       if (/(^url|Url|URL)$/.test(n)) return 'url'
       if (n === 'slug') return 'slug'
       return 'text'
+    case 'encrypted': return (f.opts as { of?: string }).of === 'json' ? 'json' : 'text'   // shown only with hidden: false
     default: return f.kind as MetaKind   // uuid bool money datetime json image fk m2m
   }
 }

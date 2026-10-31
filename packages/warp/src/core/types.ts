@@ -302,6 +302,8 @@ export interface Settings {
   // extra path rules for every agent; extra: raw lines appended; sitemap: an absolute url (else /sitemap.xml if the app has one)
   robots: { allow: string[]; disallow: string[]; extra: string[]; sitemap?: string }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
+  // encrypted model fields: AES-256-GCM root keys, newest first (rotation); empty = derived from secret (HKDF)
+  encryption: { keys: string[] }
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
 }
