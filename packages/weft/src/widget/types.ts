@@ -19,7 +19,7 @@ export type WidgetKind =
 // Mirror of warp core/types ErrCode (weft does not import warp).
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
-  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
+  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
 
 export interface ParamSpec {
   type: 'string' | 'number' | 'boolean' | 'date' | 'file' | 'json'
@@ -38,6 +38,7 @@ export interface ActionHandle {
   agent: boolean
   ro?: true; danger?: true
   attention?: true | string
+  humanOnly?: true | string       // the action has rules.humanOnly (dispatch refuses agents); dev warning only
 }
 export type ActionOutcome = { ok: true; result?: Json; goto?: string } | { ok: false; code: ErrCode; field?: string; message: string }
 
@@ -123,6 +124,7 @@ export interface WidgetSpec<S extends Json = Json> {
   disabled?: boolean
   personal?: boolean
   sensitive?: boolean
+  humanOnly?: string                           // set by <HumanOnly reason>: shown locked, no controls, agents refused
   presence?: false | PresenceOptions
   hooks?: WidgetHooks
   children?: ChildPolicy

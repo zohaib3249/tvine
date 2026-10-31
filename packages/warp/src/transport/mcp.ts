@@ -88,7 +88,7 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
   const taken = new Set(['read_page', 'expand', 'ui', 'do', 'request_control', 'release'])
   let typed: (McpTool & { def: ActionDef })[] = []
   for (const def of actions.all()) {
-    if (!mcpEnabled(def, settings)) continue
+    if (!mcpEnabled(def, settings) || def.rules?.humanOnly) continue   // humanOnly: no typed tool (dispatch refuses agents anyway)
     const name = toolName(def.id)
     const props = jsonSchema(def.schema)
     const own = (props.properties ?? {}) as Record<string, unknown>

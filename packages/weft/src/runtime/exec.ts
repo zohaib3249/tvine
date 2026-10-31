@@ -1,4 +1,4 @@
-import { callControl, WeftError, type CallOptions } from '../widget/hooks.js'
+import { callControl, humanOnlyMessage, WeftError, type CallOptions } from '../widget/hooks.js'
 import type { ActionHandle, ActionOutcome, Control, ErrCode, Json, ParamSpec, PresenceOptions, UiStepResult } from '../widget/types.js'
 import { listed } from '../widget/vocabulary.js'
 import { getOverlay, POINTED } from '../presence/overlay.js'
@@ -119,6 +119,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     if (isStopped() || signal.aborted) return fail(stopped())
 
     const e = typeof target === 'string' ? reg.get(target) : undefined
+    if (e?.spec.humanOnly) return fail({ code: 'human_only', reason: 'human_only', message: humanOnlyMessage(e.spec.humanOnly) })
     const c = e && callable(e, control)
     // Missing, hidden, disabled, bound to an agent-off action, or behind an open modal ([inert], as tree()): the same answer.
     if (!e || !c || e.el?.closest('[inert]')) return fail({ code: 'unknown_action', message: `unknown control ${control} on ${target}` })

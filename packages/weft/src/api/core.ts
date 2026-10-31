@@ -3,7 +3,7 @@
 
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
-  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
+  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T; goto?: string }

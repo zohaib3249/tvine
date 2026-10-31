@@ -62,7 +62,7 @@ export function pairBind(action: string, payload?: Record<string, unknown>): Rec
 // What bindAction reads from a warp ActionDef's rules (structural: weft does not import warp).
 type HandleRules = {
   bind?: readonly string[]; permissions?: readonly unknown[]; mcp?: boolean
-  readOnly?: boolean; destructive?: boolean; humanAttention?: true | string
+  readOnly?: boolean; destructive?: boolean; humanAttention?: true | string; humanOnly?: true | string
 }
 const AGENTS_DENIED = Symbol.for('tvine.denyAgents')   // warp security/permissions.ts static tag
 
@@ -80,6 +80,7 @@ export function bindAction(def: ActionDef, bind?: Record<string, unknown>): Acti
     ...(r.readOnly && { ro: true as const }),
     ...(r.destructive && { danger: true as const }),
     ...(r.humanAttention && { attention: r.humanAttention }),
+    ...(r.humanOnly && { humanOnly: r.humanOnly }),
   }
 }
 

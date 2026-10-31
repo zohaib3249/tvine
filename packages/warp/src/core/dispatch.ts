@@ -334,6 +334,12 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   }
   // 4. resolve action
   if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid) })]
+  // 4.1 humanOnly (widgets/human-only.md): THE security guard. Every agent-marked request (MCP tools, `do`, agent HTTP,
+  // the tab agent mark/tail, WebMCP agentCmd) is refused; only a human's own request runs it. No rule or hook overrides it.
+  if (def.rules?.humanOnly && request.agent.is) {
+    const why = typeof def.rules.humanOnly === 'string' ? def.rules.humanOnly : def.id
+    return [ev.err('human_only', `only a human can do this here (${why}); ask the user to do it`, { reason: 'human_only' })]
+  }
 
   // handler state is staged: applied only after commit
   const outbox: [string, Event][] = []

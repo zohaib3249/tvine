@@ -18,6 +18,7 @@ export interface WidgetFrag {
   id: string; p?: string; kind: string; label?: string; desc?: string; state?: Json
   ctl?: Record<string, CtlFrag>; e?: string; data?: Data; actions?: ActionRef[]
   sum?: string; summary?: string[]; detail?: string[]; hidden?: string[]; collapsed?: boolean; sensitive?: boolean
+  ho?: string                       // humanOnly reason (<HumanOnly>): locked, no controls
   at?: string[]                     // set by the extractor: every parent of a merged entity
 }
 // folds: link id → the entity node it directly followed in the page (extractor), for `href` folding
@@ -30,6 +31,7 @@ export interface SnapNode {
   ctl?: string[]; actions?: ActionRef[]; href?: string; links?: NavLink[]
   of?: string; count?: number; next?: string; shown?: number; cols?: string[]; rows?: Json[][]
   at?: string[]; n?: number; sum?: string; more?: string
+  humanOnly?: string                // locked for agents: ask the human. Printed once, on the topmost locked node
   does?: string                     // L0: what the subtree offers — frontend controls first, backend actions after
 }
 export interface Shaped { view: View; page: string; title: string; nodes: SnapNode[]; links?: V1Link[]; hint?: string }
@@ -40,6 +42,7 @@ interface T {
   count?: number; next?: string; at?: string[]; sum?: string; collapsed?: boolean
   summary?: string[]; detail?: string[]
   kids: T[]; rows: T[]; of?: string
+  ho?: string; hoUp?: string       // humanOnly reason; the parent's (marker printed only where they differ)
   tpl?: boolean                     // list whose rows have their own widgets (×N template lines at L1)
 }
 export interface SnapTree { page: string; title: string; roots: T[]; links: V1Link[] }
@@ -84,13 +87,13 @@ function fromWidget(w: WidgetFrag, headless: boolean): T {
   const data = w.data && fmtData(Object.fromEntries(Object.entries(w.data).filter(([k]) => !hide.has(k))))
   // h.params.agent === false: the control's server action is not agent-callable → not listed
   const callable = (c: CtlFrag) => (c.h as { params?: { agent?: unknown } } | undefined)?.params?.agent !== false
-  const ctl = Object.entries(w.ctl ?? {}).filter(([, c]) => c.enabled !== false && callable(c) && (!headless || c.h !== undefined)).map(([k, c]) => signature(k, c))
+  const ctl = w.ho ? [] : Object.entries(w.ctl ?? {}).filter(([, c]) => c.enabled !== false && callable(c) && (!headless || c.h !== undefined)).map(([k, c]) => signature(k, c))
   return {
     id: w.id, kind: kindOfWidget(w), label: w.label, desc: w.desc,
     state: w.sensitive ? filled(w.state) : w.state, data,
     ctl: ctl.length ? ctl : undefined, actions: w.actions?.length ? w.actions : undefined,
     at: w.at && w.at.length > 1 ? w.at : undefined, sum: w.sum, collapsed: w.collapsed || undefined,
-    summary: w.summary?.filter(k => !hide.has(k)), detail: w.detail, links: [], kids: [], rows: [],
+    summary: w.summary?.filter(k => !hide.has(k)), detail: w.detail, links: [], kids: [], rows: [], ho: w.ho,
   }
 }
 
@@ -121,7 +124,7 @@ export function toTree(src: ShapeSource, opts: { headless: boolean }): SnapTree 
   const roots: T[] = [], links: V1Link[] = []
   for (const t of order) {
     const p = up.get(t), parent = p === undefined ? undefined : byId.get(p)
-    if (parent && !cyclic(t, byId, up)) parent.kids.push(t)
+    if (parent && !cyclic(t, byId, up)) { parent.kids.push(t); t.hoUp = parent.ho }
     else roots.push(t)
   }
   for (const l of src.links) {
@@ -163,7 +166,7 @@ function templates(t: T): SnapNode[] {
     const key = JSON.stringify([id, k.kind, k.ctl])
     const hit = m.get(key)
     if (hit) hit.n!++
-    else m.set(key, omit({ id, kind: kindOf(k), ctl: k.ctl, n: 1 }))
+    else m.set(key, omit({ id, kind: kindOf(k), humanOnly: hoOf(k), ctl: k.ctl, n: 1 }))
   }
   return [...m.values()]
 }
@@ -199,7 +202,7 @@ function line(t: T): SnapNode {
   const sum = t.sum ?? (listy && t.rows.length ? summaryOf(t, t.rows).join(' ')
     : n ? joinLabels([...t.links.map(l => l.label), ...t.kids.map(k => k.label ?? k.id)])
     : typeof name === 'string' ? name : undefined)
-  return omit({ id: t.id, kind: kindOf(t), label: t.label, of: t.of, count: t.count, n: n || undefined, sum, does: does(t) })
+  return omit({ id: t.id, kind: kindOf(t), label: t.label, of: t.of, count: t.count, n: n || undefined, sum, humanOnly: hoOf(t), does: does(t) })
 }
 
 // Owner directive: agents act through the frontend (widget controls) first; direct backend actions stay
@@ -212,6 +215,7 @@ function does(t: T): string | undefined {
   const parts = [c && p(c, 'control'), a && `${c ? 'then ' : ''}${p(a, 'backend action')} (advanced)`].filter(Boolean)
   return parts.length ? parts.join(', ') : undefined
 }
+const hoOf = (t: T, root = false) => (t.ho !== undefined && (root || t.ho !== t.hoUp) ? t.ho : undefined)
 const kindOf = (t: T) => (t.kind === 'section' && t.links.length && !t.kids.length ? 'nav' : t.kind)
 
 interface Rows { from: number; limit: number; cols: 'all' | 'summary' }
@@ -222,9 +226,9 @@ function more(t: T, from: number, to: number): string | undefined {
   return parts.length ? parts.join('; ') : undefined
 }
 
-function full(t: T, rows: Rows | undefined, summary: boolean): SnapNode {
+function full(t: T, rows: Rows | undefined, summary: boolean, root = false): SnapNode {
   const n: SnapNode = omit({
-    id: t.id, kind: kindOf(t), label: t.label, desc: t.desc, state: t.state,
+    id: t.id, kind: kindOf(t), label: t.label, humanOnly: hoOf(t, root), desc: t.desc, state: t.state,
     data: summary ? pick(t.data, summaryOf(t, [t])) : pickDetail(t.data, t), ctl: t.ctl, actions: t.actions, href: t.href,
     links: t.links.length ? t.links : undefined, of: t.of, count: t.count,
   })
@@ -298,7 +302,7 @@ export function expand(t: SnapTree, id: string, opts: { offset?: number; limit?:
   const out: SnapNode[] = []
   const go = (x: T, root: boolean) => {
     if (x.collapsed && !root) { out.push(line(x)); return }
-    out.push(full(x, root ? { from: opts.offset ?? 0, limit: opts.limit ?? 25, cols: 'all' } : undefined, false))
+    out.push(full(x, root ? { from: opts.offset ?? 0, limit: opts.limit ?? 25, cols: 'all' } : undefined, false, root))
     for (const r of x.rows) for (const k of r.kids) go(k, false)
     for (const k of x.kids) go(k, false)
   }

@@ -63,7 +63,7 @@ export interface JobUpdate { id: string; task: string; status: string; progress?
 
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
-  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
+  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
 
 // channels.md: named pub/sub groups. Implementations: core/channels.ts (memory), backends/redis.ts (redis:
 // fan-out across servers, replay from a stream). seq = the event's cursor (SSE `id:`); one counter for the layer.
@@ -173,6 +173,7 @@ export interface ActionRules {
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
   secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
+  humanOnly?: true | string         // widgets/human-only.md: dispatch refuses every agent-marked request (human_only); no typed MCP tool
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 

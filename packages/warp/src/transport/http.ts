@@ -33,7 +33,7 @@ export function isAgent(req: IncomingMessage, settings: Settings): boolean {
   return a !== undefined && (a.includes('text/tvine') || a.includes('application/tvine+json'))
 }
 
-const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500 }
+const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, human_only: 403 }
 const TYPE: Record<Format, string> = { json: 'application/json; charset=utf-8', notation: 'text/plain; charset=utf-8' }
 const BASE = 'http://tvine.local'
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

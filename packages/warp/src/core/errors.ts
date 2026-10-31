@@ -24,6 +24,7 @@ export const recovery: Record<ErrCode, string> = {
   conflict: 'command already executed with different params; use a new cmdId for new params',
   domain: 'the message above is the business rule; change the input or choose another option',
   internal: 'server error; retry once, then re-read the page',
+  human_only: 'only a human can do this; ask the user to do it themselves, do not retry',
 }
 // err domain with reason 'forbidden' (route guards, permissions, cross-origin): no input change helps
 const FORBIDDEN = 'not allowed for this session; do not retry it, choose another page or action'

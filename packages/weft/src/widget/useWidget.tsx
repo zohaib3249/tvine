@@ -1,9 +1,10 @@
 'use client'
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { describeWidget, widgetFragment } from '../runtime/fragment.js'
 import { getRegistry, type Entry } from '../runtime/registry.client.js'
 import { widgetId } from './ids.js'
 import { WidgetScopeCtx, chainOf, useScopeValue } from './scope.js'
+import { HumanOnlyCtx, warnUnflagged } from './humanOnly.js'
 import type { AgentState, Json, Widget, WidgetSpec } from './types.js'
 
 const dev = () => process.env.NODE_ENV !== 'production'
@@ -21,7 +22,10 @@ function assertJson(v: unknown, path: string): void {
 // registry-client.md lifecycle. Render is pure (id from scope + spec); the registry is written
 // only in layout effects with a per-mount token, so StrictMode and discarded concurrent renders
 // leave exactly the committed widgets. Nothing in here subscribes to the registry.
-export function useWidget<S extends Json>(spec: WidgetSpec<S>): Widget {
+export function useWidget<S extends Json>(own: WidgetSpec<S>): Widget {
+  // <HumanOnly reason>: the nearest wrapper's reason, unless the widget set its own (innermost wins).
+  const ho = useContext(HumanOnlyCtx)
+  const spec = ho !== undefined && own.humanOnly === undefined ? { ...own, humanOnly: ho } : own
   const outer = useScopeValue()
   const parent = outer.id
   const chain = chainOf(outer)
@@ -53,6 +57,7 @@ export function useWidget<S extends Json>(spec: WidgetSpec<S>): Widget {
       },
     }
     entry.current = e
+    if (dev()) warnUnflagged(e.spec)
     const off = getRegistry().register(e)
     return () => { off(); if (entry.current === e) entry.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-register only when the address changes; spec follows via update()

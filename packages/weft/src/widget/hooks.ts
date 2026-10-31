@@ -10,6 +10,8 @@ import { listed } from './vocabulary.js'
 export class WeftError extends Error {
   constructor(readonly code: ErrCode, message: string, readonly reason?: string, readonly field?: string) { super(message) }
 }
+// HumanOnly: refused before any hook runs, so no veto hook (or override) can let an agent through.
+export const humanOnlyMessage = (reason: string) => `only a human can do this here (${reason}); ask the user to do it`
 const veto = (reason: string) => new WeftError('domain', reason, 'veto')
 
 type Controls = Record<string, Control<any, any>>
@@ -81,6 +83,7 @@ export async function callControl(target: string, control: string, args: Record<
   const unknown = () => new WeftError('unknown_action', `unknown control ${control} on ${target}`)
   const find = (e: Entry | undefined) => e && listed(e.spec).find(([n]) => n === control)?.[1]
   const e = reg.get(target)
+  if (e?.spec.humanOnly) throw new WeftError('human_only', humanOnlyMessage(e.spec.humanOnly), 'human_only')
   const first = find(e)
   if (!e || !first) throw unknown()
 

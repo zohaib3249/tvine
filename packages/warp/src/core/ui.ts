@@ -95,6 +95,7 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
     for (const [i, s] of steps.entries()) {
       const snap = await snapNow()
       const w = snap.widgets?.find((x) => x.id === s.target)
+      if (w?.ho) return fail(i, s, 'human_only', `only a human can do this here (${w.ho}); ask the user to do it`, { reason: 'human_only' })
       const c: CtlFrag | undefined = w?.ctl && Object.hasOwn(w.ctl, s.control) ? w.ctl[s.control] : undefined
       // missing, disabled and agent-denied controls answer alike (can't be probed)
       const handle = (c?.h as { params?: { id?: unknown; bind?: unknown; agent?: unknown } } | undefined)?.params

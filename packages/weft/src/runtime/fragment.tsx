@@ -11,6 +11,7 @@ export interface WidgetDescriptor {
   ctl?: Record<string, { kind: string; in?: object; h?: object }>
   e?: string; data?: Record<string, unknown>
   summary?: string[]; detail?: string[]; collapsed?: true
+  ho?: string                       // humanOnly reason (HumanOnly): no controls are listed
 }
 
 // Sensitive state never leaves the widget: only whether it is filled.
@@ -22,13 +23,14 @@ export function agentState(spec: WidgetSpec): Json | undefined {
 }
 
 export function describeWidget(id: string, parent: string, spec: WidgetSpec): WidgetDescriptor {
-  const ctl = Object.fromEntries(listed(spec).map(([n, c]) => [n, { kind: c.kind, ...(c.params && { in: c.params }), ...(c.headless && { h: c.headless }) }]))
+  const ctl = spec.humanOnly ? {} : Object.fromEntries(listed(spec).map(([n, c]) => [n, { kind: c.kind, ...(c.params && { in: c.params }), ...(c.headless && { h: c.headless }) }]))
   const hidden = new Set(spec.hidden)
   const data = spec.data && Object.fromEntries(Object.entries(spec.data).filter(([k]) => !hidden.has(k)))
   const state = agentState(spec)
   return {
     id, ...(parent && { p: parent }), kind: spec.kind, label: spec.label,
     ...(spec.sum && { sum: spec.sum }),
+    ...(spec.humanOnly && { ho: spec.humanOnly }),
     ...(state !== undefined && { state }),
     ...(Object.keys(ctl).length && { ctl }),
     ...(spec.entity && { e: spec.entity }),

@@ -132,7 +132,7 @@ export interface ApiTransportOptions {
   tokens: { read(t: string): void }                                                 // C2: renders that read a session
 }
 
-const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, unknown_action: 404 }
+const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, human_only: 403, unknown_action: 404 }
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const statusOf = (r: ApiResult) => r.ok ? 200 : r.code === 'domain' ? DOMAIN_STATUS[r.reason ?? ''] ?? 400 : STATUS[r.code] ?? 400
 

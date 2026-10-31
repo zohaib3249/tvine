@@ -6,6 +6,7 @@ import { getRegistry, type Entry } from '../runtime/registry.client.js'
 import { applyOverrides, WeftError } from '../widget/hooks.js'
 import { joinId, segmentOf } from '../widget/ids.js'
 import { WidgetScopeCtx, chainOf, useScopeValue } from '../widget/scope.js'
+import { HumanOnlyCtx } from '../widget/humanOnly.js'
 import type { AgentState, AutoChild, Control, ControlCtx, Json, WidgetSpec } from '../widget/types.js'
 import { agentNavigate } from '../runtime/nav.js'
 import { inputType, labelOf, nameOf, offByProps, roleOf, safeHref, sensitive, textOf, type Props } from './qualify.js'
@@ -154,7 +155,7 @@ function stateOf(tag: string, role: string, p: Props, el: HTMLElement | null): J
 const domOff = (el: HTMLElement | null) => !!el && (el.closest('[inert],[aria-hidden="true"],[hidden]') !== null ||
   el.matches(':disabled') || (el as { checkVisibility?: () => boolean }).checkVisibility?.() === false)
 
-interface Cur { tag: string; role: string; p: Props; name?: string; parent: string; chain: readonly string[]; id: string; el: HTMLElement | null }
+interface Cur { tag: string; role: string; p: Props; name?: string; parent: string; chain: readonly string[]; id: string; el: HTMLElement | null; ho?: string }
 
 // A spec whose fields are read live: props of the last commit, the element, the parent's ChildPolicy
 // (applied lazily — the parent registers after its children in layout-effect order).
@@ -183,6 +184,7 @@ function autoSpec(r: { current: Cur }): WidgetSpec {
     get controls() { return applied().controls },
     get hooks() { return applied().hooks },
     get presence() { return applied().presence },
+    get humanOnly() { return r.current.ho },
     get disabled() { return applied().hidden || domOff(r.current.el) },
   }
   AUTO.add(s)
@@ -198,6 +200,7 @@ export function AutoEl(props: AutoProps) {
   const { $tag: tag, $key, $s, ref: userRef, agent, agentId: _i, agentLabel: _l, agentConfirm: _c, agentSensitive: _x, ...rest } = props
   const p = props as Props   // names/labels/confirm read the agent props too
   const off = useContext(Off)
+  const ho = useContext(HumanOnlyCtx)
   const outer = useScopeValue()
   const parent = outer.id
   const chain = chainOf(outer)
@@ -207,7 +210,7 @@ export function AutoEl(props: AutoProps) {
   const base = !live ? '' : name === undefined ? joinId(parent, `${role}:?`) : joinId(parent, segmentOf({ kind: role as WidgetSpec['kind'], name }))
 
   const cur = useRef<Cur>(null as unknown as Cur)
-  cur.current ??= { tag, role: role ?? '', p, name, parent, chain, id: base, el: null }
+  cur.current ??= { tag, role: role ?? '', p, name, parent, chain, id: base, el: null, ho }
   const spec = useRef<WidgetSpec | null>(null)
   spec.current ??= autoSpec(cur)
 
@@ -220,7 +223,7 @@ export function AutoEl(props: AutoProps) {
   }, [userRef])
 
   // Every commit: pointer writes only (no subscribers, nothing re-renders).
-  useLayoutEffect(() => { Object.assign(cur.current, { tag, role: role ?? '', p, name, parent, chain }) })
+  useLayoutEffect(() => { Object.assign(cur.current, { tag, role: role ?? '', p, name, parent, chain, ho }) })
 
   useLayoutEffect(() => {
     if (!base) return
@@ -262,7 +265,7 @@ export function AutoEl(props: AutoProps) {
   if (tag !== 'a' || !safeHref(rest.href)) return scoped
   // Plain links are headless too: a v2 fragment with a url map (pure props → identical on SSR and hydration).
   const frag = widgetFragment(describeWidget(base, parent, {
-    kind: role as WidgetSpec['kind'], label: labelOf(tag, p) || rest.href as string,
+    kind: role as WidgetSpec['kind'], label: labelOf(tag, p) || rest.href as string, humanOnly: ho,
     controls: { navigate: { kind: 'navigate', headless: { url: rest.href as string }, run: () => {} } },
   }))
   return <>{frag}{scoped}</>

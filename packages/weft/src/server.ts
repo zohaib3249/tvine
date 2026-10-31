@@ -9,4 +9,5 @@ export type { ActionDef, ActionRef, AgentSpec, Command, Link as LinkSpec, Node, 
 export { WeftRoot } from './runtime/WeftRoot.js'
 export { AgentSuspense } from './runtime/nav.js'
 export { WidgetScope } from './widget/scope.js'
+export { HumanOnly } from './widget/humanOnly.js'
 export type { ActionHandle, HeadlessMap, Json, WidgetHooks, WidgetSpec } from './widget/types.js'
