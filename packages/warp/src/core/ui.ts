@@ -1,6 +1,7 @@
 // core/ui — headless `ui` resolver (docs/design/frontend/v2/core/headless-parity.md, control-protocol.md).
 // A browserless agent operates a widget control; Warp maps it to the control's headless path:
 // url → same page with ?param=value; rendered → nothing to do; params → dispatch the bound action;
+// call → dispatch a plain api call (no bind);
 // session → dispatch the built-in `weft.uiState`. Every server write goes through dispatch(), so
 // permissions, binds, rules.bind, rate limits, idempotency and atomic commits are the same as `do`.
 import { z } from 'zod'
@@ -116,9 +117,13 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
         done.push({ i, target: s.target, ok: true, result: { goto: page } })
       } else if (h.rendered === true) {
         done.push({ i, target: s.target, ok: true })   // content is already in the snapshot: expand(target) shows it
-      } else if (handle && typeof handle.id === 'string') {
+      } else if ((handle && typeof handle.id === 'string') || typeof h.call === 'string') {
         if (typeof h.field === 'string') return fail(i, s, 'unknown_action', `set ${h.field} in the args of the form's submit control instead`, { reason: 'in_tab_only' })
-        const r = await act(server, env, page, { action: handle.id, params: s.args, bind: typeof handle.bind === 'string' && handle.bind ? handle.bind : undefined   /* '' = unbound (v1 ActionRef) */ }, sid, cmd.cmdId, i)
+        // plain api call (the default): the page's fixed args + the agent's, no bind; the action validates everything
+        const call = typeof h.call === 'string'
+          ? { action: h.call, params: { ...(h.args && typeof h.args === 'object' ? h.args : {}), ...s.args } }
+          : { action: handle!.id as string, params: s.args, bind: typeof handle!.bind === 'string' && handle!.bind ? handle!.bind : undefined   /* '' = unbound (v1 ActionRef) */ }
+        const r = await act(server, env, page, call, sid, cmd.cmdId, i)
         if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
         if (r.goto && !(await env.request(r.goto))) {
           // the action navigated somewhere these steps can't follow: last step → ok + goto; else say exactly what ran

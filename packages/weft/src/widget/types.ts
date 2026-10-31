@@ -46,6 +46,7 @@ export type HeadlessMap =
   | { url: string; values?: 'enum' | 'any' }
   | { rendered: true }
   | { params: ActionHandle; field?: string }
+  | { call: string; args?: Record<string, Json> }   // plain api call: `do <call>` with {...args, ...agent args}; the backend validates all
   | { session: string; enum?: string[] }
 
 // Presence surface a control may drive (implemented by W4; no-op until then).
