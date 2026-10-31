@@ -210,7 +210,7 @@ export function Field(props: FieldProps) {
   }, { className, ...slots?.root }, s, <>
     {w.embed}
     <AutoOff>
-      {part(m.kind === 'choice' && !m.multiple && (m.choices?.length ?? 0) <= 4 && !readOnly ? 'span' : 'label',
+      {part('label',
         { htmlFor: id, id: `${uid}-l`, className: hideLabel ? 'tf-label tf-sr-only' : 'tf-label' }, slots?.label, s, label)}
       {part('div', { className: 'tf-control', 'aria-labelledby': undefined }, slots?.control, s, readOnly ? display(wp) : <W {...wp} />)}
       {m.help && part('p', { id: `${uid}-h`, className: 'tf-hint' }, slots?.help, s, m.help)}

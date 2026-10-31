@@ -1,13 +1,14 @@
 'use client'
 // One built-in widget per FieldKind, on native elements. Each gets FieldWidgetProps (form-shape value).
 // Classes are `tf-*` (forms.css); every part also carries data-attributes for Tailwind (`data-[invalid]:…`).
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useState, type ChangeEvent, type ReactElement, type ReactNode } from 'react'
 import type { FieldKind, FieldWidget, FieldWidgetProps, SearchResult } from './types.js'
 import { countryName, sanitizeHtml } from './rich.js'
 import { RichEditor } from './rich-editor.js'
 import { CodeEditor, highlight } from './code.js'
 import { markdownToHtml } from './richdoc.js'
-import { fromApi } from './values.js'
+import { fromApi, validateField } from './values.js'
+import { Dropdown, FileDrop, MultiSelect, type Opt } from './select.js'
 import * as I from './inputs.js'
 
 const common = (p: FieldWidgetProps) => ({
@@ -18,23 +19,32 @@ const ev = (f: (v: string) => void) => (e: ChangeEvent<HTMLInputElement | HTMLTe
 
 const INPUT_TYPE: Partial<Record<FieldKind, string>> = { text: 'text', email: 'email', url: 'url', slug: 'text', uuid: 'text', date: 'date', datetime: 'datetime-local', time: 'time' }
 
+// prefix / suffix inside the box (FieldMeta.prefix / suffix) and a live "12 / 200" counter for text with a max
+function Adorn({ m, children }: { m: FieldWidgetProps['meta']; children: ReactNode }) {
+  if (!m.prefix && !m.suffix) return <>{children}</>
+  return <div className="tf-adorn" data-part="adorn">{m.prefix && <span className="tf-affix">{m.prefix}</span>}{children}{m.suffix && <span className="tf-affix">{m.suffix}</span>}</div>
+}
+const COUNTED = new Set<FieldKind>(['text', 'textarea'])
+const Counter = ({ p }: { p: FieldWidgetProps }) => p.meta.maxLength && COUNTED.has(p.meta.kind) && !p.readOnly
+  ? <span className="tf-counter" data-over={String(p.value ?? '').length > p.meta.maxLength ? '' : undefined} aria-hidden="true">{String(p.value ?? '').length} / {p.meta.maxLength}</span> : null
+
 function TextInput(p: FieldWidgetProps) {
   const m = p.meta
-  return <input className="tf-input" type={INPUT_TYPE[m.kind] ?? 'text'} value={p.value ?? ''} onChange={ev(p.onChange)} maxLength={m.maxLength}
+  return <><Adorn m={m}><input className="tf-input" type={INPUT_TYPE[m.kind] ?? 'text'} value={p.value ?? ''} onChange={ev(p.onChange)} maxLength={m.maxLength}
     spellCheck={m.kind === 'slug' || m.kind === 'uuid' ? false : undefined} placeholder={m.kind === 'uuid' ? '00000000-0000-0000-0000-000000000000' : undefined}
-    autoComplete={m.kind === 'email' ? 'email' : m.kind === 'url' ? 'url' : undefined} {...common(p)} />
+    autoComplete={m.kind === 'email' ? 'email' : m.kind === 'url' ? 'url' : undefined} {...common(p)} /></Adorn><Counter p={p} /></>
 }
 function Duration(p: FieldWidgetProps) {
   return <input className="tf-input" type="text" inputMode="numeric" placeholder="HH:MM:SS" pattern="(\d+ )?\d+:[0-5]?\d(:[0-5]?\d)?" value={p.value ?? ''} onChange={ev(p.onChange)} {...common(p)} />
 }
 function TextArea(p: FieldWidgetProps) {
-  return <textarea className="tf-input tf-textarea" rows={4} value={p.value ?? ''} onChange={ev(p.onChange)} maxLength={p.meta.maxLength} {...common(p)} />
+  return <><textarea className="tf-input tf-textarea" rows={4} value={p.value ?? ''} onChange={ev(p.onChange)} maxLength={p.meta.maxLength} {...common(p)} /><Counter p={p} /></>
 }
 const step = (d?: number) => (d == null ? 'any' : d === 0 ? '1' : `0.${'0'.repeat(d - 1)}1`)
 function NumberInput(p: FieldWidgetProps) {
   const m = p.meta
-  return <input className="tf-input" type="number" inputMode={m.kind === 'int' ? 'numeric' : 'decimal'} step={m.kind === 'int' ? 1 : step(m.decimals)}
-    min={m.min} max={m.max} value={p.value ?? ''} onChange={ev(p.onChange)} {...common(p)} />
+  return <Adorn m={m}><input className="tf-input" type="number" inputMode={m.kind === 'int' ? 'numeric' : 'decimal'} step={m.kind === 'int' ? 1 : step(m.decimals)}
+    min={m.min} max={m.max} value={p.value ?? ''} onChange={ev(p.onChange)} {...common(p)} /></Adorn>
 }
 
 // ponytail: fixed currency list when the field has no fixed currency; pass `choices` on a money field to restrict.
@@ -60,28 +70,19 @@ function Bool(p: FieldWidgetProps) {
       <option value="">Unknown</option><option value="true">Yes</option><option value="false">No</option>
     </select>
   }
-  return <input className="tf-check" type="checkbox" checked={!!p.value} onChange={(e) => p.onChange(e.target.checked)} {...common(p)} required={false} />
+  return <input className="tf-check tf-toggle" type="checkbox" role="switch" checked={!!p.value} onChange={(e) => p.onChange(e.target.checked)} {...common(p)} required={false} />
 }
 
-const RADIO_MAX = 4
+// choices → a dropdown (radios only when the developer asks: ModelAdmin.widgets = { status: 'segmented' })
+const sel = (p: FieldWidgetProps) => ({ id: p.id, name: p.name, label: p.meta.label, describedBy: p.describedBy, invalid: p.invalid, disabled: p.readOnly, required: p.meta.required })
+const opts = (p: FieldWidgetProps): Opt[] => p.meta.choices ?? []
 function Choice(p: FieldWidgetProps) {
-  const m = p.meta, cs = m.choices ?? []
+  const m = p.meta, cs = opts(p)
   if (m.multiple) {
-    return <select className="tf-input" multiple value={p.value ?? []} onChange={(e) => p.onChange([...e.target.selectedOptions].map((o) => o.value))} {...common(p)}>
-      {cs.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-    </select>
+    const vs: string[] = p.value ?? []
+    return <MultiSelect {...sel(p)} options={cs} max={m.max} value={vs.map((v) => cs.find((c) => c.value === v) ?? { value: v, label: v })} onChange={(v) => p.onChange(v.map((o) => o.value))} />
   }
-  if (cs.length <= RADIO_MAX) {
-    const { id, describedBy } = p
-    return <div className="tf-radios" role="radiogroup" aria-label={m.label} id={id} aria-describedby={describedBy} aria-invalid={p.invalid || undefined} aria-required={m.required || undefined}>
-      {!m.required && <label className="tf-radio"><input type="radio" name={p.name} value="" checked={!p.value} disabled={p.readOnly} onChange={() => p.onChange('')} /> <span>None</span></label>}
-      {cs.map((c) => <label key={c.value} className="tf-radio"><input type="radio" name={p.name} value={c.value} checked={p.value === c.value} disabled={p.readOnly} onChange={() => p.onChange(c.value)} /> <span>{c.label}</span></label>)}
-    </div>
-  }
-  return <select className="tf-input" value={p.value ?? ''} onChange={ev(p.onChange)} {...common(p)}>
-    <option value="">---------</option>
-    {cs.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-  </select>
+  return <Dropdown {...sel(p)} options={cs} value={cs.find((c) => c.value === p.value) ?? null} onChange={(o) => p.onChange(o?.value ?? '')} />
 }
 
 function Password(p: FieldWidgetProps) {
@@ -96,8 +97,7 @@ function Json(p: FieldWidgetProps) {
   let err: string | undefined
   if (p.value) { try { JSON.parse(p.value) } catch (e) { err = (e as Error).message } }
   return <div className="tf-json" data-part="json" data-invalid={err ? '' : undefined}>
-    <textarea className="tf-input tf-textarea tf-mono" rows={6} spellCheck={false} value={p.value ?? ''} onChange={ev(p.onChange)} {...common(p)}
-      aria-invalid={p.invalid || !!err || undefined} />
+    <CodeEditor {...p} meta={{ ...p.meta, language: 'json' }} invalid={p.invalid || !!err} />
     {err && <p className="tf-hint tf-hint-error" data-part="json-error">JSON: {err}</p>}
   </div>
 }
@@ -107,99 +107,32 @@ const isFile = (v: unknown): v is File => typeof File !== 'undefined' && v insta
 const fileName = (v: any): string => isFile(v) ? v.name : typeof v === 'string' ? v.split('/').pop()! : v?.name ?? v?.url ?? ''
 const fileUrl = (v: any): string | undefined => typeof v === 'string' ? v : v?.url
 function Upload(p: FieldWidgetProps) {
-  const m = p.meta, v = p.value, img = m.kind === 'image'
-  const [preview, setPreview] = useState<string>()
-  useEffect(() => {
-    if (!img || !isFile(v) || typeof URL.createObjectURL !== 'function') return setPreview(undefined)
-    const u = URL.createObjectURL(v); setPreview(u); return () => URL.revokeObjectURL(u)
-  }, [v, img])
-  const src = preview ?? (img ? fileUrl(v) : undefined)
-  return <div className="tf-file" data-part="file" data-filled={v ? '' : undefined}>
-    {src && <img className="tf-preview" src={src} alt="" />}
-    {v && <span className="tf-file-name">{fileUrl(v) && !isFile(v) ? <a href={fileUrl(v)} target="_blank" rel="noreferrer">{fileName(v)}</a> : fileName(v)}</span>}
-    <input className="tf-file-input" type="file" accept={m.upload?.accept ?? (img ? 'image/*' : undefined)} {...common(p)} required={m.required && !v}
-      onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onChange(f) }} />
-    {v && !m.required && !p.readOnly && <button type="button" className="tf-btn tf-btn-ghost" onClick={() => p.onChange(null)}>Clear</button>}
-  </div>
+  const m = p.meta, img = m.kind === 'image'
+  return <FileDrop {...sel(p)} image={img} accept={m.upload?.accept ?? (img ? 'image/*' : undefined)} maxBytes={m.upload?.maxBytes}
+    value={p.value} onChange={p.onChange} check={(f) => validateField(m, f)} />
 }
 
-// ---- fk / m2m: async autocomplete (APG combobox) over `search(q, page)` ----
-function useSearch(p: FieldWidgetProps) {
-  const [q, setQ] = useState(''), [res, setRes] = useState<SearchResult[]>([]), [more, setMore] = useState(false)
-  const [page, setPage] = useState(1), [open, setOpen] = useState(false), [loading, setLoading] = useState(false), [hi, setHi] = useState(-1)
-  const seq = useRef(0)
-  const run = (text: string, pg = 1) => {
-    if (!p.search) return
-    const n = ++seq.current; setLoading(true)
-    p.search(text, pg).then((r) => { if (n !== seq.current) return; setRes((old) => (pg > 1 ? [...old, ...r.results] : r.results)); setMore(r.more); setPage(pg) },
-      () => { if (n === seq.current) setRes([]) }).finally(() => { if (n === seq.current) setLoading(false) })
-  }
-  return { q, setQ, res, more, page, open, setOpen, loading, hi, setHi, run }
-}
-function Listbox(p: { id: string; s: ReturnType<typeof useSearch>; pick(r: SearchResult): void; selected(pk: string): boolean }) {
-  const { s } = p
-  return <ul className="tf-listbox" id={`${p.id}-list`} role="listbox" hidden={!s.open} aria-busy={s.loading || undefined}>
-    {s.res.map((r, i) => <li key={r.pk} id={`${p.id}-o${i}`} role="option" className="tf-option" data-value={r.pk} aria-selected={p.selected(r.pk)}
-      data-highlighted={i === s.hi ? '' : undefined} onMouseDown={(e) => e.preventDefault()} onClick={() => p.pick(r)}>{r.text}</li>)}
-    {s.more && <li role="presentation" className="tf-option tf-more" onMouseDown={(e) => e.preventDefault()} onClick={() => s.run(s.q, s.page + 1)}>Load more…</li>}
-    {s.loading && <li role="presentation" className="tf-option tf-muted">Loading…</li>}
-    {!s.loading && !s.res.length && <li role="presentation" className="tf-option tf-muted">No results</li>}
-  </ul>
-}
-function searchInput(p: FieldWidgetProps, s: ReturnType<typeof useSearch>, pick: (r: SearchResult) => void, extra: Record<string, unknown> = {}) {
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    const n = s.res.length
-    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && n) { e.preventDefault(); s.setOpen(true); s.setHi((h) => (h + (e.key === 'ArrowDown' ? 1 : -1) + n) % n) }
-    else if (e.key === 'Enter' && s.open && s.res[s.hi]) { e.preventDefault(); pick(s.res[s.hi]!) }
-    else if (e.key === 'Escape') s.setOpen(false)
-  }
-  return <input className="tf-input tf-search" type="text" role="combobox" autoComplete="off" aria-autocomplete="list" aria-expanded={s.open}
-    aria-controls={`${p.id}-list`} aria-activedescendant={s.open && s.res[s.hi] ? `${p.id}-o${s.hi}` : undefined}
-    {...common(p)} required={false} name={undefined} value={s.q} onKeyDown={onKey}
-    onFocus={() => { s.setOpen(true); if (!s.res.length) s.run(s.q) }} onBlur={() => s.setOpen(false)}
-    onChange={(e) => { s.setQ(e.target.value); s.setOpen(true); s.setHi(-1); s.run(e.target.value) }} {...extra} />
-}
-// Django's default fk / m2m widget: a <select> of the related rows the server listed (FieldMeta.choices)
-const selectRel = (p: FieldWidgetProps) => !!p.meta.relation && !p.meta.relation.autocomplete && !p.meta.relation.rawId && !!p.meta.choices
-const toRef = (p: FieldWidgetProps, pk: string): SearchResult => ({ pk, text: p.meta.choices!.find((c) => c.value === pk)?.label ?? pk })
+// ---- fk / m2m: a searchable dropdown / multi-select over the listed rows (FieldMeta.choices) or async search(q, page) ----
+const toRef = (o: Opt): SearchResult => ({ pk: o.value, text: o.label })
+const toOpt = (r: SearchResult): Opt => ({ value: r.pk, label: r.text })
+const listed = (p: FieldWidgetProps) => (p.meta.relation && !p.meta.relation.autocomplete && p.meta.choices) || undefined
 function Fk(p: FieldWidgetProps) {
-  const rel = p.meta.relation, s = useSearch(p), v = p.value as SearchResult | null
-  if (selectRel(p)) {
-    return <select className="tf-input" value={v?.pk ?? ''} onChange={(e) => p.onChange(e.target.value ? toRef(p, e.target.value) : null)} {...common(p)}>
-      <option value="">---------</option>
-      {p.meta.choices!.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-    </select>
-  }
-  if (rel?.rawId || !p.search) {   // Django raw_id_fields: type the pk
+  const v = p.value as SearchResult | null, choices = listed(p)
+  if (p.meta.relation?.rawId || (!choices && !p.search)) {   // Django raw_id_fields: type the pk
     return <input className="tf-input" type="text" inputMode="numeric" value={v?.pk ?? ''} placeholder="id"
       onChange={(e) => p.onChange(e.target.value ? { pk: e.target.value, text: e.target.value } : null)} {...common(p)} />
   }
-  const pick = (r: SearchResult) => { p.onChange(r); s.setQ(''); s.setOpen(false) }
-  return <div className="tf-autocomplete" data-part="fk">
-    {v ? <span className="tf-chip" data-value={v.pk}>{v.text}{!p.readOnly && <button type="button" className="tf-chip-x" aria-label={`Clear ${v.text}`} onClick={() => p.onChange(null)}>×</button>}</span>
-      : searchInput(p, s, pick, { placeholder: 'Search…' })}
-    <input type="hidden" name={p.name} value={v?.pk ?? ''} />
-    <Listbox id={p.id} s={s} pick={pick} selected={(pk) => v?.pk === pk} />
-  </div>
+  return <div data-part="fk"><Dropdown {...sel(p)} options={choices} search={choices ? undefined : p.search} placeholder={choices ? 'Select…' : 'Search…'}
+    value={v ? toOpt(v) : null} onChange={(o) => p.onChange(o ? toRef(o) : null)} /></div>
 }
 function M2m(p: FieldWidgetProps) {
-  const s = useSearch(p), vs = (p.value ?? []) as SearchResult[]
-  if (selectRel(p)) {
-    return <select className="tf-input" multiple value={vs.map((r) => r.pk)} onChange={(e) => p.onChange([...e.target.selectedOptions].map((o) => toRef(p, o.value)))} {...common(p)}>
-      {p.meta.choices!.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-    </select>
+  const vs = (p.value ?? []) as SearchResult[], choices = listed(p)
+  if (!choices && !p.search) {
+    return <input className="tf-input" type="text" placeholder="ids, comma separated" defaultValue={vs.map((r) => r.pk).join(',')} {...common(p)}
+      onBlur={(e) => p.onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((pk) => ({ pk, text: pk })))} />
   }
-  const pick = (r: SearchResult) => { if (!vs.some((x) => x.pk === r.pk)) p.onChange([...vs, r]); s.setQ('') }
-  return <div className="tf-autocomplete tf-multi" data-part="m2m">
-    <ul className="tf-chips" aria-label={`${p.meta.label} selected`}>
-      {vs.map((r) => <li key={r.pk} className="tf-chip" data-value={r.pk}>{r.text}
-        {!p.readOnly && <button type="button" className="tf-chip-x" aria-label={`Remove ${r.text}`} onClick={() => p.onChange(vs.filter((x) => x.pk !== r.pk))}>×</button>}</li>)}
-    </ul>
-    {!p.readOnly && (p.search ? searchInput(p, s, pick, { placeholder: 'Add…' })
-      : <input className="tf-input" type="text" placeholder="ids, comma separated" defaultValue={vs.map((r) => r.pk).join(',')} {...common(p)}
-          onBlur={(e) => p.onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((pk) => ({ pk, text: pk })))} />)}
-    <Listbox id={p.id} s={s} pick={pick} selected={(pk) => vs.some((x) => x.pk === pk)} />
-  </div>
+  return <div data-part="m2m"><MultiSelect {...sel(p)} options={choices} search={choices ? undefined : p.search} max={p.meta.max}
+    value={vs.map(toOpt)} onChange={(v) => p.onChange(v.map(toRef))} /></div>
 }
 
 export const BUILTIN: Record<FieldKind, FieldWidget> = {
