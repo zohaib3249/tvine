@@ -10,7 +10,9 @@ import { broker, closeBroker } from './broker.js'
 import { benchConfigured } from './bench.js'
 import { STATUSES, type JobStatus } from './models.js'
 import { OutboxRelay } from './relay.js'
-import { configureTasks, discoverTasks } from './task.js'
+import { dirname } from 'node:path'
+import { appModule, importApp } from '../../core/actions.js'
+import { checkSchedule, configureTasks, discoverTasks, type ScheduleOpt, type Task } from './task.js'
 import { Worker, type Log } from './worker.js'
 
 export interface Io { out(s: string): void; err(s: string): void; exit(code: number): void }
@@ -33,7 +35,25 @@ async function boot(apps: string, settings: Settings, cmd: string) {
   if (settings.audit.enabled) (await import('../audit/prune.js')).installSink(settings)
   connections.configure(settings)
   configureRedis(settings)
-  return discoverTasks(apps, settings.installedApps)
+  return withTasksModule(apps, settings, await discoverTasks(apps, settings.installedApps))
+}
+
+// Celery's app config: settings.tasksModule (default config/tasks, from the project root) may export
+// `queues` (the worker's default --queues) and `beatSchedule` ({ '<app>.<task>': { every | cron, args } }).
+export const tasksConfig: { queues?: string[] } = {}
+async function withTasksModule(apps: string, settings: Settings, found: Task[]): Promise<Task[]> {
+  const name = settings.tasksModule ?? 'config/tasks'
+  const file = appModule(dirname(apps), name)
+  if (!file) { if (settings.tasksModule) throw new Error(`settings.tasksModule: no ${name}.ts`); return found }
+  const m = await importApp(file) as { queues?: string[]; beatSchedule?: Record<string, ScheduleOpt> }
+  tasksConfig.queues = m.queues
+  for (const [id, sched] of Object.entries(m.beatSchedule ?? {})) {
+    const t = found.find((x) => x.id === id)
+    if (!t) throw new Error(`${file}: beatSchedule names unknown task ${id} (a task is <app>.<name>)`)
+    ;(t.opts as { schedule?: ScheduleOpt }).schedule = sched
+    try { checkSchedule(t) } catch (e) { throw new Error(`${file}: ${(e as Error).message}`) }
+  }
+  return found
 }
 
 const int = (v: unknown, name: string, min: number): number | undefined => {
@@ -55,7 +75,7 @@ export function workerCache(settings: Settings, log: Log): ReturnType<typeof sna
 export async function workerCommand(apps: string, settings: Settings, o: Flags, io: Io): Promise<undefined> {
   const found = await boot(apps, settings, 'worker')
   const log = logger(settings.logging)
-  const queues = typeof o.queues === 'string' && o.queues !== '*' ? o.queues.split(',').map((q) => q.trim()).filter(Boolean) : '*'
+  const queues = typeof o.queues === 'string' ? (o.queues === '*' ? '*' : o.queues.split(',').map((q) => q.trim()).filter(Boolean)) : tasksConfig.queues?.length ? tasksConfig.queues : '*'
   const w = new Worker({ name: o.name as string | undefined, queues, concurrency: int(o.concurrency, 'concurrency', 0), graceMs: int(o.grace, 'grace', 0), log })
   const beat = o.beat ? new Beat({ log }) : undefined
   const outbox = new OutboxRelay(log)

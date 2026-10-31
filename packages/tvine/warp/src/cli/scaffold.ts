@@ -62,25 +62,102 @@ export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
       engines: { node: '>=22.15' },
       ...(pm === 'pnpm' ? { pnpm: { onlyBuiltDependencies: ['better-sqlite3', 'esbuild'] } } : {}),
     }),
-    'settings.ts': `// Django settings.py: the one settings file (docs/design/conventions/settings.md).
-// Secure by default, read from the environment (.env in development, real env vars in production):
-//   DATABASE_URL          db url (default sqlite file:./tvine.db)
-//   TVINE_SECRET         >= 32 random chars; required in production
-//   TVINE_ALLOWED_HOSTS  comma list; required in production (dev accepts localhost only)
-//   TVINE_DEBUG          1 = DEBUG (on under \`tvine dev\`, off under \`tvine start\`)
-import { defineSettings } from 'tvine'
+    'config/settings/base.ts': `// Shared settings (Django settings/base.py). dev.ts and prod.ts build on it; pick one with
+// TVINE_SETTINGS=config/settings/prod or tvine --settings (default: prod when NODE_ENV=production, else dev).
+// Environment: DATABASE_URL, TVINE_SECRET, TVINE_ALLOWED_HOSTS, TVINE_DEBUG (.env in development).
+import type { SettingsInput } from 'tvine'
 
-export default defineSettings({
+export const base = {
   site: { name: '${title}', description: 'A Tvine project.' },
   installedApps: ${JSON.stringify(installed).replace(/,/g, ', ').replace(/"/g, "'")},
-${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}})
+${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}  // Django MIDDLEWARE, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
+  middleware: [
+    'tvine.middleware.RequestId',          // x-request-id on every request and log line
+    'tvine.middleware.AllowedHosts',       // refuses a Host header not in allowedHosts
+    'tvine.middleware.Security',           // security headers: HSTS, CSP, frame, referrer…
+    'tvine.middleware.Cors',               // cross-origin rules (settings.cors)
+    'tvine.middleware.GZip',               // compresses responses (settings.compression)
+    // 'tvine.middleware.ConditionalGet',  // ETag / 304 Not Modified
+    // 'tvine.middleware.SslRedirect',     // http → https redirect
+    // 'tvine.middleware.RateLimit',       // per-IP request limit for pages
+    // 'tvine.middleware.IpFilter',        // allow / deny by IP or CIDR for some paths
+    // 'tvine.middleware.Maintenance',     // 503 maintenance page while a flag is on
+    // 'tvine.middleware.BodyLimit',       // caps request body size
+    // 'tvine.middleware.Timeout',         // aborts slow requests
+    // 'tvine.middleware.AccessLog',       // one log line per request
+    // 'tvine.middleware.Locale',          // picks the language from Accept-Language / cookie
+    // 'tvine.middleware.ServerTiming',    // Server-Timing header for devtools
+    // 'tvine.middleware.BotGuard',        // refuses known bad bots by user-agent
+    // 'config.middleware.example',        // your own: config/middleware/example.ts
+  ],
+} satisfies SettingsInput
 `,
-    'urls.ts': `// Django ROOT_URLCONF. Every action also answers at /tvine/api/<app>.<name> and as an MCP tool at /mcp.
+    'config/middleware/index.ts': `// Your project's HTTP middleware. Enable one in config/settings/base.ts:
+//   middleware: [..., 'config.middleware.example']   (or import it and list the object itself)
+export { default as example } from './example.ts'
+`,
+    'config/middleware/example.ts': `// An example middleware (not enabled). Enable it with 'config.middleware.example' in settings.middleware.
+import { defineMiddleware } from 'tvine'
+
+export default defineMiddleware({
+  name: 'example',
+  processRequest(req) {
+    // runs before the view; send a response here to stop the request
+    void req
+  },
+  // processResponse(req, res) { res.setHeader('x-example', '1') },
+})
+`,
+    'config/settings/dev.ts': `// Development: tvine dev / migrate / shell use this (then config/settings/local.ts, if present).
+import { defineSettings } from 'tvine'
+import { base } from './base.ts'
+
+export default defineSettings({
+  ...base,
+  debug: true,
+  allowedHosts: ['localhost', '.localhost', '127.0.0.1', '[::1]'],
+})
+`,
+    'config/settings/prod.ts': `// Production: tvine start, or TVINE_SETTINGS=config/settings/prod. Everything secret comes from the environment.
+import { defineSettings } from 'tvine'
+import { base } from './base.ts'
+
+const need = ['TVINE_SECRET', 'TVINE_ALLOWED_HOSTS', 'DATABASE_URL'].filter((k) => !process.env[k]?.trim())
+if (need.length) throw new Error(\`config/settings/prod.ts: set \${need.join(', ')} in the environment\`)
+
+export default defineSettings({
+  ...base,
+  debug: false,                 // secret, allowedHosts and db.url are read from the variables above
+  session: { secure: true },    // cookies over https only
+  middleware: [...base.middleware, 'tvine.middleware.SslRedirect'],
+})
+`,
+    'config/settings/local.example.ts': `// Copy to config/settings/local.ts (git-ignored) for machine-only overrides. tvine dev merges it over dev.ts.
+// A plain object, not defineSettings(): only the keys you set change.
+import type { SettingsInput } from 'tvine'
+
+export default {
+  // db: { url: 'postgres://me@localhost/${o.name.replace(/-/g, '_')}' },
+} satisfies SettingsInput
+`,
+    'config/urls.ts': `// Django ROOT_URLCONF (settings.rootUrlconf). Every action also answers at /tvine/api/<app>.<name> and as an MCP tool at /mcp.
 ${admin ? '// /admin is served by tvine.admin itself (settings.admin.path); no route needed.\n' : ''}import { include, path } from 'tvine'
 
 export const urlpatterns = [
   path('api/auth/', include('tvine.auth.urls')),
 ]
+`,
+    'config/tasks.ts': `// Task worker config, like Celery's (settings.tasksModule). Tasks live in apps/<app>/tasks.ts (defineTask).
+// Run: tvine worker [--beat]
+
+// Queues this worker consumes when --queues is not given (default: all).
+export const queues: string[] = []
+
+// Periodic tasks for tvine worker --beat, by task id '<app>.<task>'.
+export const beatSchedule = {
+  // 'blog.cleanup': { cron: '0 3 * * *' },
+  // 'blog.ping': { every: 60_000, args: {} },
+}
 `,
     '.env.example': `# Copy to .env for development. In production set real environment variables instead.
 TVINE_SECRET=change-me-to-64-hex-chars-openssl-rand-hex-32
@@ -89,7 +166,7 @@ TVINE_ALLOWED_HOSTS=example.com,www.example.com
 # TVINE_DEBUG=1
 `,
     '.env': `# Development only (git-ignored). Generated by tvine startproject.\nTVINE_SECRET=${randomBytes(32).toString('hex')}\nDATABASE_URL=${dbUrl}\n`,
-    '.gitignore': 'node_modules/\n.next/\n*.db\n*.db-*\n.env\n.env*.local\nnext-env.d.ts\n*.tsbuildinfo\nmedia/\n',
+    '.gitignore': 'node_modules/\n.next/\n*.db\n*.db-*\n.env\n.env*.local\nconfig/settings/local.ts\nnext-env.d.ts\n*.tsbuildinfo\nmedia/\n',
     'tsconfig.json': json({
       compilerOptions: {
         target: 'ES2022', lib: ['ES2022', 'DOM', 'DOM.Iterable'], types: ['node'], module: 'ESNext', moduleResolution: 'Bundler',
@@ -134,14 +211,15 @@ ${pm} install
 ${run} tvine migrate
 ${run} tvine createsuperuser
 ${run} tvine dev            # http://localhost:3000${admin ? ' · /admin' : ''} · /mcp
-${run} tvine startapp blog --model Post
+${run} tvine startapp blog     # apps/blog + installedApps + config/urls.ts
 \`\`\`
 
 | File | Django |
 |---|---|
-| settings.ts | settings.py |
-| urls.ts | ROOT_URLCONF |
-| apps/<name>/ | an app: models, views, urls, admin, migrations |
+| config/settings/base.ts, dev.ts, prod.ts | settings.py split per environment (TVINE_SETTINGS = DJANGO_SETTINGS_MODULE) |
+| config/urls.ts | ROOT_URLCONF |
+| config/tasks.ts | Celery config: queues, beat schedule |
+| apps/<name>/ | an app (listed in installedApps): models, views, urls, admin, migrations |
 | app/ | Next.js pages (call the backend through \`api.*\`) |
 
 Claude Code: \`.mcp.json\` points at \`http://localhost:3000/mcp\`; start \`tvine dev\`, then run \`claude\` in this folder.
@@ -195,7 +273,7 @@ ${[
         </div>
         <div className="tv-steps">
           <h2>Next steps</h2>
-          <pre>{\`tvine startapp blog --model Post   \`}<span className="c"># a new app in apps/blog</span>{\`
+          <pre>{\`tvine startapp blog                \`}<span className="c"># a new app in apps/blog</span>{\`
 tvine makemigrations && tvine migrate
 claude                              \`}<span className="c"># Claude Code reads .mcp.json: your actions are its tools</span></pre>
         </div>
@@ -207,101 +285,78 @@ claude                              \`}<span className="c"># Claude Code reads .
 `
 }
 
-const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1)
-const camel = (s: string) => s.replace(/_(\w)/g, (_, c: string) => c.toUpperCase())
+// tvine startapp <name>: apps/<name>/ with empty Django-style stubs, then '<name>' in installedApps and its
+// include() in the root urls. Each edit goes into the existing array literal; a file of an unexpected shape is
+// left alone and the caller prints the line to add instead.
+export interface StartAppResult { dir: string; files: string[]; settings: Edit; urls: Edit }
+export interface Edit { file?: string; status: 'added' | 'present' | 'manual'; line: string }
 
-// tvine startapp <name> [--model Name]: apps/<name>/ + one include line in the root urls.ts when it is safe
-export function startApp(appsDir: string, name: string, model?: string): { dir: string; files: string[]; urls: 'added' | string } {
+export function startApp(appsDir: string, name: string): StartAppResult {
   if (!APP_RE.test(name)) throw new Error(`app name "${name}" must match ${APP_RE} (it becomes the action id prefix)`)
-  const M = model ?? cap(camel(name))
-  if (!/^[A-Z][A-Za-z0-9]*$/.test(M)) throw new Error(`--model "${M}" must be PascalCase, e.g. Post`)
   const dir = join(appsDir, name)
   if (existsSync(dir)) throw new Error(`${dir} already exists`)
-  const m = M.toLowerCase(), list = `${M}List`, detail = `${M}Detail`
   const files: Record<string, string> = {
-    'models.ts': `// Django models.py. Change a model, then: tvine makemigrations && tvine migrate
-import { defineModel, field, type Infer } from 'tvine'
-
-export const ${M} = defineModel('${m}', {
-  id: field.id(),                                  // auto primary key
-  title: field.text({ searchable: true }),         // ?q= searches it
-  body: field.text({ default: '' }),
-  published: field.bool({ default: false }),
-})
-export type ${M} = Infer<typeof ${M}>
-`,
-    'views.ts': `// Django views.py. Each view is an action: ${name}.list, ${name}.get (also MCP tools at /mcp).
-import { DetailView, ListView } from 'tvine'
-import { ${M} } from './models.ts'
-
-export class ${list} extends ListView<${M}> {     // → ${name}.list (?q= search, ?sort=, pages)
-  model = ${M}
-  ordering = ['id', 'title']
-}
-
-export class ${detail} extends DetailView<${M}> { // → ${name}.get
-  model = ${M}
-}
-`,
-    'urls.ts': `import { path } from 'tvine'
-import { ${detail}, ${list} } from './views.ts'
-
-export const appName = '${name}'
-export const urlpatterns = [
-  path('${m}s/', ${list}, { name: '${m}-list' }),
-  path('${m}s/<int:id>/', ${detail}, { name: '${m}-detail' }),
-]
-`,
-    'admin.ts': `// Django admin.py: what /admin shows for ${name}.
-import { admin, ModelAdmin } from 'tvine/contrib/admin'
-import { ${M} } from './models.ts'
-
-class ${M}Admin extends ModelAdmin {
-  listDisplay = ['title', 'published']
-  listFilter = ['published']
-  searchFields = ['title']
-  str(o: any) { return String(o.title) }
-}
-admin.site.register(${M}, ${M}Admin)
-`,
-    'serializers.ts': `// Per-node-type snapshot shaping: hide fields from agents, add computed ones.
-export const serializers: Record<string, (data: Record<string, unknown>) => Record<string, unknown>> = {}
-`,
-    'rules.ts': `// App-wide action rules (an action's own rules win). e.g. export const permissions = [isAuthenticated]
-export {}
-`,
-    'middleware.ts': `// Middleware that wraps only this app's actions.
-export default []
-`,
+    'models.ts': `// import { defineModel, field } from 'tvine'\n\n// Create your models here.\n`,
+    'views.ts': `// Create your views here.\n`,
+    'admin.ts': `// Register your models here.\n`,
+    'urls.ts': `export const appName = '${name}'\nexport const urlpatterns = []\n`,
     'migrations/.gitkeep': '',
-    [`tests/${name}.test.ts`]: `import { fileURLToPath } from 'node:url'
-import { afterAll, expect, it } from 'vitest'
-import { createAgentServer, type AgentServer } from 'tvine'
-
-const appsDir = fileURLToPath(new URL('../../', import.meta.url))
-const settings = { secret: 'k'.repeat(32), logging: 'none' as const, db: { url: ':memory:' } }
-let srv: AgentServer | undefined
-afterAll(() => srv?.close())
-
-it('${name} actions are discovered', async () => {
-  srv = await createAgentServer({ appsDir, settings })
-  expect(srv.ctx.actions.all().map((a) => a.id)).toEqual(expect.arrayContaining(['${name}.list', '${name}.get']))
-})
-`,
+    [`tests/${name}.test.ts`]: `import { expect, it } from 'vitest'\n\n// Create your tests here.\nit('${name} works', () => {\n  expect(true).toBe(true)\n})\n`,
   }
   write(dir, files)
-  const line = `path('${name}/', include('${name}.urls')),`
-  const urlsFile = join(dirname(appsDir), 'urls.ts')
-  let urls = line
-  if (existsSync(urlsFile)) {
-    const src = readFileSync(urlsFile, 'utf8')
-    const open = src.match(/export const urlpatterns(?::[^=]+)? = \[\n/)
-    if (open && /import \{[^}]*\binclude\b[^}]*\} from 'tvine'/.test(src) && !src.includes(`include('${name}.urls')`)) {
-      const at = open.index! + open[0].length
-      writeFileSync(urlsFile, src.slice(0, at) + `  ${line}\n` + src.slice(at))
-      urls = 'added'
-    }
-  }
-  return { dir, files: Object.keys(files), urls }
+  const root = dirname(appsDir)
+  return { dir, files: Object.keys(files), settings: addInstalledApp(root, name), urls: addInclude(root, name) }
 }
 
+const rel = (root: string, f: string) => f.slice(root.length + 1)
+const firstFile = (root: string, names: string[]) => names.map((n) => join(root, n)).find((f) => existsSync(f))
+
+// appends `item` to the array literal that starts at `open` (index just past '['), keeping its layout
+function appendItem(src: string, open: number, close: number, item: string): string {
+  const body = src.slice(open, close)
+  if (body.includes('\n')) {   // one item per line: a new line before the closing bracket, same indent
+    const indent = /\n([ \t]+)\S/.exec(body)?.[1] ?? '  '
+    const head = body.replace(/\s*$/, ''), tail = body.slice(head.length)
+    const sep = head.trim() === '' || /,\s*$/.test(head) ? '' : ','
+    return src.slice(0, open) + head + sep + `\n${indent}${item},` + tail + src.slice(close)
+  }
+  const t = body.trim()
+  return src.slice(0, open) + (t ? `${t.replace(/,$/, '')}, ${item}` : item) + src.slice(close)
+}
+
+export function addInstalledApp(root: string, name: string): Edit {
+  const line = `'${name}',`
+  const file = firstFile(root, ['config/settings/base.ts', 'settings.ts'])
+  if (!file) return { status: 'manual', line }
+  const src = readFileSync(file, 'utf8')
+  const all = [...src.matchAll(/installedApps:\s*\[/g)]
+  const close = all.length === 1 ? src.indexOf(']', all[0]!.index! + all[0]![0].length) : -1
+  if (close < 0) return { file, status: 'manual', line }
+  const open = all[0]!.index! + all[0]![0].length
+  const body = src.slice(open, close)
+  if (/[[{(]/.test(body)) return { file, status: 'manual', line }   // not a plain list of strings: don't guess
+  if (new RegExp(`['"\`]${name}['"\`]`).test(body)) return { file, status: 'present', line }
+  writeFileSync(file, appendItem(src, open, close, `'${name}'`))
+  return { file, status: 'added', line }
+}
+
+export function addInclude(root: string, name: string): Edit {
+  const line = `path('${name}/', include('${name}.urls')),`
+  const file = firstFile(root, ['config/urls.ts', 'urls.ts'])
+  if (!file) return { status: 'manual', line }
+  let src = readFileSync(file, 'utf8')
+  if (new RegExp(`include\\(['"]${name}\\.urls['"]`).test(src)) return { file, status: 'present', line }
+  const m = [...src.matchAll(/export const urlpatterns(?::[^=]+)? = \[/g)]
+  const end = m.length === 1 ? /\n\]/.exec(src.slice(m[0]!.index!)) : null
+  if (!end) return { file, status: 'manual', line }
+  const open = m[0]!.index! + m[0]![0].length, close = m[0]!.index! + end.index! + 1
+  src = appendItem(src, open, close, line.slice(0, -1))
+  const imp = /import \{([^}]*)\} from 'tvine'\n/.exec(src)
+  if (imp) {
+    const names = imp[1]!.split(',').map((x) => x.trim()).filter(Boolean)
+    for (const n of ['include', 'path']) if (!names.includes(n)) names.push(n)
+    src = src.replace(imp[0], `import { ${names.sort().join(', ')} } from 'tvine'\n`)
+  } else src = `import { include, path } from 'tvine'\n` + src
+  writeFileSync(file, src)
+  return { file, status: 'added', line }
+}

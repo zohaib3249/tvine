@@ -215,7 +215,9 @@ const schema: z.ZodType<Settings> = z.object({
     token: z.string().min(16, 'metrics.token: at least 16 chars').optional(), allowIps: z.array(z.string().min(1)) }).strict(),
   robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
     sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
-  installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
+  installedApps: z.array(z.string().regex(/^(tvine\.)?[a-z][a-z0-9_]*$/, "a project app 'blog' (apps/blog/) or a built-in app 'tvine.<name>'")),
+  rootUrlconf: z.string().min(1).optional(),
+  tasksModule: z.string().min(1).optional(),
   encryption: z.object({ keys: z.array(z.string().min(32, 'encryption.keys: each key at least 32 chars')).refine((k) => new Set(k).size === k.length, 'encryption.keys: duplicate key') }).strict(),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({

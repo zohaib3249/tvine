@@ -309,7 +309,9 @@ export interface Settings {
   // BACKLOG #11: /robots.txt when the app ships none (public/robots.txt or an app/robots route wins). allow/disallow:
   // extra path rules for every agent; extra: raw lines appended; sitemap: an absolute url (else /sitemap.xml if the app has one)
   robots: { allow: string[]; disallow: string[]; extra: string[]; sitemap?: string }
-  installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
+  installedApps: string[]           // Django INSTALLED_APPS: project apps 'blog' (apps/blog/) and built-in 'tvine.auth', … (core/apps.ts)
+  rootUrlconf?: string              // Django ROOT_URLCONF, a path from the project root without extension (default config/urls, else urls)
+  tasksModule?: string              // queues / beatSchedule for tvine worker (default config/tasks)
   // encrypted model fields: AES-256-GCM root keys, newest first (rotation); empty = derived from secret (HKDF)
   encryption: { keys: string[] }
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation

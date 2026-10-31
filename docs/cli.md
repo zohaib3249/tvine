@@ -19,16 +19,65 @@ A bare `tvine` in a shell says "command not found" until you pick one:
 1. Inside a project: `pnpm exec tvine <cmd>` / `npx tvine <cmd>`, or a script like `"dev": "tvine dev"` then `pnpm dev`.
 2. Global: `npm i -g tvinejs` (gives the `tvine` command). From a clone: `cd packages/tvine && npm link`; undo with `npm unlink -g tvinejs`.
 
-## Scaffolding (new)
-
-Not on this branch yet; marked (new) until the scaffolding release merges.
+## Scaffolding
 
 | Command | What it does |
 |---|---|
 | `npx tvinejs startproject my-app` | new project with a welcome page |
-| `tvine startproject <name> [--db …] [--no-admin] [--local]` (new) | same, from the CLI |
-| `tvine startapp <name> [--model Name]` (new) | adds `apps/<name>/` (models, views, admin, urls) |
-| `tvine shell` (new) | REPL with settings and models loaded |
+| `tvine startproject <name> [--db …] [--no-admin] [--local]` | same, from the CLI |
+| `tvine startapp <name>` | `apps/<name>/` empty stubs; adds it to `installedApps` and its `include()` to `config/urls.ts` |
+| `tvine shell` | REPL with settings and models loaded |
+
+Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`), like Django's `--settings`.
+
+```
+mysite/
+├─ config/
+│  ├─ settings/
+│  │  ├─ base.ts            shared: installedApps, middleware, db, auth…
+│  │  ├─ dev.ts             base + debug, local hosts (tvine dev, migrate, shell…)
+│  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
+│  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
+│  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
+│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
+├─ apps/                    your Django apps, each listed in installedApps
+├─ app/                     Next.js pages (the welcome page)
+├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
+```
+
+**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+`tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
+(`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
+`config/settings/` (like examples/notes) uses its root `settings.ts`.
+
+`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
+when the file has a shape it does not recognise; an entry already there is left alone):
+
+```
+apps/blog/
+├─ models.ts        // Create your models here.
+├─ views.ts         // Create your views here.
+├─ admin.ts         // Register your models here.
+├─ urls.ts          export const appName = 'blog'; export const urlpatterns = []
+├─ tests/blog.test.ts
+└─ migrations/
+```
+
+Optional app files (create them when you need them):
+
+| File | What it holds |
+|---|---|
+| `rules.ts` | app-wide action rules: rate limits, permissions (an action's own rules win) |
+| `serializers.ts` | per-node-type snapshot shaping: hide fields from agents, add computed ones |
+| `middleware.ts` | action middleware that wraps only this app's actions |
+| `tasks.ts` | background tasks (`defineTask`) |
+| `hooks.ts` | `postMigrate` and other app hooks |
+
+**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+`'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
+`tvine check` warns about a folder in `apps/` that is not listed.
 
 ## Serve
 

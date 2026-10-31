@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
@@ -125,11 +125,46 @@ async function fromApp<T>(spec: string): Promise<T> {
   return (await import(url)) as T
 }
 
+// Django DJANGO_SETTINGS_MODULE: TVINE_SETTINGS (or tvine --settings) names the module, e.g. config/settings/prod.
+// Default: config/settings/prod when NODE_ENV=production, else config/settings/dev + config/settings/local (if
+// present, git-ignored); a project without config/settings/ uses ./settings. Paths are from cwd, no extension.
+export function settingsFiles(cwd = process.cwd()): string[] {
+  const named = process.env.TVINE_SETTINGS?.trim()
+  if (named) {
+    const f = appModule(isAbsolute(named) ? '/' : cwd, named.replace(/\.(m?[jt]s)$/, ''))
+    if (!f) throw new Error(`TVINE_SETTINGS=${named}: no ${named}.ts (or .js / .mjs) in ${cwd}`)
+    return [f]
+  }
+  if (existsSync(join(cwd, 'config', 'settings'))) {
+    const which = isProduction() ? 'prod' : 'dev'
+    const f = appModule(cwd, `config/settings/${which}`)
+    if (!f) throw new Error(`no config/settings/${which}.ts in ${cwd} (or set TVINE_SETTINGS)`)
+    const local = which === 'dev' ? appModule(cwd, 'config/settings/local') : undefined
+    return local ? [f, local] : [f]
+  }
+  const f = appModule(cwd, 'settings')
+  return f ? [f] : []
+}
+
+// settings.middleware 'config.middleware.example' (any dotted path not under tvine.) → the default export of
+// config/middleware/example.ts under the project root (cwd), like Django's dotted MIDDLEWARE paths.
+async function projectMiddleware(e: unknown, i: number): Promise<unknown> {
+  const [what, opts] = Array.isArray(e) ? [e[0], e[1]] : [e, undefined]
+  if (typeof what !== 'string' || what.startsWith('tvine.')) return e
+  if (!/^[\w-]+(\.[\w-]+)+$/.test(what)) throw new Error(`settings.middleware[${i}]: "${what}" is neither 'tvine.middleware.<Name>' nor a dotted path like 'config.middleware.example'`)
+  const file = appModule(process.cwd(), what.replace(/\./g, '/'))
+  if (!file) throw new Error(`settings.middleware[${i}]: "${what}" not found: expected ${what.replace(/\./g, '/')}.ts (default export) in ${process.cwd()}`)
+  const m = ((await importApp(file)) as { default?: unknown }).default
+  if (!m) throw new Error(`settings.middleware[${i}]: ${file} has no default export (export default defineMiddleware({...}))`)
+  return Array.isArray(e) ? [m, opts] : m
+}
+
 export async function loadSettings(over: AgentServerOptions['settings'] = {}): Promise<Settings> {
   loadDotenv()   // .env files when present (env.md), never over the real environment; before settings.ts reads env
-  const file = appModule(process.cwd(), 'settings')
-  const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
-  const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
+  let base: Record<string, unknown> = {}
+  for (const file of settingsFiles()) base = merge(base, ((await importApp(file)) as { default: Record<string, unknown> }).default ?? {})
+  const settings = defineSettings(merge(base, over) as SettingsInput)
+  settings.middleware = await Promise.all(settings.middleware.map(projectMiddleware))
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
   configureLogging(settings.logging)   // Django LOGGING: getLogger(name) everywhere from here on
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
@@ -166,7 +201,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const appMiddleware = await discoverMiddleware(appsDir, installed)
   const appHooks = await discoverHooks(appsDir, installed)
   const signals = await appSignals(appsDir, installed)
-  const urls = await loadUrls(appsDir, installed)   // the root urls.ts; bad routes fail here, naming the file
+  const urls = await loadUrls(appsDir, installed, settings.rootUrlconf)   // the root urls.ts; bad routes fail here, naming the file
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)

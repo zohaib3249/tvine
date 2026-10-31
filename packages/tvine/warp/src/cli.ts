@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
-import { installedApps } from './core/apps.js'
+import { installedApps, unlistedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
 import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
@@ -37,12 +37,12 @@ async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promis
   try { return await rl.question(question) } finally { if (o.hidden) process.stdout.write('\n'); rl.close() }
 }
 
-const USAGE = `usage: tvine <command> [--apps ./apps]
+const USAGE = `usage: tvine <command> [--apps ./apps] [--settings config/settings/prod]  (or TVINE_SETTINGS)
 
 Project
   startproject <name> [dir] [--db sqlite|postgres|mysql] [--no-admin] [--no-tasks] [--pm pnpm|npm|yarn] [--no-install] [--local]
                                 a ready-to-run project (--local: link this clone's packages; not on npm yet)
-  startapp <name> [--model Name]  apps/<name>/: models, views, urls, admin, tests (+ one include line in urls.ts)
+  startapp <name>                 apps/<name>/ empty stubs; adds it to installedApps and config/urls.ts
   check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
   show_urls                     print the urls.ts routes: pattern, methods, name, action
@@ -86,7 +86,7 @@ const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
   startproject: { options: { db: str, 'no-admin': bool, 'no-tasks': bool, pm: str, 'no-install': bool, local: bool }, args: [1, 2] },
-  startapp: { options: { model: str }, args: [1, 1] },
+  startapp: { options: {}, args: [1, 1] },
   build: { options: {}, args: [0, 0] },
   shell: { options: {}, args: [0, 0] },
   start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
@@ -189,13 +189,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
   if (!spec) { io.err(USAGE); return 1 }
   try {
     let parsed
-    try { parsed = parseArgs({ args: rest, allowPositionals: true, strict: true, options: { apps: { type: 'string', default: 'apps' }, ...spec.options } }) }
+    try { parsed = parseArgs({ args: rest, allowPositionals: true, strict: true, options: { apps: { type: 'string', default: 'apps' }, settings: { type: 'string' }, ...spec.options } }) }
     catch (e) { const m = (e as Error).message.replace(/\. To specify a positional.*$/s, ''); throw new Usage(m[0]!.toLowerCase() + m.slice(1)) }
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
     if (args.length < spec.args[0]) throw new Usage(cmd === 'startproject' || cmd === 'startapp' ? `usage: tvine ${cmd} <name>` : cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
+    if (typeof o.settings === 'string') process.env.TVINE_SETTINGS = o.settings   // DJANGO_SETTINGS_MODULE / --settings
     loadEnv()
     switch (cmd) {
       case 'startproject': {
@@ -210,15 +211,18 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const x = pm === 'npm' ? 'npx' : pm
         io.out(['', 'next steps:', `  cd ${relativeTo(r.dir)}`, ...(o['no-install'] ? [`  ${pm} install`] : []),
           `  ${x} tvine migrate`, `  ${x} tvine createsuperuser`, `  ${x} tvine dev          # http://localhost:3000`,
-          `  ${x} tvine startapp blog --model Post`].join('\n'))
+          `  ${x} tvine startapp blog`].join('\n'))
         return 0
       }
       case 'startapp': {
         const { startApp } = await import('./cli/scaffold.js')
-        const r = startApp(apps, args[0]!, o.model as string | undefined)
+        const r = startApp(apps, args[0]!)
+        const name = args[0]!, at = (f?: string) => f ? relativeTo(f) : 'your settings'
         io.out(`created ${relativeTo(r.dir)}/: ${r.files.join(', ')}`)
-        io.out(r.urls === 'added' ? `added include('${args[0]}.urls') to urls.ts` : `add to urls.ts urlpatterns: ${r.urls}`)
-        io.out(`apps/* are discovered automatically (no INSTALLED_APPS line). next: tvine makemigrations && tvine migrate`)
+        const s = r.settings, u = r.urls
+        io.out(s.status === 'added' ? `added '${name}' to installedApps (${at(s.file)})` : s.status === 'present' ? `'${name}' is already in installedApps (${at(s.file)})` : `add to installedApps in ${at(s.file)}: ${s.line}`)
+        io.out(u.status === 'added' ? `added ${name}/ to ${at(u.file)}` : u.status === 'present' ? `${at(u.file)} already includes ${name}.urls` : `add to urlpatterns in ${u.file ? at(u.file) : 'config/urls.ts'}: ${u.line}`)
+        io.out('next: write models in models.ts, then tvine makemigrations && tvine migrate')
         return 0
       }
       case 'build': return await binRun('next', ['build'], io)
@@ -356,6 +360,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         }
         for (const l of unawaitedReads(apps)) io.err(`tvine check: warning: ORM read without await (a Promise, not rows): ${l}`)
         const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
+        for (const a of unlistedApps(apps, installed)) io.err(`tvine check: warning: app '${a}' exists but is not in installedApps`)
         if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
         return 0
