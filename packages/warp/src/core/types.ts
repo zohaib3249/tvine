@@ -224,6 +224,7 @@ export interface CompressionSettings { enabled: boolean; threshold: number; brot
 
 export interface Settings {
   site: { name: string; description: string }
+  siteUrl?: string                  // the public origin ('https://shop.example') for links the server builds; else the Host
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust

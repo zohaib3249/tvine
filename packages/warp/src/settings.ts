@@ -104,6 +104,7 @@ const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redi
 
 const schema: z.ZodType<Settings> = z.object({
   site: z.object({ name: z.string(), description: z.string() }),
+  siteUrl: z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'an origin like https://shop.example').optional(),
   header: z.string(),
   formats: z.object({ default: z.enum(['json', 'notation']), notationPath: z.boolean() }),
   trustProxy: posInt,

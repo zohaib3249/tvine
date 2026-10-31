@@ -447,7 +447,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
       return send(res, 200, { ok: true })
     }
     if (!(await server.limiter.check({ ip })).ok) return tooMany(res)
-    const r = await hub.request(async () => ((sidKey ? await sessions.resolve({ sid: sidKey }) : undefined) ?? await sessions.create()).sid, { name: b.name, ip, base: originOf(req, settings) })
+    const r = await hub.request(async () => ((sidKey ? await sessions.resolve({ sid: sidKey }) : undefined) ?? await sessions.create()).sid, { name: b.name, ip, base: settings.siteUrl?.replace(/\/$/, '') ?? originOf(req, settings) })   // TODO(task-mwlog): Host checked by settings.allowedHosts
     if (!r.ok) return send(res, r.code === 'rate_limited' ? 429 : 403, { ...(r.sid && { sid: r.sid }), error: r.message, code: r.code, reason: r.reason })
     send(res, 200, { sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
   }
