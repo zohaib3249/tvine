@@ -2,10 +2,10 @@
 // grants). Validators run unless `validate: false` (fixtures, tests). `settings` picks the hashers/validators;
 // without it the defaults apply.
 import { DomainError } from '../../core/errors.js'
-import type { Settings } from '../../core/types.js'
+import type { ActionCtx, Settings } from '../../core/types.js'
 import { Group, GroupPermission, Permission, User, UserGroup, UserPermission } from './models.js'
 import { makePassword, UNUSABLE, validatePassword } from './passwords.js'
-import type { UserRow } from './backend.js'
+import { revokeTokens, updateSessionAuthHash, type UserRow } from './backend.js'
 
 const NO_SETTINGS = {} as Settings
 export interface NewUser { username: string; email?: string | null; password?: string | null; isStaff?: boolean; isSuperuser?: boolean; isActive?: boolean }
@@ -26,15 +26,22 @@ export async function createUser(u: NewUser, o: { settings?: Settings; validate?
 export const createSuperuser = (u: Omit<NewUser, 'isStaff' | 'isSuperuser'>, o?: { settings?: Settings; validate?: boolean }) =>
   createUser({ ...u, isStaff: true, isSuperuser: true }, o)
 
-export async function setPassword(userId: number, raw: string, o: { settings?: Settings; validate?: boolean } = {}): Promise<void> {
-  const s = o.settings ?? NO_SETTINGS
+// A new password: the user's API tokens are revoked and every other session dies (bound to the old hash); `ctx` =
+// the request doing it, whose own session stays signed in when it is that user's (Django update_session_auth_hash).
+export async function setPassword(userId: number, raw: string, o: { settings?: Settings; validate?: boolean; ctx?: Pick<ActionCtx, 'session' | 'settings'> } = {}): Promise<void> {
+  const s = o.settings ?? o.ctx?.settings ?? NO_SETTINGS
   const row = await User.get(userId)
   if (!row) throw new DomainError('not_found', 'no such user')
   if (o.validate !== false) {
     const problems = validatePassword(raw, s, row)
     if (problems.length) throw new DomainError('invalid_param', problems.join(' '), 'password')
   }
-  await User.update(userId, { password: await makePassword(raw, s) })
+  await passwordChanged(await User.update(userId, { password: await makePassword(raw, s) }), o.ctx)
+}
+// the side effects of any password write (setPassword, the admin's change form)
+export async function passwordChanged(row: { id: number; password: string }, ctx?: Pick<ActionCtx, 'session' | 'settings'>): Promise<void> {
+  await revokeTokens(row.id)
+  if (ctx) updateSessionAuthHash(ctx, row)
 }
 
 async function permId(codename: string): Promise<number> {

@@ -125,6 +125,14 @@ export const recentlyAuthenticated = (ctx: ActionCtx, now = Date.now()) => {
   return typeof at === 'number' && now - at <= RECENT_MS && now >= at
 }
 
+// Django update_session_auth_hash: after this session's own user changed the password, keep this session (new sid);
+// every other session of the user is already stale (bound to the old hash)
+export function updateSessionAuthHash(ctx: Pick<ActionCtx, 'session' | 'settings'>, row: { id: number; password: string }): void {
+  if (ctx.session?.data.get(SESSION_USER) !== String(row.id)) return
+  ctx.session.data.set(SESSION_HASH, sessionHash(ctx.settings, row.password))
+  cycleSession(ctx)
+}
+
 // every token of a user stops working (password reset / change: a token made by an attacker dies with it)
 export const revokeTokens = (userId: number) => Token.objects.filter({ userId, revoked: false }).update({ revoked: true })
 

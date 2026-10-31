@@ -88,6 +88,9 @@ abstract class BaseAdmin implements Labelled {
     for (const k of ['name', 'title', 'username', 'email', 'label']) if (typeof obj[k] === 'string' && obj[k]) return obj[k] as string
     return `${this.verboseName ?? this.key().split('.')[1]} object (${String(obj.id)})`
   }
+  // Django get_queryset (ModelAdmin and InlineModelAdmin): every read and write of the admin goes through it
+  // (scope rows per user here)
+  getQueryset(_ctx: Ctx): QuerySet<any> { return this.model.objects }
   getReadonlyFields(_ctx: Ctx, _obj?: object): string[] { return this.readonlyFields }
   hasViewPermission(ctx: Ctx, _obj?: object): boolean | Promise<boolean> {
     return (async () => (await modelPerm(ctx, this, 'view')) || (await modelPerm(ctx, this, 'change')))()
@@ -136,8 +139,6 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
   actionsOnTop = true
   agents = true                     // false: agent-marked requests are refused for this model (owner ruling)
 
-  // Django get_queryset: every read and write of the admin goes through it (scope rows per user here)
-  getQueryset(_ctx: Ctx): QuerySet<any> { return this.model.objects }
   // Django get_object: undefined = not found (or outside getQueryset)
   async getObject(ctx: Ctx, pk: string | number): Promise<T | undefined> {
     return (await this.getQueryset(ctx).filter({ id: pk }).first()) as T | undefined

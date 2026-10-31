@@ -6,6 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
 import { authenticate } from '../core/auth.js'
+import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
 import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
@@ -204,9 +205,12 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       // only actions that declare `multipart` take files here; the body is buffered under bodyBytes + their cap
       if (!mpDef?.multipart) return send(res, fail('invalid_param', 'this action does not take multipart bodies'))
       // nothing is buffered for a caller that cannot run it: uploads need a signed-in user, same-origin, a rate token
-      // (the action's own permissions, e.g. isStaff, still run in dispatch)
-      await authenticate(settings, who.request, await server.sessions.peek({ sid: who.sid, cookie: who.cookie }))
+      const sess = await server.sessions.peek({ sid: who.sid, cookie: who.cookie })
+      await authenticate(settings, who.request, sess)
       if (!who.request.user?.isAuthenticated) { res.setHeader('connection', 'close'); return send(res, fail('domain', 'forbidden: uploads need a signed-in user', 'forbidden')) }
+      // the action's static permissions (admin: isStaff) before a byte is buffered; dispatch runs them again
+      try { await runPermissions(mpDef.rules?.permissions ?? [], permissionCtx({ sid: sess?.sid ?? '', session: sess as Session, request: who.request }, mpDef.id)) }
+      catch { res.setHeader('connection', 'close'); return send(res, FORBIDDEN) }
       if (crossOrigin(who.request, settings)) return send(res, FORBIDDEN)
       const rl = await server.limiter.check({ ip: who.request.ip })
       if (!rl.ok) { res.setHeader('connection', 'close'); return send(res, toApiResult([rateLimited(rl.retryAfterMs)])) }

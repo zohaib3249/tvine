@@ -10,7 +10,7 @@ import { defineAction, DomainError } from '../core/actions.js'
 import type { ActionDef, ActionRules, Settings, UploadedFile } from '../core/types.js'
 
 export interface Storage {
-  put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void>
+  put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean }): Promise<void>
   url(key: string): string
   delete(key: string): Promise<void>
 }
@@ -35,7 +35,7 @@ const sniff = (b: Buffer) => SIGS.find((s) => s.test(b))
 export class DiskStorage implements Storage {
   constructor(readonly dir: string, readonly routePrefix = '/media') {}
 
-  async put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void> {
+  async put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean }): Promise<void> {
     if (!KEY_RE.test(key)) throw new Error(`bad storage key ${key}`)
     await mkdir(dirname(join(this.dir, key)), { recursive: true })
     const tmp = join(this.dir, `.tmp-${nanoid()}`)
@@ -48,7 +48,7 @@ export class DiskStorage implements Storage {
         await pipeline(data, out)
         size = out.bytesWritten
       }
-      await writeFile(metaTmp, JSON.stringify({ type: meta.type, size }))
+      await writeFile(metaTmp, JSON.stringify({ type: meta.type, size, ...(meta.public && { public: true }) }))
       await rename(metaTmp, join(this.dir, `${key}.json`))
       await rename(tmp, join(this.dir, key))
     } catch (e) {
@@ -65,8 +65,9 @@ export class DiskStorage implements Storage {
 
 type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
 // uploadTo: key folder (Django upload_to), e.g. 'avatars' → 'avatars/<id>.png'; pass the file / image field's own uploadTo
-export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string }
-export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage' | 'uploadTo'> }
+// public: served with `Cache-Control: public` (shared caches, CDNs); default private (a user's upload)
+export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string; public?: boolean }
+export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage' | 'uploadTo' | 'public'> }
 type Media = Settings['media']
 
 // The def's own storage, else disk at settings.media (known only once the server runs, so resolved per use).
@@ -78,7 +79,7 @@ export const storageOf = (def: UploadDef, media: Media = { dir: './media', route
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
   const uploadTo = opts.uploadTo?.replace(/^\/+|\/+$/g, '')
   if (uploadTo !== undefined && !UPLOAD_TO.test(uploadTo)) throw new Error(`defineUpload ${name}: uploadTo must be folder names (letters, digits, _ -) joined by /`)
-  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage, uploadTo }
+  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage, uploadTo, ...(opts.public && { public: true }) }
   // the 5/min default yields to apps/<app>/rules.ts (defaultRules); an explicit opts.rate beats both
   const rules: UploadRules = { ...(opts.rate && { rate: opts.rate }), ...(opts.permissions && { permissions: opts.permissions }) }
   const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
@@ -143,7 +144,7 @@ export async function receiveUpload(
   const counted = Readable.from((async function* () {
     for await (const b of guarded(head, it as AsyncIterator<Buffer>, maxBytes, source)) { size += b.length; yield b }
   })())
-  try { await storage.put(key, counted, { type: found.type, size: 0 }) } catch (e) { counted.destroy(); source.destroy(); throw e }
+  try { await storage.put(key, counted, { type: found.type, size: 0, ...(def.upload.public && { public: true }) }) } catch (e) { counted.destroy(); source.destroy(); throw e }
   return { field, key, url: storage.url(key), type: found.type, size }
 }
 
@@ -164,9 +165,12 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
       // Success headers only once the file is really open: a failed open must give a clean 404.
       const ok = () => {
         res.statusCode = 200
-        res.setHeader('Content-Type', (JSON.parse(info) as { type: string }).type)
+        const m = JSON.parse(info) as { type: string; public?: boolean }
+        res.setHeader('Content-Type', m.type)
         res.setHeader('X-Content-Type-Options', 'nosniff')
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        // a PDF downloads, never opens inline (security/headers.ts adds the sandbox CSP; this holds without it too)
+        if (!m.type.startsWith('image/') && !res.hasHeader('Content-Disposition')) res.setHeader('Content-Disposition', 'attachment')
+        res.setHeader('Cache-Control', `${m.public ? 'public' : 'private'}, max-age=31536000, immutable`)
         res.setHeader('Content-Length', String(st.size))
       }
       if (req.method === 'HEAD' || st.size === 0) { ok(); return void res.end() }

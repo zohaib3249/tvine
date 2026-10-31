@@ -3,6 +3,7 @@
 // its hooks / @action method on a fresh `Object.create(view)`, so `this.x = …` never leaks between
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
+import { scoped } from '../security/scope.js'
 import { liveManifest, paramSpecs } from '../core/actions.js'
 import { DomainError, zodErrors } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
@@ -107,8 +108,9 @@ function valueSchema(f: AnyField): z.ZodTypeAny {
     default: return z.string()
   }
 }
+const MAX_TERM = 200   // q / __contains: a LIKE pattern is never unbounded
 function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
-  if (op === 'contains') return z.string()
+  if (op === 'contains') return z.string().max(MAX_TERM)
   if (op === 'in') return z.preprocess(v => (typeof v === 'string' ? v.split(',') : v), z.array(valueSchema(f)).max(MAX_IN))
   return valueSchema(f)
 }
@@ -179,7 +181,7 @@ export abstract class GenericView<T extends object = any> extends View {
 
   async getObject(ctx: ViewCtx): Promise<T> {
     const v = ctx.params[this.lookupParam]
-    const obj = await this.filterQueryset(this.getQueryset(ctx), ctx).filter({ [this.lookupField]: v } as never).first()
+    const obj = await this.filterQueryset(scoped(this, ctx), ctx).filter({ [this.lookupField]: v } as never).first()
     if (!obj) throw new DomainError('not_found', `${this.model.name} ${String(v)} not found`, this.lookupParam)
     await this.checkObjectPermissions(ctx, obj)
     return obj
@@ -347,7 +349,7 @@ export const isViewClass = (v: unknown): v is new () => View =>
 
 function effectiveFilters(v: GenericView): string[] {
   return v.filters ?? Object.entries(v.model.fields as Record<string, AnyField>)
-    .filter(([, f]) => f.kind === 'enum' || f.opts.index).map(([n, f]) => f.key(n))
+    .filter(([, f]) => (f.kind === 'enum' || f.opts.index) && !f.opts.hidden && !f.opts.writeOnly).map(([n, f]) => f.key(n))   // never an oracle on a secret column
 }
 const effectiveSearch = (v: GenericView): string[] => v.searchFields ?? Object.entries(v.model.fields as Record<string, AnyField>)
   .filter(([, f]) => f.opts.searchable).map(([n, f]) => f.key(n))
@@ -439,12 +441,13 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const { field, op } = parseLookup(l)
       if (!op) fail(`filter "${l}": unknown lookup (use exact, __lt, __lte, __gt, __gte, __in, __contains, __ne)`)
       const f = need(`filter "${l}"`, field)
+      if (f.opts.hidden || f.opts.writeOnly) fail(`filter "${l}": "${field}" is hidden / writeOnly (a filter would be an exact-match oracle on it)`)
       if (op === 'contains' && !['text', 'email', 'url', 'slug'].includes(f.kind)) fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
       lookups[l] = lookupSchema(f, op!).optional()
     }
     const sorts = gv.ordering.flatMap(f => [f, `-${f}`])
     const listSchema = z.object({
-      ...(effectiveSearch(gv).length && { q: z.string().optional() }),
+      ...(effectiveSearch(gv).length && { q: z.string().max(MAX_TERM).optional() }),
       ...(sorts.length && { sort: z.enum(sorts as [string, ...string[]]).optional() }),
       ...(gv.pagination === 'page'
         ? { page: z.preprocess(v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v), z.number().int().min(1)).optional() }
@@ -482,7 +485,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     const bodies: Record<GeneratedAction, (v: Self, raw: unknown, ctx: ViewCtx) => Promise<unknown>> = {
       list: async (v, raw, ctx) => {
         ctx.params = validate(listSchema, raw, true)
-        const page = await v.paginateQueryset(v.filterQueryset(v.getQueryset(ctx), ctx), ctx)
+        const page = await v.paginateQueryset(v.filterQueryset(scoped(v, ctx), ctx), ctx)
         return { ...page, items: page.items.map(o => out(v, ctx, o)) }
       },
       get: async (v, raw, ctx) => {
