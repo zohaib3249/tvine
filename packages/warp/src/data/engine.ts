@@ -12,7 +12,7 @@ import { bin, inList, param, qcol, raw, type Expr, type Select } from './sql/ast
 import type { Dialect, Statement } from './sql/dialect.js'
 import type { Expression, QNode } from './expressions.js'
 import { referencesTo } from './registry.js'
-import { withPending } from './pending.js'
+import { exitPending, withPending } from './pending.js'
 import { getLogger } from '../log.js'
 
 // ---- error vocabulary ------------------------------------------------------------------------
@@ -170,7 +170,7 @@ function lazyAtomic<R>(fn: () => Promise<R>, signal?: AbortSignal): Promise<R> {
 
 // true inside an open atomic() block (selectForUpdate requires one, like Django)
 // fn runs outside any atomic() block (its writes commit on their own, even if the caller's block rolls back)
-export const outsideAtomic = <R>(fn: () => R): R => bound.exit(fn)
+export const outsideAtomic = <R>(fn: () => R): R => bound.exit(() => exitPending(fn))
 export function inAtomic(): boolean { const tx = bound.getStore(); return !!tx && !tx.closed }
 
 // Inside atomic(): run fn after the outermost commit (dropped on rollback). Outside atomic(), or

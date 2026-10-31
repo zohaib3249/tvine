@@ -21,7 +21,7 @@ const wrap = <T>(p: Promise<T>): Tracked<T> => {
   return t
 }
 
-interface Scope { ops: { p: Promise<unknown>; t: Tracked<unknown> }[]; tail: Promise<unknown> }
+interface Scope { ops: { p: Promise<unknown>; t: Tracked<unknown> }[]; tail: Promise<unknown>; done?: true }   // done: drained, the block is over
 // undefined: no scope (top level); null: inside an ORM call (its own nested calls run straight, or they would wait on it)
 const als = new AsyncLocalStorage<Scope | null>()
 let warned = false
@@ -30,12 +30,12 @@ export function tracked<R>(run: () => Promise<R>, write: boolean): Promise<R> {
   const s = als.getStore()
   if (s === null) return run()
   const go = () => als.run(null, run)
-  if (!s) {
+  if (!s || s.done) {   // top level, or late (a timer after the block ended): nothing waits for it
     if (!write) return go()
     const p = go(), t = wrap(p)
     const check = (e?: unknown) => {
       if (t.seen) return
-      if (e !== undefined) getLogger('tvine.db').error('unawaited write outside a transaction failed', { error: (e as Error)?.message ?? String(e) })
+      if (e !== undefined) getLogger('tvine.db').error(s ? 'unawaited write after its block ended failed' : 'unawaited write outside a transaction failed', { error: (e as Error)?.message ?? String(e) })
       else if (!warned) { warned = true; getLogger('tvine.db').warn('unawaited write outside a transaction (await it, or wrap the code in atomic())') }
     }
     p.then(() => check(), check)
@@ -53,8 +53,8 @@ export function withPending<R>(fn: () => Promise<R>): Promise<R> {
   const s: Scope = { ops: [], tail: Promise.resolve() }
   return als.run(s, async () => {
     let r: R
-    try { r = await fn() } catch (e) { await drain(s).catch(() => undefined); throw e }
-    await drain(s)
+    try { r = await fn() } catch (e) { await drain(s).catch(() => undefined); s.done = true; throw e }
+    try { await drain(s) } finally { s.done = true }
     return r
   })
 }
@@ -68,6 +68,9 @@ async function drain(s: Scope): Promise<void> {
   }
   if (failed) throw failed.e
 }
+
+// fn's ORM calls belong to no block (outsideAtomic: they must not hold up, or wait on, the caller's block)
+export const exitPending = <R>(fn: () => R): R => als.exit(fn)
 
 export function trackMethods(o: Record<string, any>, names: string[], write: boolean): void {
   for (const n of names) {

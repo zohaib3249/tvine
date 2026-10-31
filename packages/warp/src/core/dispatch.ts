@@ -16,6 +16,7 @@ import { SessionBusy, SessionStore } from './session.js'
 import { channelsFor, idempotencyFor, limiterFor, marksFor, sessionsFor } from '../backends/index.js'
 import type { ActionCtx, ActionDef, ChannelLayer, Command, ConfirmAsk, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
+import { withPending } from '../data/pending.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
@@ -569,7 +570,7 @@ async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: 
   // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing
   const tx = server.settings.db.atomicRequests && !def.rules?.readOnly && def.rules?.atomic !== false
   const ac = new AbortController()
-  const work = tx ? atomic(call, { signal: ac.signal, lazy: true }) : call()
+  const work = tx ? atomic(call, { signal: ac.signal, lazy: true }) : withPending(call)   // either way: the reply waits for un-awaited writes
   hold.settled = work
   work.catch(() => undefined)
   let timer: ReturnType<typeof setTimeout> | undefined
