@@ -188,6 +188,7 @@ export interface Settings {
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
+  installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS
 }

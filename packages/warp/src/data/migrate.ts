@@ -5,9 +5,11 @@
 // __tvine_migrations(app, name, checksum, applied_at). Migration modules are TypeScript: the CLI
 // runs under a TS-capable loader (tsx); pass `load` to import them some other way.
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { appModule } from '../core/actions.js'
+import { contribLabels, installedApps } from '../core/apps.js'
+import { appSignals } from '../core/middleware.js'
 import { openConn, type Connection } from './db.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
@@ -20,7 +22,8 @@ import { importLoader, MigrationGraph, type Loader, type MigrationNode } from '.
 import { destroyed, type Migration, type Operation } from './schema/operations.js'
 import { canon, emptyState, findModel, replay, stateFromModels, type ProjectState } from './schema/state.js'
 
-export interface LoadOpts { load?: Loader }
+// installed: settings.installedApps (the enabled contrib apps take part like project apps)
+export interface LoadOpts { load?: Loader; installed?: readonly string[] }
 const isModel = (v: any): v is Model<any, any> => !!v && typeof v === 'object' && 'fields' in v && 'objects' in v && 'name' in v
 
 // apps/*/models.(ts|js) → models per app. A model belongs to the app whose models.ts exports it.
@@ -28,8 +31,8 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
   const out: Record<string, Model<any, any>[]> = {}
   const owner = new Map<string, string>()
-  for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
-    const file = appModule(join(appsDir, app), 'models')
+  for (const { label: app, dir } of installedApps(appsDir, opts.installed)) {
+    const file = appModule(dir, 'models')
     if (!file) continue                     // an app without models is fine; the empty-result check below guards the rest
     const mod = await (opts.load ?? importLoader)(file)
     for (const v of new Set(Object.values(mod))) {
@@ -114,8 +117,9 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
   const created = (files: string[]) => `${opts.dryRun ? 'would create' : 'created'} ${files.join(', ')}`
 
+  const builtIn = contribLabels(opts.installed)   // their migrations ship with Tvine: never written here
   if (opts.merge) {
-    const conflicts = Object.entries(graph.conflicts())
+    const conflicts = Object.entries(graph.conflicts()).filter(([app]) => !builtIn.has(app))
     if (!conflicts.length) return { files: [], message: 'no conflicts to merge' }
     const files = conflicts.map(([app, leaves]) =>
       write(app, `${graph.nextNumber(app)}_${opts.name ?? 'merge'}`, { dependencies: leaves.map(l => [app, l]), operations: [] }))
@@ -125,6 +129,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
 
   if (opts.empty) {
     const app = opts.empty
+    if (builtIn.has(app)) throw new Error(`${app} is the built-in app tvine.${app}: its migrations ship with Tvine`)
     if (!existsSync(join(appsDir, app))) throw new Error(`no app "${app}" under ${appsDir}`)
     const leaf = graph.leaf(app)
     const file = write(app, `${graph.nextNumber(app)}_${opts.name ?? 'auto'}`, { dependencies: leaf ? [[app, leaf]] : [], operations: [] })
@@ -132,7 +137,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
 
   const to = stateFromModels(await discoverModels(appsDir, opts))
-  const changes = diff(replay(graph.order()), to)
+  const changes = withoutContrib(diff(replay(graph.order()), to), builtIn)
   const apps = Object.keys(changes)
   if (!apps.length) return { files: [], message: 'no changes detected' }
 
@@ -353,7 +358,12 @@ export async function migrateCheck(db: string | Connection, appsDir: string, opt
   const plan = graph.order()
   const done = await withConn(db, c => readJournal(c, false))
   if (plan.some(n => done.get(n.key) !== checksum(n.migration))) return false
-  return !Object.keys(diff(replay(plan), stateFromModels(models))).length
+  return !Object.keys(withoutContrib(diff(replay(plan), stateFromModels(models)), contribLabels(opts.installed))).length
+}
+
+// a contrib app's models always match its shipped migrations; a drift there is Tvine's to fix, not the project's
+function withoutContrib<T>(changes: Record<string, T>, builtIn: Set<string>): Record<string, T> {
+  return Object.fromEntries(Object.entries(changes).filter(([app]) => !builtIn.has(app)))
 }
 
 // Django's sqlmigrate: the SQL one migration runs on `dialect` (name may be a prefix: '0002')
@@ -376,4 +386,15 @@ export async function showMigrations(db: string | Connection, appsDir: string, o
   const done = await withConn(db, c => readJournal(c, false))
   return plan.map(n => ({ app: n.app, name: n.name, applied: done.has(n.key) }))
     .sort((a, b) => (a.app < b.app ? -1 : a.app > b.app ? 1 : 0))
+}
+
+// Django's post_migrate signal: every installed app's hooks.ts `postMigrate({ app, models, applied })`, in
+// installed-app order, after a migrate run (tvine.auth creates its permission rows here). Receivers use the
+// ORM, so the caller configures `connections` for the migrated database first.
+export interface PostMigrate { app: string; models: Record<string, Model<any, any>[]>; applied: string[] }
+export async function postMigrate(appsDir: string, applied: string[], opts: LoadOpts = {}): Promise<void> {
+  const { postMigrate: fns } = await appSignals(appsDir, opts.installed)
+  if (!fns.length) return
+  const models = await discoverModels(appsDir, opts)
+  for (const { app, fn } of fns) await (fn as (e: PostMigrate) => unknown)({ app, models, applied })
 }

@@ -30,6 +30,10 @@
     "./types": {
       "types": "./dist/types/api.d.ts",
       "import": "./dist/types/api.js"
+    },
+    "./contrib/*": {
+      "types": "./dist/contrib/*.d.ts",
+      "import": "./dist/contrib/*.js"
     }
   },
   "scripts": {

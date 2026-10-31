@@ -1,17 +1,15 @@
 // Boot-time scan of apps/*/views (+ rules, serializers; .ts/.js/.mjs, core/actions appModule) into an ActionManifest.
 // Pass settings.limits.rate as defaults.rate. Exported View subclasses are instantiated once
 // and register their generated + @action actions.
-import { readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import { ActionManifest, APP_RE, appModule, importApp, isActionDef, type Rate } from '../core/actions.js'
+import { installedApps } from '../core/apps.js'
 import type { ActionDef } from '../core/types.js'
 import { bindRegistered, isViewClass, viewActions, type Shapers } from './generic.js'
 
-export async function discover(appsDir: string, defaults: { rate?: Rate } = {}): Promise<ActionManifest> {
-  const m = new ActionManifest(defaults)
-  for (const app of (await readdir(appsDir)).sort()) {
-    const dir = join(appsDir, app)
-    if (!(await stat(dir)).isDirectory()) continue
+// installed: settings.installedApps (contrib apps register under their label, after the project's apps).
+export async function discover(appsDir: string, defaults: { rate?: Rate; installed?: readonly string[] } = {}): Promise<ActionManifest> {
+  const m = new ActionManifest({ rate: defaults.rate })
+  for (const { label: app, dir } of installedApps(appsDir, defaults.installed)) {
     const views = appModule(dir, 'views')
     if (!views) continue
     if (!APP_RE.test(app)) throw new Error(`${views}: folder name "${app}" must match ${APP_RE}`)

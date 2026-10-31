@@ -3,6 +3,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { importApp } from '../../core/actions.js'
+import { installedApps } from '../../core/apps.js'
 import type { Migration } from './operations.js'
 
 // Migration and models modules are TypeScript: importApp loads them through esbuild; tests use vitest.
@@ -20,12 +21,13 @@ const isMigration = (m: any): m is Migration =>
 export class MigrationGraph {
   readonly nodes = new Map<string, MigrationNode>()
 
-  static async load(appsDir: string, opts: { load?: Loader } = {}): Promise<MigrationGraph> {
+  // installed: settings.installedApps — contrib apps' shipped migrations join the graph under their label
+  static async load(appsDir: string, opts: { load?: Loader; installed?: readonly string[] } = {}): Promise<MigrationGraph> {
     if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
     const load = opts.load ?? importLoader
     const g = new MigrationGraph()
-    for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
-      const dir = join(appsDir, app, 'migrations')
+    for (const { label: app, dir: appDir } of installedApps(appsDir, opts.installed)) {
+      const dir = join(appDir, 'migrations')
       if (!existsSync(dir)) continue
       const byName = new Map<string, string>()                  // a .ts beats a compiled .js of the same name
       for (const f of readdirSync(dir).sort()) {

@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
-import { discoverHooks, discoverMiddleware } from './core/middleware.js'
+import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
@@ -117,9 +117,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 2. discover: duplicate/invalid actions fail here, naming the file, never at request time
   const appsDir = resolve(opts.appsDir ?? 'apps')
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
-  const actions = await discover(appsDir, { rate: settings.limits.rate })
-  const appMiddleware = await discoverMiddleware(appsDir)
-  const appHooks = await discoverHooks(appsDir)
+  const installed = settings.installedApps
+  const actions = await discover(appsDir, { rate: settings.limits.rate, installed })
+  const appMiddleware = await discoverMiddleware(appsDir, installed)
+  const appHooks = await discoverHooks(appsDir, installed)
+  const signals = await appSignals(appsDir, installed)
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
@@ -134,6 +136,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
   const ctx = serverCtx({ actions, settings, appMiddleware, snapshot: (route, sid) => snapshot(route, sid) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
+  // AppConfig.ready(): each app's hooks.ts ready(server), awaited, in installed-app order (contrib auth installs its backend here)
+  for (const { app, fn } of signals.ready) {
+    try { await (fn as (s: ServerCtx) => unknown)(ctx) } catch (e) { ctx.close(); throw new Error(`app ${app}: ready() failed: ${(e as Error).message}`, { cause: e }) }
+  }
   const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
   const nonce = randomBytes(16).toString('hex')
   // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever

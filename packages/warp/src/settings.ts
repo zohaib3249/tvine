@@ -46,6 +46,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   agent: { shape: 'v2', budget: 1500, rowsL1: 10 },
   frontend: { boundary: 'error' },
   audit: false,
+  installedApps: [],
 }
 
 const fn = <T>() => z.custom<T>((v) => typeof v === 'function', { message: 'must be a function' })
@@ -79,6 +80,7 @@ const schema: z.ZodType<Settings> = z.object({
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
+  installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({ user: fn<(req: Request) => Promise<TvineUser | null>>().optional() }).optional(),
 })

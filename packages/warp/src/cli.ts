@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
-import { existsSync, readdirSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
-import { openConn } from './data/db.js'
-import { makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { installedApps } from './core/apps.js'
+import { connections, openConn } from './data/db.js'
+import { makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -56,8 +57,8 @@ function loadEnv() {
 // a built Next app in cwd is served; otherwise API-only
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
-const hasModels = (apps: string) =>
-  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && appModule(join(apps, d.name), 'models') !== undefined)
+const hasModels = (apps: string, installed: readonly string[]) =>
+  installedApps(apps, installed).some((a) => appModule(a.dir, 'models') !== undefined)
 
 function table(rows: string[][]): string {
   const w = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))
@@ -65,8 +66,8 @@ function table(rows: string[][]): string {
 }
 
 // what migrate --check / check report when the database is not clean
-async function pending(url: string, apps: string): Promise<string> {
-  const open = (await showMigrations(url, apps)).filter((m) => !m.applied).map((m) => `${m.app}.${m.name}`)
+async function pending(url: string, apps: string, installed: readonly string[]): Promise<string> {
+  const open = (await showMigrations(url, apps, { installed })).filter((m) => !m.applied).map((m) => `${m.app}.${m.name}`)
   return open.length ? `pending: ${open.join(', ')} (run tvine migrate)` : 'models.ts changed since the last migration (run tvine makemigrations)'
 }
 
@@ -155,14 +156,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM${level === 'warn' ? ' (settings.frontend.boundary = warn)' : ''}`)
           if (level === 'error') return 1
         }
-        const url = srv.ctx.settings.db.url
-        if (hasModels(apps) && !(await migrateCheck(url, apps))) { io.err(`tvine check: ${await pending(url, apps)}`); return 1 }
+        const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
+        if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
         return 0
       }
       case 'generate': {
         const root = dirname(apps), file = join(root, API_DTS)
-        const text = await generateApiTypes(root, apps)
+        const text = await generateApiTypes(root, apps, (await loadSettings()).installedApps)
         const old = existsSync(file) ? readFileSync(file, 'utf8') : undefined
         if (o.check) {
           if (old === text) return 0
@@ -191,7 +192,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (o.empty && app === undefined) throw new Usage('--empty needs an app: tvine makemigrations <app> --empty')
         // Django: --check implies --dry-run and exits 1 when a migration is missing
         const dryRun = !!(o.check || o['dry-run'])
-        const r = await makeMigrations(apps, { name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
+        const { installedApps: installed } = await loadSettings()
+        const r = await makeMigrations(apps, { installed, name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
           .catch((e: Error) => { throw new Error(e.message.replace('pass allowDrop to confirm', 'pass --allow-drop to confirm')) })
         io.out(r.message)
         return o.check && r.files.length ? 1 : 0
@@ -199,13 +201,18 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'migrate': {
         if (args.length) throw new Error('rollback targets not supported — forward-only; see backlog (migrate <app> <target>)')
         if ([o.check, o.plan, o.fake].filter(Boolean).length > 1) throw new Usage('--check, --plan and --fake are exclusive')
-        const url = (await loadSettings()).db.url
+        const settings = await loadSettings()
+        const { url } = settings.db, installed = settings.installedApps
         if (o.check) {
-          if (await migrateCheck(url, apps)) return 0
-          io.err(`tvine migrate --check: ${await pending(url, apps)}`)
+          if (await migrateCheck(url, apps, { installed })) return 0
+          io.err(`tvine migrate --check: ${await pending(url, apps, installed)}`)
           return 1
         }
-        const { applied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake })
+        const { applied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, installed })
+        if (!o.plan) {   // post_migrate: apps' hooks.ts postMigrate (tvine.auth: permission rows) through the ORM
+          connections.configure(settings)
+          try { await postMigrate(apps, applied, { installed }) } finally { await connections.closeAll() }
+        }
         if (!applied.length) io.out('no migrations to apply')
         else if (o.plan) io.out(['planned:', ...applied.map((k) => `  ${k}`)].join('\n'))
         else io.out(applied.map((k) => `${o.fake ? 'faked' : 'applied'} ${k}`).join('\n'))
@@ -213,12 +220,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       }
       case 'sqlmigrate': {
         const [app, name] = args as [string, string]
-        const conn = openConn((await loadSettings()).db.url)   // the connected dialect, as Django does
-        try { io.out(await sqlMigrate(apps, app, name, conn.dialect)) } finally { await conn.driver.close() }
+        const settings = await loadSettings()
+        const conn = openConn(settings.db.url)   // the connected dialect, as Django does
+        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps })) } finally { await conn.driver.close() }
         return 0
       }
       default: {   // showmigrations
-        const rows = await showMigrations((await loadSettings()).db.url, apps)
+        const settings = await loadSettings()
+        const rows = await showMigrations(settings.db.url, apps, { installed: settings.installedApps })
         const lines: string[] = []
         for (const [i, r] of rows.entries()) {
           if (rows[i - 1]?.app !== r.app) lines.push(r.app)
