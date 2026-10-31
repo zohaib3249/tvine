@@ -7,6 +7,7 @@ import { connectTab } from './socket.js'
 import { watchNav } from './nav.js'
 import { getRegistry } from './registry.client.js'
 import { AutoOff } from '../jsx/AutoEl.js'
+import { ConfirmHost } from './ConfirmHost.js'
 
 // Root layout wrapper: owns the page-level hooks (custom-logic.md §Global). Hooks are functions,
 // so a server layout passes them through an app-owned 'use client' wrapper. Nested roots stack:
@@ -34,5 +35,5 @@ export function WeftRoot({ hooks, auto, children, inTab = 'on', presence }: { ho
       return () => { gone = true; off?.() }
     }
   }, [])
-  return auto === false ? <AutoOff>{children}</AutoOff> : <>{children}</>
+  return <>{auto === false ? <AutoOff>{children}</AutoOff> : children}<ConfirmHost /></>
 }

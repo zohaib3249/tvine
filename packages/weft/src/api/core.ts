@@ -3,7 +3,7 @@
 
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
-  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
+  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only' | 'confirm_required'
 
 // one bad field of an invalid_param (Django ValidationError dict style): every bad field is listed;
 // `field` on the result is the first one (kept for older code)
@@ -11,7 +11,28 @@ export interface FieldError { field: string; code?: string; message: string }
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T; goto?: string }
-  | { ok: false; code: ErrCode; reason?: string; field?: string; errors?: FieldError[]; message: string; retryAfterMs?: number }
+  | { ok: false; code: ErrCode; reason?: string; field?: string; errors?: FieldError[]; message: string; retryAfterMs?: number; confirm?: ConfirmAsk }
+
+// rules.confirm's answer (warp core/confirm.ts): nothing ran; resend the same call with params.$confirm = token
+export interface ConfirmAsk { token?: string; message: string; summary: Record<string, unknown>; expiresIn: number; by: 'anyone' | 'human' }
+
+// Who answers a confirm ask in this page: <WeftRoot>'s ConfirmHost (the Dialog widget) while mounted, else the
+// browser's window.confirm; no window (server) = never confirmed. On globalThis: one handler per page.
+const ASK = Symbol.for('tvine.weft.confirm')
+type Asker = (ask: ConfirmAsk) => Promise<boolean>
+export const setConfirmHandler = (fn?: Asker) => { (globalThis as { [ASK]?: Asker })[ASK] = fn }
+export const askConfirm: Asker = async (ask) => {
+  const fn = (globalThis as { [ASK]?: Asker })[ASK]
+  if (fn) return fn(ask)
+  return typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm(ask.message) : false
+}
+
+// A confirm_required answer the human here may confirm: ask, and on yes resend once with the token. Cancel →
+// { ok: false, code: 'confirm_required', reason: 'cancelled' }: nothing ran.
+export async function confirmed<R extends { ok: boolean; confirm?: ConfirmAsk }>(r: R, resend: (token: string) => Promise<R>): Promise<R> {
+  if (r.ok || !r.confirm?.token) return r
+  return (await askConfirm(r.confirm)) ? resend(r.confirm.token) : { ...r, reason: 'cancelled', message: 'Cancelled: nothing was done.' }
+}
 
 export interface ApiOpts { cmdId?: string; bind?: string; signal?: AbortSignal }
 export interface ApiCall<P = Record<string, unknown>, R = unknown> {

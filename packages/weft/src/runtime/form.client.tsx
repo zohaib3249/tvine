@@ -1,6 +1,7 @@
 'use client'
 import { createContext, startTransition, useActionState, useContext, useEffect, useRef, type ComponentType, type FormEvent, type ReactNode } from 'react'
 import { submitForm } from './submit.js'
+import { confirmed } from '../api/core.js'
 import { newId } from './webmcp.js'
 import type { FormResult } from './dispatcher.js'
 
@@ -49,7 +50,12 @@ export function FormClient({ action, bind, specs, disabled, id, className, child
   // runs the handler once; it is cleared when a result arrives (next submit = new attempt).
   const cmdId = useRef('')
   const [state, run, pending] = useActionState(
-    (_: FormResult, fd: FormData) => submitForm({ action, bind: bind || undefined, params: toParams(fd, specs), cmdId: (cmdId.current ||= newId()) }),
+    async (_: FormResult, fd: FormData) => {
+      const params = toParams(fd, specs), b = bind || undefined
+      // rules.confirm: the confirm dialog, then the same submit with the token (a new attempt id)
+      return confirmed(await submitForm({ action, bind: b, params, cmdId: (cmdId.current ||= newId()) }),
+        (token) => submitForm({ action, bind: b, params: { ...params, $confirm: token }, cmdId: newId() }))
+    },
     { ok: true },
   )
   useEffect(() => {
