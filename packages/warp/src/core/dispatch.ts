@@ -128,7 +128,7 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   if (stats.tap) {   // tvine.admin's dashboard rollups (core/metrics stats tap): registered ids only, sid hashed there
     const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
     statTap({ k: 'action', action: server.actions.get(cmd.action) ? cmd.action : '_unknown', outcome: err?.code ?? 'ok', via: viaOf(request),
-      ...(request.agent.is && request.agent.client && { agent: request.agent.client }), ...(request.user.scopes && { token: String(request.user.id ?? '?') }), sid, ms: performance.now() - t0 })
+      ...(request.agent.is && { agent: request.agent.client ?? request.headers.get('user-agent') ?? undefined }), ...(request.user.scopes && { token: String(request.user.id ?? '?') }), sid, ms: performance.now() - t0 })
   }
   if (metrics.enabled) {
     const outcome = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')?.code ?? 'ok'
