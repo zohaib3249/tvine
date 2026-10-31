@@ -503,9 +503,9 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
         const { [gv.lookupParam]: key, ...rest } = (raw ?? {}) as Record<string, unknown>
         ctx.params = validate(lookupObj, { [gv.lookupParam]: key }, true)
         const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
-        refuseHumanOnly(model.fields, rest, !!ctx.request?.agent?.is)
         const data = validate(schema.partial(), rest, false, readOnly)
         const obj = await v.getObject(ctx)
+        refuseHumanOnly(model.fields, rest, !!ctx.request?.agent?.is, obj as Record<string, unknown>)
         return out(v, ctx, await v.performUpdate(obj, data, ctx))
       },
       delete: async (v, raw, ctx) => {

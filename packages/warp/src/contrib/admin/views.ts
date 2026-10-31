@@ -135,7 +135,7 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
   const data: Row = {}, m2m: Record<string, unknown[]> = {}, changed: string[] = []
   const editable = (only ?? formFields(a)).filter((n) => a.model.fields[n] && !a.readonlyFields.includes(n))
   for (const k of Object.keys(values ?? {})) if (!editable.includes(k)) errors[k] = 'Unknown or read-only field.'
-  refuseHumanOnly(Object.fromEntries(editable.map((n) => [n, a.model.fields[n]!])), values, agent)   // field humanOnly: agents never set it
+  refuseHumanOnly(Object.fromEntries(editable.map((n) => [n, a.model.fields[n]!])), values, agent, old)   // field humanOnly: agents never set it
   for (const n of editable) {
     const f = a.model.fields[n]!
     const meta = fieldMeta(n, f, metaOpts(a))

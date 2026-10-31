@@ -120,12 +120,17 @@ export class DateRangeField extends JsonStored<DateRange, 'dateRange'> {   // Dj
 // Signature: an image a person draws. humanOnly: agent-marked writes are refused (admin save, generic views).
 export const signatureOpts = <P extends object>(o?: P) => ({ humanOnly: 'a signature must be drawn by a person', ...o })
 
-// Field-level humanOnly (any field): an agent-marked request that sets one of these fields is refused with human_only.
-export function refuseHumanOnly(fields: Record<string, Field<any, boolean, Kind, boolean>>, input: Record<string, unknown> | undefined, agent: boolean): void {
+// Field-level humanOnly (any field): an agent-marked request that CHANGES one of these fields is refused with human_only.
+// Sending the current value (a form posting an untouched empty signature) is not a change. `old` = the stored row (update).
+const blank = (v: unknown) => v == null || v === ''
+export function refuseHumanOnly(fields: Record<string, Field<any, boolean, Kind, boolean>>, input: Record<string, unknown> | undefined, agent: boolean, old?: Record<string, unknown>): void {
   if (!agent || !input) return
   for (const [n, f] of Object.entries(fields)) {
     const ho = f.opts.humanOnly
-    if (!ho || !(n in input || f.key(n) in input)) continue
+    const k = n in input ? n : f.key(n) in input ? f.key(n) : undefined
+    if (!ho || k === undefined) continue
+    const v = input[k], was = old?.[f.key(n)]
+    if (blank(v) ? blank(was) : JSON.stringify(v) === JSON.stringify(was ?? null)) continue
     throw new DomainError('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : `${n} is set by a person`}); ask the user to do it`, n)
   }
 }
