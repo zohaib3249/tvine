@@ -3,7 +3,7 @@
 // signed x-tvine-forward header (HMAC, TVINE_SECRET, 30 s). Same pipeline either way.
 import 'server-only'
 import { createHmac } from 'node:crypto'
-import { makeApi, network, type ApiOpts, type ApiResult, type Transport } from './core.js'
+import { makeApi, network, type Api, type ApiOpts, type ApiResult, type Transport } from './core.js'
 
 export * from './core.js'
 
@@ -71,4 +71,4 @@ export const serverTransport: Transport = (id, params, opts) => {
   return (forward ??= forwardTransport({ url, secret, cookieName: process.env.TVINE_COOKIE_NAME }))(id, params, opts)
 }
 
-export const api = makeApi(serverTransport)
+export const api: Api = makeApi(serverTransport)   // annotated: else the d.ts inlines the empty manifest and api.* is never typed
