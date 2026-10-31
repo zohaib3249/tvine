@@ -52,3 +52,7 @@ export function unlistedApps(appsDir: string, installed: readonly string[] = [])
 }
 
 export const contribLabels = (installed: readonly string[] = []) => new Set(contribApps(installed).map((a) => a.label))
+
+// every built-in app label (the folders under contrib/): a project app may not take one of these names
+export const builtInLabels = (): string[] =>
+  readdirSync(contrib.root, { withFileTypes: true }).filter((d) => d.isDirectory() && INSTALLED_RE.test(`tvine.${d.name}`)).map((d) => d.name).sort()
