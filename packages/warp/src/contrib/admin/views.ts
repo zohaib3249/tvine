@@ -129,6 +129,20 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
   }
   return { data, m2m, errors, changed }
 }
+// Django ModelChoiceField: an fk / m2m pk must be a row that exists and that this user can see (the related admin's
+// getQueryset, like autocomplete; the model's rows when it has no admin)
+async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clean>>): Promise<void> {
+  for (const [n, f] of Object.entries(a.model.fields as Fields)) {
+    if (f.kind !== 'fk' && f.kind !== 'm2m') continue
+    const v = f.kind === 'm2m' ? c.m2m[n] : c.data[f.key(n)]
+    if (v == null || c.errors[n]) continue
+    const ids = [...new Set((Array.isArray(v) ? v : [v]) as (string | number)[])]
+    if (!ids.length) continue
+    const t = f.target!(), ta = adminOfDef(t)
+    const qs = ta ? ta.getQueryset(ctx) : modelNamed<AnyModel>(t.name)!.objects
+    if ((await qs.filter({ id__in: ids }).count()) !== ids.length) c.errors[n] = 'Select a valid choice. That choice is not one of the available choices.'
+  }
+}
 // every bad field (Django ValidationError dict): `errors` per input (inline rows `lines.0.qty`), `field` = the first
 const fieldErrors = (errors: Record<string, string>, prefix = ''): DomainError => {
   const list = Object.entries(errors).map(([k, message]) => ({ field: prefix + k, message }))
@@ -398,6 +412,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
       }
       if (!(await (existing ? i.hasChangePermission(ctx, parent) : i.hasAddPermission(ctx, parent)))) throw forbidden()
       const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk), existing ?? undefined)
+      await cleanChoices(i, ctx, c)
       if (Object.keys(c.errors).length) throw fieldErrors(c.errors, at)
       const row = existing ? await i.model.update(existing.id, c.data) : await i.model.create({ ...c.data, [fkKey]: parent.id })
       for (const [m, ids] of Object.entries(c.m2m)) await i.model.related(m, row.id).set(ids as (string | number)[])
@@ -566,6 +581,7 @@ async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) 
 async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
   await storeFiles(a, ctx, p, stored)
   const c = clean(a, p.values, creating, undefined, obj)
+  await cleanChoices(a, ctx, c)
   if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
   const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
   for (const [n, ids] of Object.entries(c.m2m)) await a.model.related(n, row.id).set(ids as (string | number)[])
@@ -683,6 +699,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     if (!obj) { errors[String(r.pk)] = { pk: 'Not found.' }; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
     const c = clean(a, r.values, false, a.listEditable, obj)
+    await cleanChoices(a, ctx, c)
     if (Object.keys(c.errors).length) errors[String(r.pk)] = c.errors
     else work.push({ obj, c })
   }
