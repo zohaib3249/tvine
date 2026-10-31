@@ -121,7 +121,7 @@ export function parseCommandResult(text: string): Event[] {
   let hasSnap = false, inBody = false, cols: string[] = [], type = ''
   for (const line of lines.slice(1)) {
     if (!line) continue
-    if (line.startsWith('#hint')) { hasSnap = true; continue }
+    if (line.startsWith('#hint') || line.startsWith('#data ')) { hasSnap = true; continue }
     const st = !inBody && /^(ok|err|goto|update|patch)( |$)/.exec(line)
     if (st) {
       const t = scan(line)

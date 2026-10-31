@@ -17,6 +17,7 @@ import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot }
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
+import { UNTRUSTED_TOOL } from '../shape/notation.js'
 import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
 
 export interface McpOptions {
@@ -31,8 +32,8 @@ export type McpTool = Tool & { action?: ActionId }
 
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
 export const GENERIC = {
-  read_page: 'Open a page of this site and get its data + callable actions. Returns a sid — include it in every later call. Re-call this whenever an action returns a stale/expired error.',
-  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
+  read_page: 'Open a page of this site and get its data + callable actions. Returns a sid — include it in every later call. Re-call this whenever an action returns a stale/expired error.' + UNTRUSTED_TOOL,
+  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.' + UNTRUSTED_TOOL,
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
   do: 'Advanced: prefer ui on the page\'s widgets. Run a backend action listed on a page from read_page. Pass url (that page), action (its id), params, and the sid read_page returned. Copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
   request_control: 'Ask to operate the user\'s open browser tab. Give the user the approveUrl to open (or the code to type in the site\'s Connect box); they click Allow. Then read_page/ui act in their tab as them, and they see what you do. Your name is shown to them as unverified.',

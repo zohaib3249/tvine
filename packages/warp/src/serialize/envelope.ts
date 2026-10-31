@@ -3,7 +3,7 @@ import { recoveryOf } from '../core/errors.js'
 import { toJson } from './json.js'
 import { toNotation, bare, cell, quote } from './notation.js'
 import { disclose, expand, kindOfWidget, level, toTree, type Shaped } from '../shape/disclose.js'
-import { HINT2 } from '../shape/notation.js'
+import { HINT2, UNTRUSTED } from '../shape/notation.js'
 
 export type Format = 'json' | 'notation'
 export type Shapers = Record<string /* node type */, (data: Record<string, unknown>) => Record<string, unknown>>
@@ -17,12 +17,14 @@ const HINT = '#hint @type @id=node id then cols, rows=values in order, "-"=null 
 
 // json → the `"#tvine":"..."` first member; notation → line 1 (+ hint line for snapshots).
 // view: v2 shapes only (`view=full|L1|L0|L2`); hint: v1 → the v1 hint, a string → that hint line.
-export function head(s: { sid: Sid; rev: Rev; page: string; format: Format; hint?: boolean | string; view?: string }): string {
+// data: a snapshot follows → the fixed untrusted-content marker (`#data` member / line).
+export function head(s: { sid: Sid; rev: Rev; page: string; format: Format; hint?: boolean | string; view?: string; data?: boolean }): string {
   const v = s.view ? ` view=${s.view}` : ''
-  if (s.format === 'json') return `"#tvine":${JSON.stringify(`1 sid=${s.sid} rev=${s.rev} page=${s.page}${v}`)}`
+  if (s.format === 'json') return `"#tvine":${JSON.stringify(`1 sid=${s.sid} rev=${s.rev} page=${s.page}${v}`)}${s.data ? `,"#data":${JSON.stringify(UNTRUSTED)}` : ''}`
   const l1 = `#tvine/1 sid=${s.sid} rev=${s.rev} page=${bare(s.page)}${v}`
   const h = s.hint === true ? HINT : s.hint
-  return h ? `${l1}\n${h}` : l1
+  const d = s.data ? `\n#data ${UNTRUSTED}` : ''
+  return h ? `${l1}${d}\n${h}` : l1 + d
 }
 
 type ErrEvent = Extract<Event, { kind: 'err' }>
@@ -110,6 +112,6 @@ export function render(events: Event[], format: Format, settings: Settings, { ct
     ? expand(tree, x.id, x) ?? level(tree, 'L0', rowsL1)
     : disclose(tree, { budget: agent?.budget ?? 1500, rowsL1, view, allowL0: true }))
   const hint = format === 'notation' && !!snap && (!v2 || (v2.nodes.some(n => n.rows || n.actions || n.links) || !!v2.links) && HINT2)
-  const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint, view: v2?.view })
+  const h = head({ sid, rev, page: snap?.page ?? ctx.page, format, hint, view: v2?.view, data: !!snap })
   return format === 'json' ? toJson(evs, h, v2) : toNotation(evs, h, v2)
 }
