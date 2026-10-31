@@ -20,6 +20,7 @@ class Conn {
   private replies: Reply[] = []
   private wait?: { res: (r: Reply) => void; rej: (e: Error) => void }
   private failed?: Error
+  secure = false
 
   constructor(private sock: Socket, private timeoutMs: number) { this.bind(sock) }
 
@@ -67,6 +68,8 @@ class Conn {
     return this.expect(label, ...ok)
   }
   async startTls(host: string): Promise<void> {
+    // anything that arrived after the 220 was sent in plain text before TLS (a STARTTLS injection): refuse it
+    if (this.buf || this.pending.length || this.replies.length) throw new Error('smtp: the server sent data before TLS started')
     const raw = this.sock
     for (const ev of ['data', 'error', 'close']) raw.removeAllListeners(ev)
     raw.setTimeout(0)
@@ -74,13 +77,14 @@ class Conn {
     this.sock = t
     this.bind(t)
     await new Promise<void>((res, rej) => {
-      t.once('secureConnect', () => res())
+      t.once('secureConnect', () => { this.secure = true; res() })
       t.once('close', () => rej(this.failed ?? new Error('smtp: TLS handshake failed')))
     })
   }
   close() { this.failed ??= new Error('smtp: closed'); this.sock.destroy() }
 }
 
+const LOCAL = new Set(['localhost', '127.0.0.1', '::1'])
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
 // RFC 5321 4.5.2: a line starting with '.' gets one more
 export const dotStuff = (data: string) => data.replace(/(^|\r\n)\./g, '$1..')
@@ -94,6 +98,7 @@ export async function smtpSend(conf: EmailSettings, envelopes: Envelope[]): Prom
   const { host, port, timeoutMs } = conf
   const sock = conf.useSsl ? tlsConnect({ host, port, servername: host }) : netConnect({ host, port })
   const c = new Conn(sock, timeoutMs)
+  c.secure = conf.useSsl
   try {
     await c.expect('greeting', 220)
     let ext = await ehlo(c)
@@ -103,6 +108,8 @@ export async function smtpSend(conf: EmailSettings, envelopes: Envelope[]): Prom
       ext = await ehlo(c)
     }
     if (conf.user) {
+      // credentials only over TLS; plain AUTH only to a local relay with email.allowPlainAuth
+      if (!c.secure && !(conf.allowPlainAuth && LOCAL.has(host))) throw new Error('smtp: refusing AUTH on a connection without TLS (set email.useTls or useSsl; email.allowPlainAuth allows it for localhost only)')
       const mechs = (ext.find((l) => /^AUTH[ =]/i.test(l)) ?? '').toUpperCase().split(/[ =]/).slice(1)
       if (mechs.includes('PLAIN')) await c.cmd(`AUTH PLAIN ${b64(`\0${conf.user}\0${conf.password}`)}`, 'AUTH PLAIN', 235)
       else if (mechs.includes('LOGIN')) {
@@ -116,7 +123,8 @@ export async function smtpSend(conf: EmailSettings, envelopes: Envelope[]): Prom
       await c.cmd(`MAIL FROM:<${e.from}>`, 'MAIL FROM', 250)
       for (const r of e.to) await c.cmd(`RCPT TO:<${r}>`, `RCPT TO ${r}`, 250, 251)
       await c.cmd('DATA', 'DATA', 354)
-      await c.cmd(`${dotStuff(e.data.replace(/\r\n$/, ''))}\r\n.`, 'message', 250)
+      // line ends normalized to CRLF before dot-stuffing: no bare CR / LF reaches the wire
+      await c.cmd(`${dotStuff(e.data.replace(/\r\n|\r|\n/g, '\r\n').replace(/\r\n$/, ''))}\r\n.`, 'message', 250)
       sent++
     }
     await c.cmd('QUIT', 'QUIT', 221).catch(() => undefined)

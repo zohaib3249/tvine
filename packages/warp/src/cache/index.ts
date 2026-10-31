@@ -320,11 +320,14 @@ export function checkViewCache(id: string, rules: ActionDef['rules']): void {
   if (!c) return
   if (!rules?.readOnly) throw new Error(`action ${id}: rules.cache needs rules.readOnly (only read actions are cached)`)
   if (!(typeof c.timeout === 'number' && c.timeout > 0)) throw new Error(`action ${id}: rules.cache.timeout is seconds > 0`)
+  if (rules.secretResult) throw new Error(`action ${id}: rules.cache cannot store a secretResult (a one-time secret)`)
   for (const v of c.varyOn ?? []) if (!/^[a-z0-9-]+$/i.test(v)) throw new Error(`action ${id}: rules.cache.varyOn "${v}" is not user, session, query or a header name`)
 }
 
 // The handler's result, from the cache when fresh. Keyed by action, params and varyOn (default ['user']:
-// never shared across users unless varyOn leaves 'user' out). A throw (error, redirect) is never stored.
+// never shared across users unless varyOn leaves 'user' out; a signed-out caller keys by its session, so two
+// anonymous visitors never share). A throw (error, redirect) is never stored. A cache that fails is skipped
+// (logged): the handler runs and its result is returned.
 export async function cachedRun(def: ActionDef, params: unknown, ctx: ActionCtx, run: () => Promise<unknown>): Promise<unknown> {
   const rc = def.rules!.cache!
   const c = caches.get(rc.cache ?? 'default')
@@ -332,15 +335,17 @@ export async function cachedRun(def: ActionDef, params: unknown, ctx: ActionCtx,
   // a signed-in user without an id cannot be told apart from another: not cached
   if (varyOn.includes('user') && r.user.isAuthenticated && r.user.id === undefined) return run()
   const vary = varyOn.map((v) => {
-    if (v === 'user') return `u=${r.user.isAuthenticated ? r.user.id : '-'}`
+    if (v === 'user') return r.user.isAuthenticated ? `u=${r.user.id}` : `u=-:s=${ctx.sid}`
     if (v === 'session') return `s=${ctx.sid}`
     if (v === 'query') return `q=${[...r.query].sort().join('&')}`
     return `h:${v.toLowerCase()}=${r.headers.get(v) ?? ''}`
   })
   const key = Cache.keyFor('view', def.id, params ?? null, vary)
-  const hit = await c.lookup(key)
+  const warn = (step: string, e: unknown) => console.error(JSON.stringify({ level: 'error', msg: `view cache ${step} failed; handler result used`, action: def.id, cache: c.alias, error: (e as Error).message }))
+  let hit: { hit: boolean; v?: unknown } = { hit: false }
+  try { hit = await c.lookup(key) } catch (e) { warn('read', e) }
   if (hit.hit) return hit.v
   const out = await run()
-  await c.set(key, out, rc.timeout)
+  try { await (rc.tags?.length ? c.tags(rc.tags) : c).set(key, out, rc.timeout) } catch (e) { warn('write', e) }
   return out
 }

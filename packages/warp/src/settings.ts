@@ -82,7 +82,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   admin: { path: '/admin', theme: { dark: 'auto' } },
   caches: { default: CACHE_DEFAULTS },
   // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
-  email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, timeoutMs: 10_000,
+  email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
     defaultFrom: 'webmaster@localhost', serverEmail: 'root@localhost', admins: [], subjectPrefix: '[Tvine] ', filePath: './mail' },
   installedApps: [],
 }
@@ -166,7 +166,7 @@ const schema: z.ZodType<Settings> = z.object({
   }).strict().refine((c) => c.backend !== 'file' || !!c.location, 'a file cache needs location (a directory)')),
   email: z.object({
     backend: z.enum(['console', 'smtp', 'file', 'memory', 'dummy']), host: z.string(), port: z.number().int().min(1).max(65_535),
-    user: z.string(), password: z.string(), useTls: z.boolean(), useSsl: z.boolean(), timeoutMs: z.number().int().positive(),
+    user: z.string(), password: z.string(), useTls: z.boolean(), useSsl: z.boolean(), allowPlainAuth: z.boolean(), timeoutMs: z.number().int().positive(),
     defaultFrom: z.string(), serverEmail: z.string(), admins: z.array(z.string()), subjectPrefix: z.string(), filePath: z.string().min(1),
   }).strict().refine((e) => !(e.useTls && e.useSsl), 'email.useTls and email.useSsl are mutually exclusive'),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),

@@ -66,8 +66,10 @@ function formatAddr(a: string, field: string): string {
   return `${isAscii(name) ? `"${name.replace(/["\\]/g, '\\$&')}"` : encodeWord(name)} <${addr}>`
 }
 
+// every line end (CRLF, a bare CR, a bare LF) becomes one LF: a bare CR can never reach the wire (SMTP smuggling)
+const lines = (s: string) => s.split(/\r\n|\r|\n/)
 export function quotedPrintable(s: string): string {
-  return s.split(/\r?\n/).map((line) => {
+  return lines(s).map((line) => {
     const bytes = Buffer.from(line, 'utf8')
     let out = '', cur = ''
     bytes.forEach((b, i) => {
@@ -82,13 +84,27 @@ export function quotedPrintable(s: string): string {
 const wrap76 = (b64: string) => b64.replace(/.{76}(?=.)/g, `$&${CRLF}`)
 
 type Part = { headers: [string, string][]; body: string }
-const render = (p: Part) => `${p.headers.map(([k, v]) => `${k}: ${v}`).join(CRLF)}${CRLF}${CRLF}${p.body}`
+// RFC 5322 2.2.3: fold at spaces so lines stay <= 78 chars; a line that cannot fit in 998 is refused
+export function fold(name: string, value: string): string {
+  if (value.includes(CRLF)) return `${name}: ${value}`   // already folded (encoded-words)
+  const out: string[] = []
+  let cur = `${name}:`
+  for (const w of value.split(' ')) {
+    if (cur.length + 1 + w.length > 78 && cur.trim().length > name.length + 1) { out.push(cur); cur = '' }
+    cur += ` ${w}`
+  }
+  out.push(cur)
+  if (out.some((l) => l.length > 998)) throw new BadHeaderError(`header ${name} has a word longer than 998 characters`)
+  return out.join(CRLF)
+}
+const render = (p: Part) => `${p.headers.map(([k, v]) => fold(k, v)).join(CRLF)}${CRLF}${CRLF}${p.body}`
 
 function textPart(text: string, subtype: string): Part {
-  const plain = /^[\x00-\x7f]*$/.test(text) && text.split(/\r?\n/).every((l) => l.length <= 998)
+  const ls = lines(text)
+  const plain = /^[\x00-\x7f]*$/.test(text) && ls.every((l) => l.length <= 998)
   return {
     headers: [['Content-Type', `text/${subtype}; charset="utf-8"`], ['Content-Transfer-Encoding', plain ? '7bit' : 'quoted-printable']],
-    body: plain ? text.replace(/\r?\n/g, CRLF) : quotedPrintable(text),
+    body: plain ? ls.join(CRLF) : quotedPrintable(text),
   }
 }
 function multipart(subtype: string, parts: Part[]): Part {

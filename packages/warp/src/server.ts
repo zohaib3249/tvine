@@ -126,6 +126,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (settings.logging !== 'none') console.error(settings.logging === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
+  if (process.env.NODE_ENV === 'production' && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
   const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
   if ((process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) && local.length) {
     say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')

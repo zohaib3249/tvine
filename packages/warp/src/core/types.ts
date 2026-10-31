@@ -182,7 +182,7 @@ export interface ActionRules {
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
   // Django cache_page (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
   // varyOn default ['user']; 'session' | 'query' | a header name add to the key. Errors are never cached.
-  cache?: { timeout: number; varyOn?: string[]; cache?: string }
+  cache?: { timeout: number; varyOn?: string[]; cache?: string; tags?: string[] }   // tags: cache.invalidateTags([...]) drops them
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
@@ -276,7 +276,7 @@ export interface CacheSettings {
 }
 export interface EmailSettings {
   backend: 'console' | 'smtp' | 'file' | 'memory' | 'dummy'
-  host: string; port: number; user: string; password: string; useTls: boolean; useSsl: boolean; timeoutMs: number
+  host: string; port: number; user: string; password: string; useTls: boolean; useSsl: boolean; allowPlainAuth: boolean; timeoutMs: number
   defaultFrom: string; serverEmail: string; admins: string[]; subjectPrefix: string; filePath: string
 }
 // settings.redis.<alias>. url: redis:// or rediss:// (TLS); prefix: every key this connection writes starts with it.
