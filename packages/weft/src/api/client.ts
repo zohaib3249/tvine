@@ -6,12 +6,18 @@ import { currentUserVia, makeApi, network, type Api, type ApiResult, type Transp
 export * from './core.js'
 export { UserProvider, useUser } from './user.js'
 
+// Set by the in-tab executor while a WebMCP agent's step runs (runtime/exec.ts): calls made then are marked
+// agent (downgrade-only: a page can only make its own calls agent, never human). On globalThis: separate entries.
+const AGENT = Symbol.for('tvine.weft.agentVia')
+export const agentVia = (): string | undefined => (globalThis as { [AGENT]?: string })[AGENT]
+
 export const browserTransport: Transport = async (id, params, opts) => {
+  const via = agentVia()
   try {
     const r = await fetch(`/tvine/api/${encodeURIComponent(id)}`, {
       method: 'POST', credentials: 'same-origin', signal: opts?.signal,
       headers: { 'content-type': 'application/json', 'x-tvine-api': '1' },
-      body: JSON.stringify({ params, bind: opts?.bind, cmdId: opts?.cmdId }),
+      body: JSON.stringify({ params, bind: opts?.bind, cmdId: opts?.cmdId, ...(via && { agentCmd: { via } }) }),
     })
     return (await r.json()) as ApiResult
   } catch (e) { return network(e) }

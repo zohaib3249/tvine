@@ -26,6 +26,7 @@ export interface ExecOptions {
   navigate?: CallOptions['navigate']
 }
 
+const AGENT = Symbol.for('tvine.weft.agentVia')
 export const limits = { maxSteps: 20, stepTimeoutMs: 5_000, cmdTimeoutMs: 15_000, keep: 32, drainMs: 30_000 }
 
 // ---- Stop (security.md §In-browser agents): blocks the executor and the WebMCP tools until Resume.
@@ -149,6 +150,8 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
         ...(o.run && { run: (h, p) => o.run!(h, p ?? {}, `${cmdId}.${i}`) }),
       })
       hold(call)
+      // a WebMCP step: the page's own api.* calls during it are recorded as agent (api/client.ts)
+      if (o.via === 'webmcp') (globalThis as Record<symbol, unknown>)[AGENT] = 'webmcp'
       const result = await race(call, Math.min(limits.stepTimeoutMs, deadline - Date.now()), signal)
       // URL-driven control (headless {url}): answer after its navigation re-rendered the page (T3), not before
       const url = c.headless && 'url' in c.headless ? c.headless.url : undefined
@@ -166,6 +169,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
       if (err === TIMEOUT) return fail({ code: 'domain', reason: 'timeout', message: 'step timed out; it may still have taken effect: read_page before retrying', maybeApplied: true })
       return fail({ code: 'internal', message: err instanceof Error ? err.message : String(err) })
     } finally {
+      delete (globalThis as Record<symbol, unknown>)[AGENT]
       end()
       e.el?.removeAttribute('data-agent-danger')
       e.agent?.({ active: false })

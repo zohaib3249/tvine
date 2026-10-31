@@ -66,7 +66,7 @@ export function toApiResult(events: Event[]): ApiResult {
 const fail = (code: ErrCode, message: string, reason?: string): ApiResult => ({ ok: false, code, message, ...(reason && { reason }) })
 const FORBIDDEN = fail('domain', FORBIDDEN_ROUTE, 'forbidden')
 
-export interface ApiCall { id: string; params?: unknown; bind?: string; cmdId?: string }
+export interface ApiCall { id: string; params?: unknown; bind?: string; cmdId?: string; agentCmd?: { via?: string } }
 export interface Caller {
   request: Request                         // path = the calling page (route guards run on it)
   sid?: string                             // an agent's render session (x-tvine-session)
@@ -110,6 +110,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
     ...(call.bind !== undefined && { bind: call.bind }),
+    ...(call.agentCmd && { agentCmd: call.agentCmd }),
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
@@ -193,9 +194,11 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
     let body: unknown
     try { body = raw.length ? JSON.parse(raw) : {} } catch { return send(res, fail('invalid_param', 'body is not valid JSON')) }
     if (typeof body !== 'object' || body === null || Array.isArray(body) || tooDeep(body)) return send(res, fail('invalid_param', 'body must be a JSON object {params, bind?, cmdId?}'))
-    const { params, bind, cmdId } = body as Record<string, unknown>
+    const { params, bind, cmdId, agentCmd } = body as Record<string, unknown>
     if ((bind !== undefined && typeof bind !== 'string') || (cmdId !== undefined && typeof cmdId !== 'string')) return send(res, fail('invalid_param', 'bind and cmdId must be strings'))
-    send(res, await invoke(server, { id, params, bind, cmdId }, who))
+    // downgrade-only agent marker (a WebMCP step's own api.* calls): it can make a call agent, never human
+    const via = agentCmd !== undefined ? { via: typeof (agentCmd as { via?: unknown } | null)?.via === 'string' ? (agentCmd as { via: string }).via : undefined } : undefined
+    send(res, await invoke(server, { id, params, bind, cmdId, ...(via && { agentCmd: via }) }, who))
   }
 
   return (req, res, next) => {
