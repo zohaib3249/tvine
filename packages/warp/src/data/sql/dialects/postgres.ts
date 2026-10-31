@@ -6,7 +6,8 @@ import type { SqlNode } from '../ast.js'
 import { checkIdent, pgObjectName, renderNode, type Dialect, type Statement } from '../dialect.js'
 import { ddlLiteral } from '../../fields/base.js'
 import { addAutoDatetime, alterGuard, defaultRender, indexDiff, type Operation } from '../../schema/operations.js'
-import { fieldOf, findModel, type ProjectState } from '../../schema/state.js'
+import { fieldOf, findModel, type FieldSpec, type ProjectState } from '../../schema/state.js'
+import type { FkField } from '../../fields/fk.js'
 export { pgObjectName }
 
 type AlterOp = Extract<Operation, { kind: 'alterField' }>
@@ -35,9 +36,15 @@ function alterField(op: AlterOp, from: ProjectState, to: ProjectState): Statemen
       ? { t: 'alterTable', name: op.model, addUnique: { constraint: uniqueName(op.model, b[0]), col: b[0] } }
       : { t: 'alterTable', name: op.model, dropConstraint: uniqueName(op.model, b[0]) }))
   }
+  // onDelete changed: re-create the fk constraint (pg names an inline REFERENCES <table>_<col>_fkey; renames keep it in step)
+  if (now.kind === 'fk' && (was.opts.onDelete ?? 'RESTRICT') !== (now.opts.onDelete ?? 'RESTRICT')) {
+    const q = postgres.quoteIdent, name = fkeyName(op.model, b[0])
+    out.push({ sql: `ALTER TABLE ${q(op.model)} DROP CONSTRAINT ${q(name)}, ADD CONSTRAINT ${q(name)} FOREIGN KEY (${q(b[0])}) ${(now as FkField).fkDDL(postgres)}`, params: [] })
+  }
   const ix = indexDiff(postgres, from, op.model, to, op.model)
   return [...ix.drop, ...out, ...ix.create]
 }
+const fkeyName = (table: string, col: string) => pgObjectName(table, col, 'fkey')
 
 // pg never renames constraints with their table / column: do it, so a later unique toggle finds them
 type RenameOp = Extract<Operation, { kind: 'renameField' | 'renameModel' }>
@@ -45,12 +52,12 @@ function renameUniques(op: RenameOp, from: ProjectState): Statement[] {
   const model = op.kind === 'renameField' ? op.model : op.from
   const table = op.kind === 'renameField' ? op.model : op.to
   const q = postgres.quoteIdent
-  return Object.entries(findModel(from, model)!.model.fields)
-    .filter(([n, f]) => f.opts.unique && (op.kind === 'renameModel' || n === op.from))
-    .map(([n, f]) => {
-      const col = (name: string) => fieldOf(f, from).columns(name)[0]
-      return [uniqueName(model, col(n)), op.kind === 'renameField' ? uniqueName(model, col(op.to)) : uniqueName(table, col(n))]
-    })
+  const fields = Object.entries(findModel(from, model)!.model.fields).filter(([n]) => op.kind === 'renameModel' || n === op.from)
+  const names = (mk: (t: string, c: string) => string) => ([n, f]: [string, FieldSpec]) => {
+    const col = (name: string) => fieldOf(f, from).columns(name)[0]
+    return [mk(model, col(n)), op.kind === 'renameField' ? mk(model, col(op.to)) : mk(table, col(n))]
+  }
+  return [...fields.filter(([, f]) => f.opts.unique).map(names(uniqueName)), ...fields.filter(([, f]) => f.kind === 'fk').map(names(fkeyName))]
     .filter(([a, b]) => a !== b)
     .map(([a, b]) => ({ sql: `ALTER TABLE ${q(table)} RENAME CONSTRAINT ${q(a)} TO ${q(b)}`, params: [] }))
 }

@@ -26,8 +26,9 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   routes                        print the action manifest
   generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
-  migrate [--check] [--plan] [--fake]
-  sqlmigrate <app> <migration>
+  migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
+                                <app>: forward to its latest; <target>: forward or ROLL BACK to it
+  sqlmigrate <app> <migration> [--backwards]
   showmigrations`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
@@ -41,8 +42,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   routes: { options: {}, args: [0, 0] },
   generate: { options: { check: bool }, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
-  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
-  sqlmigrate: { options: {}, args: [2, 2] },
+  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, 2] },
+  sqlmigrate: { options: { backwards: bool }, args: [2, 2] },
   showmigrations: { options: {}, args: [0, 0] },
 }
 
@@ -197,15 +198,20 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         return o.check && r.files.length ? 1 : 0
       }
       case 'migrate': {
-        if (args.length) throw new Error('rollback targets not supported — forward-only; see backlog (migrate <app> <target>)')
+        const [app, target] = args as [string | undefined, string | undefined]
         if ([o.check, o.plan, o.fake].filter(Boolean).length > 1) throw new Usage('--check, --plan and --fake are exclusive')
+        if (o.check && app !== undefined) throw new Usage('--check takes no app / target')
         const url = (await loadSettings()).db.url
         if (o.check) {
           if (await migrateCheck(url, apps)) return 0
           io.err(`tvine migrate --check: ${await pending(url, apps)}`)
           return 1
         }
-        const { applied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake })
+        const { applied, unapplied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, app, target })
+        if (unapplied?.length) {
+          io.out(o.plan ? ['planned rollback:', ...unapplied.map((k) => `  ${k}`)].join('\n') : unapplied.map((k) => `${o.fake ? 'faked unapply' : 'unapplied'} ${k}`).join('\n'))
+          return 0
+        }
         if (!applied.length) io.out('no migrations to apply')
         else if (o.plan) io.out(['planned:', ...applied.map((k) => `  ${k}`)].join('\n'))
         else io.out(applied.map((k) => `${o.fake ? 'faked' : 'applied'} ${k}`).join('\n'))
@@ -214,7 +220,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'sqlmigrate': {
         const [app, name] = args as [string, string]
         const conn = openConn((await loadSettings()).db.url)   // the connected dialect, as Django does
-        try { io.out(await sqlMigrate(apps, app, name, conn.dialect)) } finally { await conn.driver.close() }
+        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { backwards: !!o.backwards })) } finally { await conn.driver.close() }
         return 0
       }
       default: {   // showmigrations

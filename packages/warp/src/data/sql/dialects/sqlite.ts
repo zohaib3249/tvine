@@ -4,7 +4,7 @@
 import { bin, col, param, type SqlNode } from '../ast.js'
 import { checkIdent, renderNode, type Dialect, type Statement } from '../dialect.js'
 import { ddlLiteral } from '../../fields/base.js'
-import { columnsChanged, columnsOf, createTable, defaultRender, indexesOf, type Operation } from '../../schema/operations.js'
+import { columnsChanged, columnsOf, createIndexStmt, createTable, defaultRender, indexesOf, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, modelDef, type FieldSpec, type ProjectState } from '../../schema/state.js'
 
 // ADD COLUMN needs a usable default for existing rows and cannot add UNIQUE
@@ -14,14 +14,17 @@ type FieldOp = Extract<Operation, { kind: 'removeField' | 'alterField' | 'addFie
 
 // create new, copy, keep the AUTOINCREMENT high-water mark, drop, rename, re-index
 function rebuild(op: FieldOp, from: ProjectState, to: ProjectState): Statement[] {
-  const model = op.model, tmp = `__new_${model}`
+  // defense in depth: only removeField may lose columns (the autodetector already refuses the rest)
+  const allowed = op.kind === 'removeField' ? fieldOf(findModel(from, op.model)!.model.fields[op.name], from).columns(op.name) : []
+  return rebuildTable(op.model, from, to, allowed, `${op.kind} ${op.model}.${op.name}`)
+}
+export function rebuildTable(model: string, from: ProjectState, to: ProjectState, allowed: string[] = [], label = `rebuild ${model}`): Statement[] {
+  const tmp = `__new_${model}`
   const r = (n: SqlNode) => sqlite.render(n)
   const old = new Set(columnsOf(from, model)), next = columnsOf(to, model)
-  // defense in depth: only removeField may lose columns (the autodetector already refuses the rest)
-  const allowed = op.kind === 'removeField' ? fieldOf(findModel(from, model)!.model.fields[op.name], from).columns(op.name) : []
   const lost = [...old].filter(c => !next.includes(c) && !allowed.includes(c))
   if (lost.length) {
-    throw new Error(`${op.kind} ${model}.${op.name} would drop column(s) ${lost.join(', ')}: write removeField + addField or a runSQL data migration`)
+    throw new Error(`${label} would drop column(s) ${lost.join(', ')}: write removeField + addField or a runSQL data migration`)
   }
   const def = modelDef(to, model)
   // a new auto datetime column is backfilled with the migration time
@@ -39,7 +42,7 @@ function rebuild(op: FieldOp, from: ProjectState, to: ProjectState): Statement[]
     ...seq,
     r({ t: 'dropTable', name: model }),
     r({ t: 'alterTable', name: tmp, renameTo: model }),
-    ...indexesOf(to, model).map(i => r({ t: 'createIndex', ...i })),
+    ...indexesOf(to, model).map(i => createIndexStmt(sqlite, to, i)),
   ]
 }
 
@@ -64,3 +67,4 @@ export const sqlite: Dialect = {
     }
   },
 }
+

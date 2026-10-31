@@ -1,15 +1,19 @@
 // ProjectState (Django's ProjectState): pure data, never stored. It is REBUILT by replaying every
 // migration's operations in dependency order; makemigrations diffs it against models.ts.
-//   apps → models → { fields: name → FieldSpec, indexes: name → explicit (ops.addIndex) index }
+//   apps → models → { fields: name → FieldSpec, indexes: name → Meta / ops.addIndex index,
+//                     unique?: unique_together sets, constraints?: name → CHECK / UNIQUE constraint }
 // fks live on their field (kind 'fk', `to` = target model name); field-level `index: true` stays
 // a field option (Django's db_index). Field instances are rebuilt from specs only to render DDL.
 import { field } from '../fields.js'
 import { FkField, M2MField, pkField, type Field, type Kind, type ModelDef, type Opts } from '../fields/index.js'
 import type { Model } from '../model.js'
+import type { ConstraintSpec } from '../expressions.js'
+import { objectName } from '../sql/dialect.js'
 
 export interface FieldSpec { kind: Kind; opts: Opts; values?: string[]; to?: string; through?: string }   // through: m2m custom through model
 export interface IndexSpec { fields: string[]; unique?: boolean }
-export interface ModelState { fields: Record<string, FieldSpec>; indexes: Record<string, IndexSpec> }
+// unique / constraints are left out when empty, so states replayed from older files compare equal
+export interface ModelState { fields: Record<string, FieldSpec>; indexes: Record<string, IndexSpec>; unique?: string[][]; constraints?: Record<string, ConstraintSpec> }
 export interface ProjectState { apps: Record<string, Record<string, ModelState>> }
 type AnyField = Field<any, boolean, Kind, boolean>
 
@@ -71,10 +75,30 @@ export function stateFromModels(byApp: Record<string, Model<any, any>[]>): Proje
     if (models.length) s.apps[app] = {}
     for (const m of models) {
       pkField(m)
-      s.apps[app][m.name] = { fields: Object.fromEntries(Object.entries(m.fields as Record<string, AnyField>).map(([n, f]) => [n, specOf(f)])), indexes: {} }
+      s.apps[app][m.name] = {
+        fields: Object.fromEntries(Object.entries(m.fields as Record<string, AnyField>).map(([n, f]) => [n, specOf(f)])),
+        ...metaState(m.name, m.meta),
+      }
     }
   }
   return s
+}
+
+// Model Meta → the state's indexes / unique / constraints (names generated when not given)
+export function metaState(model: string, meta: Model<any, any>['meta'] = {}): Pick<ModelState, 'indexes' | 'unique' | 'constraints'> {
+  const indexes: Record<string, IndexSpec> = {}
+  for (const ix of meta.indexes ?? []) {
+    const d = Array.isArray(ix) ? { fields: ix } : ix
+    const name = d.name ?? objectName(model, d.fields, d.unique ? 'uniq' : 'idx')
+    if (indexes[name]) throw new Error(`${model}: two Meta indexes are named ${name}`)
+    indexes[name] = { fields: [...d.fields], ...(d.unique ? { unique: true } : {}) }
+  }
+  const constraints = Object.fromEntries((meta.constraints ?? []).map(c => [c.name, structuredClone(c)]))
+  return {
+    indexes,
+    ...(meta.unique?.length ? { unique: meta.unique.map(u => [...u]) } : {}),
+    ...(Object.keys(constraints).length ? { constraints } : {}),
+  }
 }
 
 // replay a planned list of migrations (graph.order()) from nothing
