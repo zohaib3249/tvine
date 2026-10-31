@@ -308,9 +308,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       delete req.headers['x-tvine-locale']   // only the Locale middleware sets it
       weakIfNoneMatch(req)
       // a real node response only (a test double without header methods is passed through untouched)
-      const hookOpts = { compression: false as typeof st.compression, onHeaders: () => { for (let k = headerFns.length - 1; k >= 0; k--) headerFns[k]!() } }
+      const hookOpts = { get compression() { return st.compression }, onHeaders: () => { for (let k = headerFns.length - 1; k >= 0; k--) headerFns[k]!() } }
       if (typeof res.getHeader === 'function') unhook = hookResponse(req, res, hookOpts)
-      runMiddleware(mws, req as MwRequest, res, () => { hookOpts.compression = st.compression; step() }, fail(res))
+      runMiddleware(mws, req as MwRequest, res, step, fail(res))
       return
     } catch (e) { fail(res)(e) }
   }

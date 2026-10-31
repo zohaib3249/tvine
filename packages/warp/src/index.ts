@@ -47,3 +47,7 @@ export {
   type SendMailOpts, type Attachment, type MailPending,
 } from './mail/index.js'
 export { SmtpError } from './mail/smtp.js'
+export { defineMiddleware, CATALOG as MIDDLEWARE_CATALOG, type HttpMiddleware, type MwRequest, type RequestState, type BuildCtx, type MiddlewareEntry } from './middleware/index.js'
+export { getLogger, configureLogging, type Logger, type LogRecord, type LogHandler, type LoggingConfig, type LoggingSetting, type Level } from './log.js'
+export { env, loadDotenv, FRAMEWORK_ENV } from './env.js'
+export { securityEvent } from './core/audit.js'
