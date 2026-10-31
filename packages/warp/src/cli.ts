@@ -40,6 +40,7 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
   check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
+  show_urls                     print the urls.ts routes: pattern, methods, name, action
   generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
   migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
@@ -64,6 +65,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   inspect: { options: { port: str }, args: [0, 1] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
+  show_urls: { options: {}, args: [0, 0] },
   generate: { options: { check: bool }, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
   migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, 2] },
@@ -238,6 +240,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           (d.rules?.permissions ?? []).map((p) => p.name || 'fn').join(', ') || '-',
           mcpEnabled(d, settings) ? 'yes' : 'no',
         ])]))
+        return 0
+      }
+      case 'show_urls': {   // django-extensions show_urls: the project's urls.ts, resolved
+        const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
+        await srv.close()
+        const rows = srv.urls?.routes.map((r) => [r.pattern, [...r.methods.keys()].join(','), r.name ?? '-', [...new Set([...r.methods.values()].map((d) => d.id))].join(', ')]) ?? []
+        if (!rows.length) { io.out('no urls.ts routes (actions answer at /tvine/api/<app>.<name>)'); return 0 }
+        io.out(table([['pattern', 'methods', 'name', 'action'], ...rows]))
         return 0
       }
       case 'makemigrations': {

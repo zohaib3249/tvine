@@ -30,6 +30,8 @@ import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
 import { httpTransport } from './transport/http.js'
+import { urlsTransport } from './transport/urls.js'
+import { loadUrls, setLiveUrls, type UrlTable } from './urls.js'
 import { mcpHandler } from './transport/mcp.js'
 import { TabHub, tabTransport } from './transport/tab.js'
 import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
@@ -63,6 +65,7 @@ export interface AgentServer {
   listen(port: number): Promise<void>
   handler: (req: IncomingMessage, res: ServerResponse, next?: () => void) => void
   ctx: ServerCtx
+  urls?: UrlTable                                  // the project's urls.ts, resolved (undefined: none)
   server: Server
   close(): Promise<void>
 }
@@ -131,6 +134,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const appMiddleware = await discoverMiddleware(appsDir, installed)
   const appHooks = await discoverHooks(appsDir, installed)
   const signals = await appSignals(appsDir, installed)
+  const urls = await loadUrls(appsDir, installed)   // the root urls.ts; bad routes fail here, naming the file
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
@@ -208,6 +212,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
     apiTransport(ctx, { route, tokens, asSession: (v) => internalOf(v, nonce) }),
+    ...(urls ? [urlsTransport(ctx, urls, { route, tokens, asSession: (v) => internalOf(v, nonce) })] : []),
     httpTransport(ctx, { routes, match: route }),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
@@ -224,7 +229,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // the paths this server itself answers (embedded mode hands everything else to the host app)
   const mediaRoot = settings.media.route.replace(/\/$/, '')
   const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
-    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
+    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!(urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })()) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}
@@ -280,6 +285,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   g[SIGNER] = signer
   g[DISPATCHER] = dispatcher
   setLiveManifest(actions)   // page bundles' copies of apps/ resolve ids and view defs through it
+  setLiveUrls(urls)          // reverse()
   g[PAGES] = pages
   g[API] = api
 
@@ -297,7 +303,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
 
   return {
-    ctx, server, handler,
+    ctx, urls, server, handler,
     async listen(port) {
       if (fe) await startNext()
       await new Promise<void>((ok, bad) => {
