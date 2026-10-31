@@ -220,6 +220,7 @@ const schema: z.ZodType<Settings> = z.object({
     objectPermission: fn<NonNullable<AuthSettings['objectPermission']>>().optional(),
     tokens: z.object({ defaultDays: z.number().positive(), maxDays: z.number().positive() }).partial().optional(),
     totp: z.object({ issuer: z.string() }).partial().optional(),
+    notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
 }).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] }) as z.ZodType<Settings>
 

@@ -15,6 +15,7 @@ import {
 import { base32, sha256 } from './crypto.js'
 import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
 import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
+import { checkNewDevice, securityNotice } from './notify.js'
 import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
@@ -84,6 +85,7 @@ export const loginAction = defineAction('login', z.object({
   await t.succeed(username, ip)
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
+  await checkNewDevice(ctx.settings, row, ctx.request)
   return safeUser(await login(ctx, current))
 }, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
 
@@ -108,6 +110,7 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
   await login(ctx, fresh)
   await dropOtherSessions(row.id, ctx.session)
+  securityNotice(ctx.settings, 'passwordChanged', row, ctx.request)
   return null
 }, { permissions: [isAuthenticated, denyAgents] })
 
@@ -143,6 +146,7 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   if (n !== 1) throw bad()
   await revokeTokens(row.id)
   await dropOtherSessions(row.id)
+  securityNotice(ctx.settings, 'passwordChanged', row, ctx.request)
   return null
 }, { rate: { limit: 10, windowMs: 60_000 } })
 
@@ -210,6 +214,7 @@ export const totpDisable = defineAction('totpDisable', z.object({ password: pw()
   }
   await Totp.objects.filter({ userId: row.id }).delete()
   await RecoveryCode.objects.filter({ userId: row.id }).delete()
+  securityNotice(ctx.settings, 'twoFactorDisabled', row, ctx.request)
   return null
 }, { permissions: [isAuthenticated, denyAgents] })
 
@@ -229,6 +234,7 @@ export const createToken = defineAction('createToken', z.object({
   const { token, key, digest } = newToken()
   const expiresAt = new Date(Date.now() + days * 86_400_000)
   await Token.create({ userId: Number(u.id), name, key, digest, scopes: [...new Set(scopes)], expiresAt })
+  securityNotice(ctx.settings, 'tokenCreated', u, ctx.request, `Token name: ${name}`)
   return { token, key, name, scopes: [...new Set(scopes)], expiresAt: expiresAt.toISOString() }   // the token: shown this once
 }, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 

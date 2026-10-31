@@ -5,7 +5,9 @@ import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, Settings } from '../../core/types.js'
 import { Group, GroupPermission, Permission, User, UserGroup, UserPermission } from './models.js'
 import { makePassword, UNUSABLE, validatePassword } from './passwords.js'
-import { revokeTokens, updateSessionAuthHash, type UserRow } from './backend.js'
+import { revokeTokens, SESSION_USER, updateSessionAuthHash, type UserRow } from './backend.js'
+import { dropOtherSessions } from './sessions.js'
+import { securityNotice } from './notify.js'
 
 const NO_SETTINGS = {} as Settings
 export interface NewUser { username: string; email?: string | null; password?: string | null; isStaff?: boolean; isSuperuser?: boolean; isActive?: boolean }
@@ -41,7 +43,12 @@ export async function setPassword(userId: number, raw: string, o: { settings?: S
 // the side effects of any password write (setPassword, the admin's change form)
 export async function passwordChanged(row: { id: number; password: string }, ctx?: Pick<ActionCtx, 'session' | 'settings'>): Promise<void> {
   await revokeTokens(row.id)
-  if (ctx) updateSessionAuthHash(ctx, row)
+  if (ctx) {
+    updateSessionAuthHash(ctx, row)
+    await dropOtherSessions(row.id, ctx.session?.data.get(SESSION_USER) === String(row.id) ? ctx.session : undefined)
+    const u = await User.get(row.id)
+    if (u) securityNotice(ctx.settings, 'passwordChanged', u)
+  }
 }
 
 async function permId(codename: string): Promise<number> {

@@ -11,6 +11,7 @@ import { CHANGE } from '../admin/models.js'
 import { Group, User, UserSession } from './models.js'
 import { setPassword } from './users.js'
 import { AuthUser, recentlyAuthenticated } from './backend.js'
+import { securityNotice } from './notify.js'
 
 type UserRow = typeof User extends { create(d: never): Promise<infer R> } ? R : never
 
@@ -60,7 +61,10 @@ export class UserAdmin extends ModelAdmin<UserRow> {
     // admin password change runs setPassword once (validators + passwordChanged: tokens revoked, own session kept)
     if (obj && 'password' in values) throw new DomainError('invalid_param', 'password: use the Change password form', 'password')
     if (SENSITIVE.some((k) => k in values && (!obj || values[k] !== (obj as Record<string, unknown>)[k]))) sudo(ctx)
-    return super.saveModel(ctx, obj, values)
+    const saved = await super.saveModel(ctx, obj, values)
+    const was = obj as { email?: string | null; username?: string } | undefined
+    if (was?.email && 'email' in values && values.email !== was.email) securityNotice(ctx.settings, 'emailChanged', { username: String(was.username), email: was.email }, ctx.request)   // to the OLD address
+    return saved
   }
 
   getUrls() {
