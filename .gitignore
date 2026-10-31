@@ -11,3 +11,7 @@ dist
 
 # Claude Code personal settings
 .claude/settings.local.json
+*.db.wake
+*.db.moved
+.mcp.json
+.DS_Store
