@@ -91,6 +91,13 @@ export class Overlay {
       this.panelEl.setAttribute('role', 'dialog')
       this.root.append(style, this.wrap)
       this.host = host
+      // Page script hiding the host (hidden/inert/style/class, popover removed or closed) → undo and re-show.
+      const fix = () => {
+        for (const a of ['hidden', 'inert', 'style', 'class']) if (host.hasAttribute(a)) host.removeAttribute(a)
+        if (this.showing()) this.top(true)
+      }
+      if (typeof MutationObserver !== 'undefined') new MutationObserver(fix).observe(host, { attributes: true, attributeFilter: ['hidden', 'inert', 'style', 'class', 'popover'] })
+      host.addEventListener('toggle', (e) => { if ((e as Event & { newState?: string }).newState === 'closed') fix() })
     }
     if (!this.host.isConnected) doc.documentElement.append(this.host)
     this.top()
@@ -112,11 +119,15 @@ export class Overlay {
   // Re-promote to the top layer so it stays above page dialogs opened after us.
   raise(): void { if (this.host?.isConnected) this.top() }
 
-  private top(): void {
+
+  // onlyIfClosed: just re-open when it is not showing (no hide/show cycle, so no toggle loop).
+  private top(onlyIfClosed = false): void {
     const h = this.host as HTMLElement & { showPopover?: () => void; hidePopover?: () => void }
     if (!h.showPopover) return
-    h.setAttribute('popover', 'manual')
-    try { h.hidePopover?.(); h.showPopover() } catch { /* not connected / unsupported */ }
+    if (h.getAttribute('popover') !== 'manual') h.setAttribute('popover', 'manual')
+    const open = (() => { try { return h.matches(':popover-open') } catch { return false } })()
+    if (onlyIfClosed && open) return
+    try { if (open) h.hidePopover?.(); h.showPopover() } catch { /* not connected / unsupported */ }
   }
 
   private showing(): boolean { return !!this.host && (!this.pill.hidden || !this.ring.hidden || !this.panelEl.hidden) }

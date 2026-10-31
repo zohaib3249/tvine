@@ -143,6 +143,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     touched.set(e.id, e)
     try {
       if (POINTED.has(c.kind)) await presence.point(e.el)
+      const before = currentPage()
       const call = callControl(target, control, args, {
         via: o.via, source: o.source, cmdId, step: i, signal, presence, agent: o.agent,
         // In-tab navigate: same-site client transition, resolves after the new page settles (navigation-spa.md).
@@ -155,10 +156,11 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
       const result = await race(call, Math.min(limits.stepTimeoutMs, deadline - Date.now()), signal)
       // URL-driven control (headless {url}): answer after its navigation re-rendered the page (T3), not before
       const url = c.headless && 'url' in c.headless ? c.headless.url : undefined
-      if (url) {
-        const u = new URL(currentPage(), 'http://x'), v = args.value
-        if (v === undefined || v === null || v === '') u.searchParams.delete(url); else u.searchParams.set(url, String(v))
-        await settle(u.pathname + u.search, signal, 1_000)
+      // Waits only when the value differs from the URL's (a navigation is due): for ANY URL change (capped 1 s), then settle.
+      const had = new URL(before, 'http://x').searchParams.get(url ?? '') ?? '', want = args.value == null ? '' : String(args.value)
+      if (url && had !== want) {
+        for (const end = Date.now() + 1_000; currentPage() === before && Date.now() < end && !signal.aborted;) await new Promise((r) => setTimeout(r, 20))
+        if (currentPage() !== before) await settle(currentPage(), signal)
       }
       const now = reg.get(target)
       const s = now && agentState(now.spec)
