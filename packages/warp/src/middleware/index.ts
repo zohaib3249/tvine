@@ -85,6 +85,10 @@ export function hostAllowed(host: string, allowed: readonly string[]): boolean {
     return a === '*' || (a.startsWith('.') ? h === a.slice(1) || h.endsWith(a) : h === a)
   })
 }
+// a loopback Host from a loopback socket (a container health check, an ssh tunnel) is always fine: DNS rebinding
+// carries the attacker's name in Host, and whoever is on this machine reaches it anyway
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+const LOOPBACK_IP = /^(127\.|::1$|::ffff:127\.)/
 export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
 
 function blockList(list: unknown, name: string): BlockList {
@@ -123,7 +127,7 @@ export const CATALOG: Record<string, Factory> = {
         const h = hostOf(req, b.settings.trustProxy)
         // ponytail: no Host at all is HTTP/1.0 or a test double (node refuses HTTP/1.1 without one); only dev lets it by
         if (h === undefined && !b.production) return
-        if (h !== undefined && hostAllowed(h, allowed)) { req.tvine.host = h; return }
+        if (h !== undefined && (hostAllowed(h, allowed) || (LOOPBACK.has(h) && LOOPBACK_IP.test(req.socket?.remoteAddress ?? '')))) { req.tvine.host = h; return }
         securityEvent('host_refused', { host: String(hdr(req, 'host') ?? '').slice(0, 100), ip: req.tvine.ip, requestId: req.tvine.id, path: req.tvine.path }, { settings: b.settings, audit: false })
         send(res, 400, 'Bad Request (invalid host)')
       },

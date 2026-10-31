@@ -11,6 +11,7 @@ Commands below were run against `apps/demo-shop` unless marked otherwise.
 | Item | What to do |
 |---|---|
 | `TVINE_SECRET` | Required. 32+ random chars: `export TVINE_SECRET=$(openssl rand -hex 32)`. Without it `tvine start` and `NODE_ENV=production tvine check` exit 1 with this exact hint. It signs session-bound tokens (binds, confirm tokens). |
+| `TVINE_ALLOWED_HOSTS` | Required in production (or `settings.allowedHosts`): your domains, comma-separated (`shop.example.com,.example.com`). Unset, boot exits 1; an unknown `Host` gets a 400 (DNS rebinding, poisoned links). |
 | Secret rotation | Pass a list in `settings.ts`: the first key signs, every key verifies. `secret: [process.env.TVINE_SECRET!, process.env.TVINE_SECRET_OLD!].filter(Boolean)`. Deploy with the new key first, drop the old one after the longest token lifetime (bind expiry; confirm tokens live 2 min). |
 | `NODE_ENV` | `tvine start` sets `production` when unset (like `next start`). `tvine dev` refuses to run under `production`. |
 | Build | `pnpm build` (`next build`) before `tvine start`; without `.next/` the server runs API-only. |
@@ -23,6 +24,7 @@ Commands below were run against `apps/demo-shop` unless marked otherwise.
 
 ```bash
 export TVINE_SECRET=$(openssl rand -hex 32)
+export TVINE_ALLOWED_HOSTS=shop.example.com
 NODE_ENV=production pnpm exec tvine check     # … ok: 40 actions
 pnpm build
 pnpm start                                      # = tvine migrate && tvine start  (PORT or --port, default 3000)
@@ -188,7 +190,7 @@ Build from the repo root:
 
 ```bash
 docker build -f apps/demo-shop/Dockerfile -t tvine-demo .
-docker run -p 3000:3000 -e TVINE_SECRET=$(openssl rand -hex 32) -v tvine-data:/data tvine-demo
+docker run -p 3000:3000 -e TVINE_SECRET=$(openssl rand -hex 32) -e TVINE_ALLOWED_HOSTS=localhost -v tvine-data:/data tvine-demo
 docker run -e TVINE_SECRET=… -v tvine-data:/data tvine-demo node_modules/.bin/tvine worker
 ```
 

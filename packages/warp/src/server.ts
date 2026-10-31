@@ -115,7 +115,6 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
   const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
-  checkHosts(settings)   // AllowedHosts in production needs settings.allowedHosts
   configureLogging(settings.logging)   // Django LOGGING: getLogger(name) everywhere from here on
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
@@ -128,6 +127,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (opts.dev && isProduction()) throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
   // 1. settings (zod; missing TVINE_SECRET in prod throws). Boot lines go to stderr (stdout stays CLI output).
   const settings = await loadSettings(opts.settings)
+  checkHosts(settings)   // serving with AllowedHosts in production needs settings.allowedHosts (migrate / worker do not)
   // boot lines: stderr (stdout stays CLI output), in the configured format; logging 'none' (no handlers) = silent
   const lc = loggingConfig()
   const say = (msg: string, level: 'info' | 'warn' = 'info') => {
