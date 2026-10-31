@@ -148,19 +148,30 @@ export async function listenFree(listen: (port: number) => Promise<void>, port: 
   }
 }
 
-// next dev's lock ({pid, port, …}) for this project. Live pid → the line to print (its real listening
-// port, since older locks recorded 3000 whatever port was bound); dead pid → stale, removed.
+// next dev's lock ({pid, port, …}) for this project. A server that really holds a port → the line to print
+// (its real listening port, since older locks recorded 3000 whatever port was bound). Gone, a zombie
+// (exited, parent not reaping), or holding no port → stale: the lock is removed and dev starts normally.
 export function devRunning(lock = '.next/dev/lock'): string | undefined {
   let pid: number, port: number | undefined
   try { ({ pid, port } = JSON.parse(readFileSync(lock, 'utf8')) as { pid: number; port?: number }) } catch { return undefined }
   if (!Number.isInteger(pid) || pid <= 0) return undefined
-  try { process.kill(pid, 0) } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EPERM') { rmSync(lock, { force: true }); return undefined }
+  const stale = () => { rmSync(lock, { force: true }); return undefined }
+  try { process.kill(pid, 0) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EPERM') return stale() }
+  let state = ''
+  if (process.platform !== 'win32') {
+    try { state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { return stale() }
+    if (!state || state.startsWith('Z')) return stale()
+    try {
+      const out = execFileSync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      const bound = Number(/^n.*:(\d+)$/m.exec(out)?.[1])
+      if (!bound) return stale()
+      port = bound
+    } catch { return stale() }   // lsof exits 1 when the pid holds no listening socket
   }
-  try {
-    const out = execFileSync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    port = Number(/^n.*:(\d+)$/m.exec(out)?.[1]) || port
-  } catch { /* no lsof (Windows): the lock's port */ }
+  if (state.startsWith('T')) {
+    return `tvine dev for this project is PAUSED (pid ${pid}, stopped with Ctrl+Z) and still holds http://localhost:${port}: ` +
+      `resume it with 'fg' in its terminal, or stop it with: kill -9 ${pid}  (use Ctrl+C to stop a dev server)`
+  }
   const kill = process.platform === 'win32' ? `taskkill /PID ${pid} /F` : `kill ${pid}`
   return `tvine dev is already running for this project (pid ${pid})${port ? ` at http://localhost:${port}` : ''}; stop it with: ${kill}`
 }
