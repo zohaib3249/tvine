@@ -14,7 +14,7 @@ export interface FieldMeta {
   decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes?: number }
-  step?: number; palette?: string[]; language?: string; from?: string; of?: FieldMeta; free?: boolean; humanOnly?: boolean
+  step?: number; palette?: string[]; language?: string; from?: string; of?: Partial<FieldMeta>; free?: boolean; humanOnly?: boolean
 }
 
 // 'createdAt' → 'Created at', 'shipTo' → 'Ship to' (Django verbose_name from the attribute name)

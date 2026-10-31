@@ -58,6 +58,7 @@ export function Phone(p: FieldWidgetProps) {
   const v: string = p.value ?? ''
   const [country, setCountry] = useState(() => dialOf(v) || p.meta.choices?.[0]?.value || 'US')
   const dial = COUNTRY_DIAL.get(country) ?? ''
+  useEffect(() => { const c = dialOf(v); if (c && COUNTRY_DIAL.get(c) !== dial) setCountry(c) }, [v])   // set from outside (agent / reset)
   const shown = v.startsWith(`+${dial}`) ? v.slice(dial.length + 1) : v
   return <div className="tf-phone" data-part="phone">
     <select className="tf-input tf-phone-cc" aria-label={`${p.meta.label} country code`} value={country} disabled={p.readOnly}

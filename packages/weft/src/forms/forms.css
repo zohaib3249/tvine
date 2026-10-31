@@ -184,10 +184,6 @@
 :where(.tf-list-item) { flex: 1; min-width: 0; }
 :where(.tf-signature) { display: flex; gap: .5rem; align-items: flex-end; flex-wrap: wrap; }
 :where(.tf-signature-pad) { width: 100%; max-width: 30rem; height: auto; aspect-ratio: 48 / 14; border: 1px dashed var(--tf-border); border-radius: var(--tf-radius); background: var(--tf-subtle); color: var(--tf-fg); cursor: crosshair; }
-:where(.tf-field[data-kind=switch]) { grid-template-columns: auto 1fr; align-items: center; column-gap: .5rem; }
-:where(.tf-field[data-kind=switch] > .tf-label) { order: 2; }
-:where(.tf-field[data-kind=switch] > .tf-control) { order: 1; }
-:where(.tf-field[data-kind=switch] > .tf-hint) { order: 3; grid-column: 1 / -1; }
 @media (prefers-color-scheme: dark) {
   :where(:root:not([data-theme=light])) :where(.tf-tok-kw) { color: #c4b5fd; } :where(:root:not([data-theme=light])) :where(.tf-tok-str) { color: #6ee7b7; }
   :where(:root:not([data-theme=light])) :where(.tf-tok-num) { color: #fcd34d; } :where(:root:not([data-theme=light])) :where(.tf-tok-key) { color: #93c5fd; }

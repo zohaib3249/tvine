@@ -174,11 +174,20 @@ export function Field(props: FieldProps) {
   const readOnly = !!(props.readOnly || m.readOnly)
   const seen = useRef(new Map<string, SearchResult>())   // search results an agent saw, so choose/add keep their text
   const s = stateOf(m, value, error)
+  // Several steps in one `ui` call run before React re-renders: each run rebuilds its control from the LATEST value
+  // (what the previous step set), so add + add keeps both.
+  const latest = useRef(value); latest.current = value
+  const build = () => controlsFor(m, latest.current, (v) => { latest.current = v; onChange(v) }, seen.current, search)
+  const fresh = () => Object.fromEntries(Object.entries(build()).map(([k, c]) => [k, { ...c, run: (a: any, ctx: any) => {
+    const now = build()[k]
+    if (!now) throw bad(`${k} is not available now`)
+    return now.run(a, ctx)
+  } }]))
   const w = useWidget<FieldState>({
     id: `field:${m.name}`, name: m.name, kind: WKIND[m.kind] ?? 'input', label: m.label || m.name, state: s,
     ...(m.help && { summary: [m.help] }), sensitive: m.kind === 'password', disabled: readOnly, changesContent: true,
     ...(signLocked(m) && { humanOnly: SIGN_LOCK }),
-    controls: readOnly ? {} : applyOverrides(controlsFor(m, value, onChange, seen.current, search), props.controls),
+    controls: readOnly ? {} : applyOverrides(fresh(), props.controls),
   })
   const uid = useId(), id = `${uid}-f`
   const describedBy = [m.help && `${uid}-h`, error && `${uid}-e`].filter(Boolean).join(' ') || undefined
