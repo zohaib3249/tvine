@@ -4,11 +4,12 @@
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
 import { liveManifest, paramSpecs } from '../core/actions.js'
-import { DomainError } from '../core/errors.js'
+import { DomainError, zodErrors } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
+import { Paginator } from '../data/paginator.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
-import { hasDefault, pkField, type Field, type Kind } from '../data/fields.js'
+import { hasDefault, isAuto, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
@@ -97,7 +98,8 @@ function valueSchema(f: AnyField): z.ZodTypeAny {
     // The field's lookup()/toDb converts to cents.
     case 'money': return z.preprocess(v => (typeof v === 'string' && /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : v), z.number())
       .refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
-    case 'id': case 'int': case 'float': return num
+    case 'id': case 'int': case 'float': case 'duration': return num
+    case 'date': case 'time': case 'decimal': case 'email': case 'url': case 'slug': return f.zod()
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(toBool, z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
@@ -124,11 +126,8 @@ export function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOn
     : raw
   const r = schema.safeParse(input)
   if (r.success) return r.data
-  const i = r.error.issues[0]
-  const field = i.code === 'unrecognized_keys' ? i.keys[0] : String(i.path[0] ?? '')
-  const msg = i.code !== 'unrecognized_keys' ? `${field}: ${i.message}`
-    : readOnly?.has(field) ? `"${field}" is read-only` : `unknown param "${field}"`
-  throw new DomainError('invalid_param', msg, field)
+  const { errors, field, message } = zodErrors(r.error.issues as never, readOnly)
+  throw new DomainError('invalid_param', message, field, errors)
 }
 
 
@@ -144,6 +143,9 @@ export abstract class GenericView<T extends object = any> extends View {
   permissions: Permission[] = []                    // runtime checks (getPermissions); static ones go in rules
   pageSize = 25
   maxPageSize = 100
+  // 'cursor' (keyset, default: stable under inserts, no OFFSET scan) | 'page' (Django Paginator: ?page=N,
+  // the result carries page / numPages / total)
+  pagination: 'cursor' | 'page' = 'cursor'
   filters?: string[]                                // Django lookups; default: the model's enum/index fields
   searchFields?: string[]                           // ?q=; default: the model's searchable fields
   ordering: string[] = []                           // allowed ?sort= values (each also as '-field')
@@ -165,7 +167,12 @@ export abstract class GenericView<T extends object = any> extends View {
     return qs
   }
 
-  paginateQueryset(qs: QuerySet<T>, ctx: ViewCtx): Promise<Paginated<T>> {
+  async paginateQueryset(qs: QuerySet<T>, ctx: ViewCtx): Promise<Paginated<T>> {
+    const size = Math.min(this.pageSize, this.maxPageSize)
+    if (this.pagination === 'page') {
+      const p = await new Paginator(qs, size).page(ctx.params.page ?? 1)
+      return { items: p.items, total: p.count, pageSize: size, page: p.number, numPages: p.numPages }
+    }
     const cursor = typeof ctx.params.cursor === 'string' ? ctx.params.cursor : undefined
     return qs.page({ cursor, size: Math.min(this.pageSize, this.maxPageSize) })
   }
@@ -370,7 +377,7 @@ function defaultSerializer<T extends object>(v: GenericView<T>): Serializer<T> {
 // Write-protected by the model: readOnly, or hidden unless writeOnly; plus generated keys.
 function modelReadOnly(model: Model<any, any>): Set<string> {
   return new Set(Object.entries(model.fields as Record<string, AnyField>)
-    .filter(([, f]) => f.kind === 'id' || f.kind === 'uuid' || f.opts.auto || f.opts.readOnly || (f.opts.hidden && !f.opts.writeOnly))
+    .filter(([, f]) => f.kind === 'id' || f.kind === 'uuid' || isAuto(f.opts) || f.opts.readOnly || (f.opts.hidden && !f.opts.writeOnly))
     .map(([n, f]) => f.key(n)))
 }
 
@@ -432,14 +439,16 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const { field, op } = parseLookup(l)
       if (!op) fail(`filter "${l}": unknown lookup (use exact, __lt, __lte, __gt, __gte, __in, __contains, __ne)`)
       const f = need(`filter "${l}"`, field)
-      if (op === 'contains' && f.kind !== 'text') fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
+      if (op === 'contains' && !['text', 'email', 'url', 'slug'].includes(f.kind)) fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
       lookups[l] = lookupSchema(f, op!).optional()
     }
     const sorts = gv.ordering.flatMap(f => [f, `-${f}`])
     const listSchema = z.object({
       ...(effectiveSearch(gv).length && { q: z.string().optional() }),
       ...(sorts.length && { sort: z.enum(sorts as [string, ...string[]]).optional() }),
-      cursor: z.string().refine(c => { try { decodeCursor(c); return true } catch { return false } }, 'invalid cursor').optional(),
+      ...(gv.pagination === 'page'
+        ? { page: z.preprocess(v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v), z.number().int().min(1)).optional() }
+        : { cursor: z.string().refine(c => { try { decodeCursor(c); return true } catch { return false } }, 'invalid cursor').optional() }),
       ...lookups,
     }).strict()
     const lookupObj = z.object({ [gv.lookupParam]: valueSchema(lookupF) })

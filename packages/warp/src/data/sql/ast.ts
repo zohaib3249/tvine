@@ -23,6 +23,7 @@ export type Expr =
   | { t: 'cast'; e: Expr; to: CastTo }
   | { t: 'agg'; fn: AggFn; e?: Expr; distinct?: boolean }   // e absent = COUNT(*)
   | { t: 'trunc'; unit: TruncUnit; e: Expr }                 // UTC truncation of a datetime column, per dialect
+  | { t: 'extract'; part: DatePart; e: Expr; src: 'date' | 'datetime' }   // __year / __month / __day (int) / __date ('YYYY-MM-DD'), UTC
   | { t: 'sub'; q: Select }                                  // scalar subquery
   | { t: 'exists'; q: Select }
   | { t: 'inSub'; e: Expr; q: Select }
@@ -33,6 +34,7 @@ export type Expr =
 export type Func = 'lower' | 'upper' | 'length' | 'coalesce' | 'abs'
 export type AggFn = 'sum' | 'count' | 'avg' | 'min' | 'max'
 export type TruncUnit = 'year' | 'month' | 'day'
+export type DatePart = 'year' | 'month' | 'day' | 'date'
 // a fixed portable type, or (postgres only) a column type from Field.dbType — never user text
 export type CastTo = 'int' | 'float' | 'text' | { db: string }
 export type Nulls = 'first' | 'last'
@@ -41,7 +43,7 @@ export type Join = { table: string; alias: string; on: Expr; inner?: boolean }
 export type ForUpdate = { nowait?: boolean; skipLocked?: boolean; of?: string[] }
 export type Select = {
   t: 'select'; from: string | Select; as?: string; cols?: Expr[]; joins?: Join[]; where?: Expr
-  groupBy?: Expr[]; having?: Expr; order?: OrderTerm[]; limit?: number
+  groupBy?: Expr[]; having?: Expr; order?: OrderTerm[]; limit?: number; offset?: number
   distinct?: boolean; distinctOn?: Expr[]; forUpdate?: ForUpdate
 }
 // rows: multi-row VALUES (bulkCreate); values: one row. ignoreConflicts: ON CONFLICT DO NOTHING (pg / sqlite)

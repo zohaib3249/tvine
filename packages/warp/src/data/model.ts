@@ -1,10 +1,10 @@
 // defineModel: one field definition → zod schema, columns, and Model.objects.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { DomainError } from '../core/errors.js'
+import { DomainError, zodErrors } from '../core/errors.js'
 import { QuerySet } from './queryset.js'
 import { aggregateRows, atomic, bulkUpdate, engineSource, existsRows, insertMany, insertRow } from './engine.js'
-import { concrete, hasDefault, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
+import { concrete, hasDefault, isAuto, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
 import { defineChecked } from './registry.js'
 import { prefetch, related, type RelatedManager } from './related.js'
 import { checkIdent } from './sql/dialect.js'
@@ -43,15 +43,15 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
   const prepare = (data: Record<string, unknown>) => {
     const r = input.safeParse(data)
     if (!r.success) {
-      const i = r.error.issues[0]
-      throw new DomainError('invalid_param', `${name}.${i.path.join('.')}: ${i.message}`, String(i.path[0]))
+      const { errors, field } = zodErrors(r.error.issues as never)
+      throw new DomainError('invalid_param', r.error.issues.map(i => `${name}.${i.path.join('.')}: ${i.message}`).join('; '), field, errors)
     }
     const row: Record<string, unknown> = { ...r.data }
     for (const [n, f] of concrete(fields)) {
       const k = keyOf(n, f)
       if (row[k] !== undefined) continue
       if (f.kind === 'uuid') row[k] = randomUUID()
-      else if (f.opts.auto && f.kind === 'datetime') row[k] = new Date()
+      else if (isAuto(f.opts) && (f.kind === 'datetime' || f.kind === 'date')) row[k] = new Date()
       else if (f.opts.default !== undefined) row[k] = f.opts.default
     }
     return row
@@ -72,7 +72,10 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
     create: async data => insertRow(def, prepare(data as Record<string, unknown>)),
     get: id => source.get(id),
     async update(id, patch) {
-      const n = await objects.filter({ id }).update(patch)
+      // Django auto_now: Model.update is save(); a QuerySet.update() leaves the field alone (Django too)
+      const now: Record<string, unknown> = {}
+      for (const [n, f] of concrete(fields)) if (f.opts.autoNow && !(keyOf(n, f) in patch)) now[keyOf(n, f)] = new Date()
+      const n = await objects.filter({ id }).update({ ...now, ...patch })
       const row = n ? await source.get(id) : undefined
       if (!row) throw new DomainError('domain', `${name} ${id} not found`)
       return row

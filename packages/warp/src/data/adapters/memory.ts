@@ -82,7 +82,8 @@ export function memorySource<T extends { id: string | number }>(items: T[]): Dat
         if (cv.length !== order.length) throw new DomainError('invalid_param', 'invalid cursor', 'cursor')
         rows = rows.filter(r => cmpKeys(keys(r, order), cv, order) > 0)
       }
-      return { items: rows.slice(0, spec.limit) as unknown as T[], total }
+      const from = spec.offset ?? 0
+      return { items: rows.slice(from, from + spec.limit) as unknown as T[], total }
     },
     async get(id) {
       return items.find(x => x.id === id)

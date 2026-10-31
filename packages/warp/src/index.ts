@@ -1,5 +1,6 @@
 export { defineModel, modelRegistry, type Model } from './data/model.js'
 export { field, inc, dec, type Infer } from './data/fields.js'
+export { Paginator, type Page } from './data/paginator.js'
 export {
   F, Q, Value, Case, When, Coalesce, Lower, Upper, Length, Abs, Cast, TruncDay, TruncMonth, TruncYear,
   Sum, Count, Avg, Min, Max, Exists, OuterRef, Subquery, Prefetch, CheckConstraint, UniqueConstraint,
@@ -16,7 +17,7 @@ export {
 } from './views/generic.js'
 export { ANONYMOUS } from './core/types.js'
 export type {
-  Sid, Rev, NodeId, ActionId, Node, ActionRef, Link, Snapshot, Command, Event, ErrCode, ChannelLayer,
+  Sid, Rev, NodeId, ActionId, Node, ActionRef, Link, Snapshot, Command, Event, ErrCode, FieldError, ChannelLayer,
   ReadonlyHeaders, TvineUser, UploadedFile, Request, Session, ActionCtx, PermissionCtx, Permission,
   Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'

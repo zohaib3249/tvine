@@ -46,10 +46,14 @@ export interface Command {
   agentCmd?: { cmdId?: string; via?: string }
 }
 
+// one bad field of an err (Django ValidationError: field → messages). code: the validator ('invalid_type', 'too_small', 'unknown', …)
+export interface FieldError { field: string; code?: string; message: string }
+
 export type Event =
   | { kind: 'snapshot'; snapshot: Snapshot }
   | { kind: 'ok'; action: ActionId; result?: unknown }
   | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot
+      errors?: FieldError[]         // every bad field (Django ValidationError dict); `field` = the first, kept for compatibility
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }

@@ -1,7 +1,7 @@
 // A dialect is thin: quoting, param style, transaction semantics, AST → SQL text.
 // Per-DB column types and value conversions live on each Field (data/fields/*).
 import { createHash } from 'node:crypto'
-import { RAW, type CastTo, type Func, type OrderTerm, type Select, type SqlNode, type TruncUnit } from './ast.js'
+import { RAW, type CastTo, type DatePart, type Func, type OrderTerm, type Select, type SqlNode, type TruncUnit } from './ast.js'
 import type { Operation } from '../schema/operations.js'
 import type { ProjectState } from '../schema/state.js'
 
@@ -78,6 +78,23 @@ function trunc(unit: TruncUnit, inner: string, d: Dialect): string {
   return `DATE_FORMAT(${inner}, '${MYSQL_FMT[unit]}')`
 }
 
+// date part of a date / datetime column, in UTC (datetimes: sqlite epoch ms, pg TIMESTAMPTZ, mysql
+// DATETIME(3) holding UTC). Integer for year / month / day; 'YYYY-MM-DD' text / DATE for date.
+const SQLITE_PART = { year: '%Y', month: '%m', day: '%d', date: '%Y-%m-%d' } as const
+const MYSQL_PART = { year: 'YEAR', month: 'MONTH', day: 'DAYOFMONTH', date: 'DATE' } as const
+function extract(part: DatePart, inner: string, src: 'date' | 'datetime', d: Dialect): string {
+  if (!(part in SQLITE_PART)) throw new Error(`unknown date part ${JSON.stringify(part)}`)
+  if (d.name === 'sqlite') {
+    const s = `strftime('${SQLITE_PART[part]}', ${src === 'datetime' ? `(${inner}) / 1000.0, 'unixepoch'` : inner})`
+    return part === 'date' ? s : `CAST(${s} AS INTEGER)`
+  }
+  if (d.name === 'postgres') {
+    const x = src === 'datetime' ? `(${inner} AT TIME ZONE 'UTC')` : inner
+    return part === 'date' ? `CAST(${x} AS DATE)` : `CAST(EXTRACT(${part.toUpperCase()} FROM ${x}) AS INTEGER)`
+  }
+  return `${MYSQL_PART[part]}(${inner})`
+}
+
 export interface RenderOpts {
   // DDL cannot take params (CHECK constraints, partial-index conditions): values render as the
   // dialect's checked literals instead (numbers / quote-escaped strings / booleans / null / dates)
@@ -105,6 +122,10 @@ export function renderNode(node: SqlNode, d: Dialect, opts: RenderOpts = {}): St
     if (x.having) s += ` HAVING ${e(x.having)}`
     if (x.order?.length) s += ` ORDER BY ${x.order.map(order).join(', ')}`
     if (x.limit !== undefined) s += ` LIMIT ${e({ t: 'param', value: x.limit })}`
+    if (x.offset) {   // OFFSET needs a LIMIT on sqlite / mysql: their documented "no limit" spellings
+      if (x.limit === undefined && d.name !== 'postgres') s += d.name === 'sqlite' ? ' LIMIT -1' : ' LIMIT 18446744073709551615'
+      s += ` OFFSET ${e({ t: 'param', value: x.offset })}`
+    }
     if (x.forUpdate && d.name !== 'sqlite') {   // sqlite: no-op — BEGIN IMMEDIATE already holds its single writer lock
       const f = x.forUpdate
       s += ` FOR UPDATE${f.of?.length ? ` OF ${f.of.map(q).join(', ')}` : ''}${f.nowait ? ' NOWAIT' : f.skipLocked ? ' SKIP LOCKED' : ''}`
@@ -125,6 +146,7 @@ export function renderNode(node: SqlNode, d: Dialect, opts: RenderOpts = {}): St
         return `${x.fn.toUpperCase()}(${x.distinct ? 'DISTINCT ' : ''}${x.e ? e(x.e) : '*'})`
       }
       case 'trunc': return trunc(x.unit, e(x.e), d)
+      case 'extract': return extract(x.part, e(x.e), x.src, d)
       case 'sub': return `(${select(x.q)})`
       case 'exists': return `EXISTS (${select(x.q)})`
       case 'inSub': return `${e(x.e)} IN (${select(x.q)})`

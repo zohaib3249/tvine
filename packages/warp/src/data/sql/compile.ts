@@ -6,7 +6,7 @@
 import { DomainError } from '../../core/errors.js'
 import { decodeCursor, MAX_IN, type Order, type QuerySpec, type Where } from '../queryset.js'
 import {
-  concrete, DatetimeField, FloatField, IntField, MoneyField, pkField, TextField, BoolField, type Field, type Fields, type Kind, type ModelDef,
+  concrete, DateField, DatetimeField, FloatField, IntField, MoneyField, pkField, TextField, BoolField, type Field, type Fields, type Kind, type ModelDef,
 } from '../fields/index.js'
 import {
   and, bin, col, fn, FALSE, inList, isNotNull, isNull, like, not, or, param, qcol, raw, as, agg as aggNode, castText,
@@ -47,11 +47,13 @@ const needCur = (c: Compiled, what: string): Expr => {
 }
 const sameExpr = (a?: Expr, b?: Expr) => JSON.stringify(a) === JSON.stringify(b)
 
-const OUT = { int: new IntField(), float: new FloatField(), text: new TextField(), bool: new BoolField(), datetime: new DatetimeField() }
+const OUT = { int: new IntField(), float: new FloatField(), text: new TextField(), bool: new BoolField(), datetime: new DatetimeField(), date: new DateField() }
+// Django date transforms: `createdAt__year: 2024`, `createdAt__date__gte: '2024-01-01'` (UTC)
+const TRANSFORMS = new Set(['year', 'month', 'day', 'date'])
 const NUMERIC = new Set<Kind>(['int', 'float', 'money', 'id'])
 const LOOKUPS = new Set(['eq', 'exact', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'icontains', 'isnull',
-  'startswith', 'istartswith', 'endswith', 'iendswith'])
-type LeafOp = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains' | 'isnull' | 'startswith' | 'endswith'
+  'startswith', 'istartswith', 'endswith', 'iendswith', 'iexact', 'range'])
+type LeafOp = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains' | 'isnull' | 'startswith' | 'endswith' | 'iexact' | 'range'
 const CMP: Partial<Record<LeafOp, BinOp>> = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' }
 const escLike = (s: string) => s.toLowerCase().replace(/[\\%_]/g, '\\$&')
 
@@ -339,6 +341,12 @@ export class Scope {
     if (parts.length === 2 && parts[1] === 'currency' && this.t.fields[name]?.kind === 'money') {
       return this.compare(this.q8(this.t.fields[name].columns(name)[1]), OUT.text, op, value, key)
     }
+    const tf = this.t.fields[name]
+    if (parts.length === 2 && TRANSFORMS.has(parts[1]) && (tf?.kind === 'date' || tf?.kind === 'datetime')) {
+      const part = parts[1] as 'year' | 'month' | 'day' | 'date'
+      const e: Expr = { t: 'extract', part, e: this.field(name).col, src: tf.kind }
+      return this.compare(e, part === 'date' ? OUT.date : OUT.int, op, value, key)
+    }
     if (parts.length > 1) {
       if (this.t.fields[name] || Object.entries(this.t.fields).some(([n, f]) => f.key(n) === name)) throw invalid(`unsupported lookup "${parts.slice(1).join('__')}" on ${this.t.name}.${name}`, key)
       throw invalid(`unknown relation "${name}" on ${this.t.name}`, key)
@@ -390,6 +398,17 @@ export class Scope {
       const b = CMP[op]
       if (!b) throw invalid(`${key}: ${op} cannot compare to an expression`, key)
       return { e: bin(b, lhs, rhs.e), subject: lhs }
+    }
+    if (op === 'range') {   // Django __range: inclusive BETWEEN, each bound through the field
+      if (!Array.isArray(value) || value.length !== 2 || value.some(v => v == null)) throw invalid(`${key}: __range takes [low, high]`, key)
+      const lk = f ?? OUT.float
+      return { e: named2(key, () => and(lk.lookup('gte', lhs, value[0], this.d), lk.lookup('lte', lhs, value[1], this.d))), subject: lhs }
+    }
+    if (op === 'iexact') {  // Django __iexact: case-insensitive equality (LIKE with every wildcard escaped)
+      if (value == null) return { e: isNull(lhs), nullAware: true }
+      if (typeof value !== 'string') throw invalid(`${key}: iexact needs a string`, key)
+      if (f?.kind === 'money') throw invalid(`money does not support iexact`, key)
+      return { e: and(isNotNull(lhs), like(castText(lhs), param(escLike(value)), true)), subject: lhs }
     }
     if (op === 'startswith' || op === 'endswith') {
       if (typeof value !== 'string') throw invalid(`${key}: ${op} needs a string`, key)
@@ -648,7 +667,8 @@ export function compileQuery(spec: QuerySpec, t: TableDef, d: Dialect): Compiled
   const count: Select = needSub
     ? { t: 'select', from: { ...select, where: base.where, having: base.having, order: undefined, limit: undefined, forUpdate: undefined, ...(select.cols ? {} : { cols: [raw('1')] }) }, as: 'c', cols: [fn('count', raw('*'))] }
     : { t: 'select', from: t.name, cols: [fn('count', raw('*'))], ...(select.joins ? { joins: select.joins } : {}), ...(base.where ? { where: base.where } : {}) }
-  return { count, page: spec.limit > 0 ? select : undefined, plan }
+  if (spec.offset && spec.cursor) throw invalid('a cursor page cannot also be sliced (offset)', 'cursor')
+  return { count, page: spec.limit > 0 ? (spec.offset ? { ...select, offset: spec.offset } : select) : undefined, plan }
 }
 
 // The plain read path (unchanged contract): a count over the filter, plus the page.

@@ -2,14 +2,14 @@
 // its columns, per-DB types, value conversion and lookups; this file adds the TS-level row types.
 import { z } from 'zod'
 import {
-  BoolField, DatetimeField, EnumField, FkField, FloatField, IdField, ImageField, IntField, JsonField,
-  M2MField, MoneyField, TextField, UuidField, concrete, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
+  BoolField, DateField, DatetimeField, DecimalField, DurationField, EmailField, EnumField, FileField, FkField, FloatField, IdField,
+  ImageField, IntField, JsonField, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
 } from './fields/index.js'
 
-export { concrete, keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type ModelMeta, type Money, type OnDelete, type Opts } from './fields/index.js'
+export { concrete, isAuto, keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type ModelMeta, type Money, type OnDelete, type Opts } from './fields/index.js'
 
 type OptOf<P extends Opts | undefined> = P extends { optional: true } ? true : false
-type DefOf<P extends Opts | undefined> = P extends { default: unknown } | { auto: true } ? true : false
+type DefOf<P extends Opts | undefined> = P extends { default: unknown } | { auto: true } | { autoNow: true } | { autoNowAdd: true } ? true : false
 type Typed<V, K extends Kind, P extends Opts | undefined> = Field<V, OptOf<P>, K, DefOf<P>>
 const mk = <V, K extends Kind>(C: new (opts?: Opts) => Field<any, boolean, K, boolean>) =>
   <const P extends Opts | undefined = undefined>(opts?: P) => new C(opts ?? {}) as unknown as Typed<V, K, P>
@@ -25,6 +25,15 @@ export const field = {
   datetime: mk<Date, 'datetime'>(DatetimeField),
   json: mk<unknown, 'json'>(JsonField),
   image: mk<string, 'image'>(ImageField),
+  // Django DateField / TimeField / DurationField / DecimalField / EmailField / URLField / SlugField / FileField
+  date: mk<string, 'date'>(DateField),             // 'YYYY-MM-DD'
+  time: mk<string, 'time'>(TimeField),             // 'HH:MM:SS[.ffffff]'
+  duration: mk<number, 'duration'>(DurationField), // milliseconds
+  decimal: mk<string, 'decimal'>(DecimalField),    // '12.50' (maxDigits / decimalPlaces)
+  email: mk<string, 'email'>(EmailField),
+  url: mk<string, 'url'>(UrlField),
+  slug: mk<string, 'slug'>(SlugField),
+  file: mk<string, 'file'>(FileField),             // storage key; upload with defineUpload({ uploadTo })
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
     new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>
@@ -53,7 +62,7 @@ export function rowSchema(def: { fields: Fields }): z.ZodObject<z.ZodRawShape> {
 
 // Fields a caller may leave out on create.
 export const hasDefault = (f: Field<any, boolean, Kind, boolean>) =>
-  f.kind === 'id' || f.kind === 'uuid' || f.opts.optional || f.opts.default !== undefined || f.opts.auto
+  f.kind === 'id' || f.kind === 'uuid' || f.opts.optional || f.opts.default !== undefined || isAuto(f.opts)
 
 // SQL-level expression values for QuerySet.update: `col = col - n` / `col = col + n` (F('x').sub(n) is the general form).
 export class Expr { constructor(readonly op: 'inc' | 'dec', readonly n: number) {} }

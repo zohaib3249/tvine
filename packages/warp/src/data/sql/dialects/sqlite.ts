@@ -3,7 +3,7 @@
 // COLUMN refuses) rebuild the table; the runner runs that with foreign keys off + foreign_key_check.
 import { bin, col, param, type SqlNode } from '../ast.js'
 import { checkIdent, renderNode, type Dialect, type Statement } from '../dialect.js'
-import { ddlLiteral } from '../../fields/base.js'
+import { ddlLiteral, isAuto } from '../../fields/base.js'
 import { columnsChanged, columnsOf, createIndexStmt, createTable, defaultRender, indexesOf, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, modelDef, type FieldSpec, type ProjectState } from '../../schema/state.js'
 
@@ -29,7 +29,7 @@ export function rebuildTable(model: string, from: ProjectState, to: ProjectState
   const def = modelDef(to, model)
   // a new auto datetime column is backfilled with the migration time
   const fill = Object.entries(def.fields)
-    .filter(([n, f]) => f.kind === 'datetime' && f.opts.auto && !old.has(n))
+    .filter(([n, f]) => (f.kind === 'datetime' || f.kind === 'date') && isAuto(f.opts) && !old.has(n))
     .map(([n, f]): [string, ReturnType<typeof param>] => [n, param(f.toDb(new Date(), sqlite)[0])])
   // ids are never reused after a rebuild: copy the old table's sqlite_sequence row
   const seq: Statement[] = def.fields.id?.kind === 'id' ? [
