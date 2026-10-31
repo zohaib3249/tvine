@@ -1,0 +1,7 @@
+next-env.d.ts
+tsconfig.tsbuildinfo
+*.db-shm
+*.db-wal
+media/
+tasks.db.wake
+tasks.db.moved
