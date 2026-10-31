@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 // which are set — names only, never values.
 export const FRAMEWORK_ENV = [
   'NODE_ENV', 'TVINE_SECRET', 'DATABASE_URL', 'REDIS_URL', 'TVINE_ALLOWED_HOSTS', 'TVINE_DEBUG', 'TVINE_TRUST_PROXY',
-  'TVINE_SESSION_SECURE', 'PORT', 'HOST', 'TVINE_API_URL', 'TVINE_COOKIE_NAME', 'TVINE_SESSION_TTL_S', 'TVINE_SUPERUSER_USERNAME',
+  'TVINE_SESSION_SECURE', 'TVINE_LOAD_DOTENV', 'PORT', 'HOST', 'TVINE_API_URL', 'TVINE_COOKIE_NAME', 'TVINE_SESSION_TTL_S', 'TVINE_SUPERUSER_USERNAME',
   'TVINE_SUPERUSER_EMAIL', 'TVINE_SUPERUSER_PASSWORD', 'WEB_CONCURRENCY', 'NODE_APP_INSTANCE', 'pm_id',
 ] as const
 
@@ -65,17 +65,24 @@ export const defaultNodeEnv = (v: string): void => { process.env.NODE_ENV ||= v 
 // for the CLI only: `tvine dev` turns debug on unless TVINE_DEBUG says otherwise
 export const defaultEnv = (name: string, v: string): void => { process.env[name] ??= v }
 
+// Names a .env file supplied (not the real environment): production refuses TVINE_DEBUG from one
+export const fromDotenv = new Set<string>()
+
 // .env files, Django-environ style: loaded when present, never overriding a variable already set by the real
 // environment. First found wins per variable: .env.<NODE_ENV>.local, .env.local, .env.<NODE_ENV>, .env.
-// (.env.local is skipped under NODE_ENV=test, like Next.) Returns the files loaded.
+// (.env.local is skipped under NODE_ENV=test, like Next.) Production: never, unless TVINE_LOAD_DOTENV=1 (a real
+// env var: settings.ts is read after the files, so it cannot switch them on). Returns the files loaded.
 export function loadDotenv(dir = process.cwd()): string[] {
   const ne = process.env.NODE_ENV
+  if (ne === 'production' && !/^(1|true|yes|on)$/i.test(process.env.TVINE_LOAD_DOTENV ?? '')) return []
+  const before = new Set(Object.keys(process.env))
   const names = [ne && `.env.${ne}.local`, ne !== 'test' && '.env.local', ne && `.env.${ne}`, '.env'].filter((f): f is string => !!f)
   const out: string[] = []
   for (const f of names) {
     const p = resolve(dir, f)
     if (existsSync(p)) { process.loadEnvFile(p); out.push(f) }
   }
+  for (const k of Object.keys(process.env)) if (!before.has(k)) fromDotenv.add(k)
   return out
 }
 

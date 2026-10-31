@@ -33,6 +33,7 @@ export interface Logger {
   child(fields: Record<string, unknown>): Logger   // bound fields (requestId, userId, sidHash) on every record
 }
 
+const RESERVED = new Set(['t', 'time', 'level', 'logger', 'msg', 'fields'])
 const RANK: Record<Level | 'off', number> = { debug: 10, info: 20, warn: 30, error: 40, off: 99 }
 export const LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
@@ -78,7 +79,7 @@ function writeFile(h: Extract<LogHandler, { type: 'file' }>, line: string, files
   let st = files.get(h.path)
   const day = new Date().toISOString().slice(0, 10)
   if (!st) {
-    mkdirSync(dirname(h.path), { recursive: true })
+    mkdirSync(dirname(h.path), { recursive: true, mode: 0o700 })
     let size = 0, d = day
     try { const s = statSync(h.path); size = s.size; d = s.mtime.toISOString().slice(0, 10) } catch { /* new file */ }
     st = { size, day: d }
@@ -92,7 +93,7 @@ function writeFile(h: Extract<LogHandler, { type: 'file' }>, line: string, files
     if (keep > 0) renameSync(h.path, `${h.path}.1`); else rmSync(h.path, { force: true })
     st.size = 0
   }
-  appendFileSync(h.path, `${line}\n`)
+  appendFileSync(h.path, `${line}\n`, { mode: 0o600 })   // logs may still hold personal data: owner-only
   st.size += bytes
   st.day = day
 }
@@ -100,7 +101,12 @@ function writeFile(h: Extract<LogHandler, { type: 'file' }>, line: string, files
 function emit(name: string, level: Level, msg: string, fields: Record<string, unknown>): void {
   const s = state(), cfg = s.cfg
   if (!cfg.handlers.length || RANK[level] < levelOf(name, cfg)) return
-  const r = { t: new Date().toISOString(), level, logger: name, msg, ...(redactSecrets(fields, 0, s.extra) as object) } as LogRecord
+  // msg first scrubbed like any value; user fields can never overwrite the record's own keys (they nest under `fields`)
+  const clean = redactSecrets(fields, 0, s.extra) as Record<string, unknown>
+  const clash = Object.keys(clean).filter((k) => RESERVED.has(k))
+  const nested = clash.length ? { fields: Object.fromEntries(clash.map((k) => [k, clean[k]])) } : {}
+  for (const k of clash) delete clean[k]
+  const r = { ...clean, ...nested, t: new Date().toISOString(), level, logger: name, msg: redactSecrets(msg) as string } as LogRecord
   for (const h of cfg.handlers) {
     if (h.level && RANK[level] < RANK[h.level]) continue
     try {

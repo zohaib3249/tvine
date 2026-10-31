@@ -5,6 +5,7 @@ import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { audited, auditRow, securityEvent, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
+import { forwardedHost } from './request.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -225,7 +226,7 @@ export function cookieOf(r: Request, s: Settings): string | undefined {
 // No Origin (curl, SDKs, MCP clients) passes. A foreign Origin passes only where settings.cors opted it in
 // for this endpoint + method (core/cors-match corsAllows); the human <Form> path never.
 // the public host of the request (X-Forwarded-Host only through trusted proxies)
-const hostOf = (r: Request, s: Settings) => ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase() || undefined
+const hostOf = (r: Request, s: Settings) => forwardedHost((n) => r.headers.get(n), s.trustProxy) || undefined   // X-Forwarded-Host per trusted hops
 
 export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')

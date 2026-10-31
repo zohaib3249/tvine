@@ -184,7 +184,7 @@ export class Worker {
     const parsed = task.schema.safeParse(job.args)
     if (!parsed.success) return this.final(r, 'dead', { error: `invalid args: ${parsed.error.issues[0]?.message ?? 'rejected'}` })
 
-    this.log('info', 'job.start', { ...base, ...(task.opts.logArgs && { args: job.args }) })
+    this.log('info', 'job.start', { ...base, ...(task.opts.logArgs && { args: redactSecrets(job.args) }) })
     const parent = job.parentId ? await this.broker.get(job.parentId) : undefined
     const ctx: TaskCtx = {
       jobId: job.id, task: job.task, attempt: job.attempts, queue: job.queue, signal: r.ac.signal,

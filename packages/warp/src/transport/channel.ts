@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ChannelLayer, Event, Settings } from '../core/types.js'
 import type { SessionStore } from '../core/session.js'
-import { clientIp } from '../core/request.js'
+import { clientIp, isLocalRequest } from '../core/request.js'
 import { ev } from '../core/events.js'
 import { RING } from '../core/channels.js'
 import { render } from '../serialize/envelope.js'
@@ -24,20 +24,11 @@ export interface ChannelDeps {
   tabs?: TabHub                       // transport/tab: `?tab=` cookie streams become controllable tabs
 }
 
-const LOOPBACK = new Set(['127.0.0.1', '::1'])
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
-// DNS rebinding: a foreign page resolving its own name to 127.0.0.1 still sends its own Host.
-const localHost = (h: string | undefined) => {
-  try { return h !== undefined && LOCAL_HOSTS.has(new URL(`http://${h}`).hostname) } catch { return false }
-}
 
 // The inspector rule (dev surfaces only): socket loopback (never X-Forwarded-For), no proxy header (a local reverse
 // proxy makes every client look like 127.0.0.1), and a loopback Host. `listen(port)` binds every interface.
-export function localOnly(req: IncomingMessage): boolean {
-  const hdr = (n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
-  const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
-  return !proxied && LOOPBACK.has(clientIp(null, req.socket.remoteAddress ?? '', 0)) && localHost(hdr('host'))
-}
+// The same rule as metrics / health details: core/request.ts isLocalRequest (any x-forwarded-* also counts as proxied).
+export const localOnly = (req: IncomingMessage): boolean => isLocalRequest(req, { trustProxy: 0 })
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
   for (const part of (header ?? '').split(';')) {

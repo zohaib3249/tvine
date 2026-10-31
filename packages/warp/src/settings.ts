@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { env, isProduction } from './env.js'
+import { env, fromDotenv, isProduction } from './env.js'
 import { LEVELS } from './log.js'
 import type { AuthSettings, CacheSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
 
@@ -259,7 +259,9 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
     merged.middleware = http.length || !action.length ? http : DEFAULT_MIDDLEWARE
   }
   if (rest.allowedHosts === undefined && env.has('TVINE_ALLOWED_HOSTS')) merged.allowedHosts = env.list('TVINE_ALLOWED_HOSTS')
-  if (rest.debug === undefined) merged.debug = env.has('TVINE_DEBUG') ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
+  // production: DEBUG only from the real environment, never from a .env file that shipped with the code
+  const debugEnv = env.has('TVINE_DEBUG') && !(prod && fromDotenv.has('TVINE_DEBUG'))
+  if (rest.debug === undefined) merged.debug = debugEnv ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
   // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
   if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
   const settings = schema.parse(merged)

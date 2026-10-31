@@ -32,7 +32,7 @@ export interface HttpOptions {
 // One header lookup + one accept scan for human traffic.
 export function isAgent(req: IncomingMessage, settings: Settings): boolean {
   if (req.headers[settings.header.toLowerCase()] !== undefined) return true
-  const a = req.headers.accept
+  const a = req.headers.accept?.toLowerCase()   // media types are case-insensitive (RFC 9110 §8.3.1)
   return a !== undefined && (a.includes('text/tvine') || a.includes('application/tvine+json'))
 }
 

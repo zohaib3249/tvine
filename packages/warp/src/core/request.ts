@@ -48,10 +48,42 @@ function normalizeIp(raw: string): string {
 
 // A direct local request (metrics + health details): the socket itself is loopback, nothing claims to be forwarded,
 // and no proxy is trusted — a same-host proxy would otherwise make every request look local.
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+// The Host must be a loopback name too: a foreign page rebinding its own name to 127.0.0.1 still sends its own Host.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+const LOOPBACK_SOCKET = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/
+export const loopbackHost = (h: string | string[] | undefined): boolean => {
+  try { return typeof h === 'string' && LOOPBACK_HOSTS.has(new URL(`http://${h}`).hostname) } catch { return false }
+}
 export const isLocalRequest = (req: IncomingMessage, settings: Pick<Settings, 'trustProxy'>): boolean =>
-  settings.trustProxy === 0 && LOOPBACK.has(req.socket.remoteAddress ?? '') &&
+  settings.trustProxy === 0 && LOOPBACK_SOCKET.test(req.socket?.remoteAddress ?? '') && loopbackHost(req.headers.host) &&
   !Object.keys(req.headers).some((h) => h.startsWith('x-forwarded-') || h === 'forwarded' || h === 'x-real-ip')
+
+// The Host a request reached us by: X-Forwarded-Host walked right-to-left exactly `trustProxy` hops (the same rule
+// as clientIp / X-Forwarded-For; fewer entries = the Host header), else Host. Lowercase, port kept; undefined = none.
+export function forwardedHost(get: (n: string) => string | null | undefined, trustProxy: number): string | undefined {
+  if (trustProxy > 0) {
+    const parts = String(get('x-forwarded-host') ?? '').split(',').map((x) => x.trim()).filter(Boolean)
+    const pick = parts[parts.length - trustProxy]
+    if (pick) return pick.toLowerCase()
+  }
+  return get('host')?.toLowerCase() ?? undefined
+}
+const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
+export const forwardedHostOf = (req: IncomingMessage, trustProxy: number) => forwardedHost((n) => first(req.headers[n]), trustProxy)
+
+// The path every path rule matches (middleware lists, guards): percent-decoded, `\` as `/`, dot segments collapsed,
+// duplicate slashes merged — what Next routes. Repeated until stable (a decoded %2F can create new segments).
+export function normalizePath(raw: string): string {
+  let p = raw.split('?')[0]!.split('#')[0]! || '/'
+  for (let i = 0; i < 4; i++) {
+    // slashes merged BEFORE parsing: '//x' would otherwise parse as a host
+    let next = new URL(`/${p.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/{2,}/g, '/')}`, 'http://n').pathname
+    try { next = decodeURIComponent(next) } catch { /* malformed escape: keep the encoded form */ }
+    if (next === p) break
+    p = next
+  }
+  return p
+}
 
 // Walk X-Forwarded-For right-to-left exactly `hops` steps; never trust entries further left.
 // Fewer entries than hops -> socket address: DELIBERATE fail-closed (the leftmost entry would

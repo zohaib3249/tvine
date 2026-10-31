@@ -14,7 +14,7 @@ import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
-import { buildRequest, clientIp, isLocalRequest } from './core/request.js'
+import { buildRequest, clientIp, forwardedHostOf, isLocalRequest, normalizePath } from './core/request.js'
 import { cookieOpts } from './core/session.js'
 import { metrics, since } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
@@ -300,6 +300,40 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     : p.startsWith('/tvine/tab/') || p.startsWith('/tvine/agent/') ? 'tab' : p.startsWith('/tvine/api/') ? 'api'
     : urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })() ? 'urls'
     : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
+  // req.tvine: what every HTTP middleware reads. path = the normalized path (what Next routes), so a path rule
+  // can't be stepped around with /x/../staff, //staff or %2e%2e
+  const stateOf = (req: IncomingMessage, ours: boolean, onHeaders: (fn: () => void) => void): MwRequest['tvine'] => {
+    const st: MwRequest['tvine'] = {
+      path: normalizePath(req.url ?? '/'), https: httpsOf(req, settings), start: performance.now(), ours, compression: false,
+      ip: clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy), onHeaders, log: reqLog,
+    }
+    ;(req as MwRequest).tvine = st
+    return st
+  }
+  // absolute-form targets (GET http://h/x HTTP/1.1, proxy style) only for this very Host; rewritten to origin form
+  const originForm = (req: IncomingMessage): boolean => {
+    const url = req.url ?? '/'
+    if (url.startsWith('/') || url === '*') return true
+    let u: URL
+    try { u = new URL(url) } catch { return false }
+    if (!/^https?:$/.test(u.protocol) || u.host.toLowerCase() !== forwardedHostOf(req, 0)) return false
+    req.url = `${u.pathname}${u.search}`
+    return true
+  }
+  // the gate for websocket upgrades: AllowedHosts + IpFilter run before the upgrade is handed on
+  const gates = mws.filter((m) => m.name === 'AllowedHosts' || m.name === 'IpFilter')
+  const upgradeOk = async (req: IncomingMessage, socket: Duplex): Promise<boolean> => {
+    if (!originForm(req)) { socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n'); return false }
+    stateOf(req, true, () => {})
+    let status = 0
+    const res = { headersSent: false, writableEnded: false, destroyed: false, destroy: () => { status = 400 },
+      writeHead(s: number) { status = s; return res }, setHeader() {}, end() { this.writableEnded = true; return res } }
+    for (const m of gates) {
+      await m.processRequest?.(req as MwRequest, res as never)
+      if (status) { socket.end(`HTTP/1.1 ${status} ${status === 403 ? 'Forbidden' : 'Bad Request'}\r\nconnection: close\r\n\r\n`); return false }
+    }
+    return true
+  }
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}
@@ -316,14 +350,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      if (!originForm(req)) { res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' }).end('Bad Request (request target)'); return }
       // embedded: CORS only for paths this server answers; the host app's own paths are the host's business
-      const https = httpsOf(req, settings)
       const headerFns: (() => void)[] = []
-      const st: MwRequest['tvine'] = {
-        path: pathOf(req), https, start: performance.now(), ours: !done || ownPath(pathOf(req)), compression: false,
-        ip: clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy), onHeaders: (fn) => { headerFns.push(fn) }, log: reqLog,
-      }
-      ;(req as MwRequest).tvine = st
+      const st = stateOf(req, !done || ownPath(pathOf(req)), (fn) => { headerFns.push(fn) })
       delete req.headers['x-tvine-locale']   // only the Locale middleware sets it
       weakIfNoneMatch(req)
       if (metrics.enabled) {
@@ -366,7 +396,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   server.keepAliveTimeout = 65_000
   if (fe) {
     server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {   // Next HMR websocket
-      void startNext().then((n) => (n.upgrade ? n.upgrade(req, socket, head) : void socket.destroy())).catch(() => socket.destroy())
+      void upgradeOk(req, socket).then(async (ok) => {
+        if (!ok) return
+        const n = await startNext()
+        if (n.upgrade) await n.upgrade(req, socket, head); else socket.destroy()
+      }).catch(() => socket.destroy())
     })
   }
 

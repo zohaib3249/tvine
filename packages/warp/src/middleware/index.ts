@@ -6,7 +6,7 @@
 import { BlockList, isIP } from 'node:net'
 import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { requestId } from '../core/request.js'
+import { forwardedHostOf, isLocalRequest, requestId } from '../core/request.js'
 import { securityEvent } from '../core/audit.js'
 import type { CompressionSettings, Settings, TvineUser } from '../core/types.js'
 import type { Logger } from '../log.js'
@@ -69,9 +69,9 @@ const send = (res: ServerResponse, status: number, body: string, headers: Record
 }
 const hdr = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
 
-// Host (x-forwarded-host only through trusted proxy hops, like transport/tab.ts) → [name, ok-shaped]
+// Host name (no port): X-Forwarded-Host only through the trusted hops, right-to-left like X-Forwarded-For
 export function hostOf(req: IncomingMessage, trustProxy: number): string | undefined {
-  const h = ((trustProxy > 0 && hdr(req, 'x-forwarded-host')?.split(',')[0]!.trim()) || hdr(req, 'host'))?.toLowerCase()
+  const h = forwardedHostOf(req, trustProxy)
   if (h === undefined) return undefined
   const m = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::(\d{1,5}))?$/.exec(h)
   return m ? m[1] : ''   // '' = malformed: matches nothing
@@ -85,18 +85,16 @@ export function hostAllowed(host: string, allowed: readonly string[]): boolean {
     return a === '*' || (a.startsWith('.') ? h === a.slice(1) || h.endsWith(a) : h === a)
   })
 }
-// a loopback Host from a loopback socket (a container health check, an ssh tunnel) is always fine: DNS rebinding
-// carries the attacker's name in Host, and whoever is on this machine reaches it anyway
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
-const LOOPBACK_IP = /^(127\.|::1$|::ffff:127\.)/
 export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
 
 function blockList(list: unknown, name: string): BlockList {
   const b = new BlockList()
   for (const e of (list as string[] | undefined) ?? []) {
-    const [addr, bits] = String(e).split('/')
+    const [addr, bits, extra] = String(e).split('/')
     const v = isIP(addr ?? '')
-    if (!v) throw new Error(`${name}: "${e}" is not an IP address or CIDR`)
+    // '10.0.0.0/', '/33', '/8x' would otherwise become a /0 (everyone) or a NaN rule: refused at boot
+    const bad = !v || extra !== undefined || (bits !== undefined && (!/^\d{1,3}$/.test(bits) || Number(bits) > (v === 6 ? 128 : 32)))
+    if (bad) throw new Error(`${name}: "${e}" is not an IP address or CIDR`)
     const type = v === 6 ? 'ipv6' : 'ipv4'
     if (bits === undefined) b.addAddress(addr!, type); else b.addSubnet(addr!, Number(bits), type)
   }
@@ -127,7 +125,9 @@ export const CATALOG: Record<string, Factory> = {
         const h = hostOf(req, b.settings.trustProxy)
         // ponytail: no Host at all is HTTP/1.0 or a test double (node refuses HTTP/1.1 without one); only dev lets it by
         if (h === undefined && !b.production) return
-        if (h !== undefined && (hostAllowed(h, allowed) || (LOOPBACK.has(h) && LOOPBACK_IP.test(req.socket?.remoteAddress ?? '')))) { req.tvine.host = h; return }
+        // a direct local request (loopback socket and Host, no forwarded headers, no trusted proxy: a container health
+        // check) always passes; DNS rebinding carries the attacker's name in Host
+        if (h !== undefined && (hostAllowed(h, allowed) || isLocalRequest(req, b.settings))) { req.tvine.host = h; return }
         securityEvent('host_refused', { host: String(hdr(req, 'host') ?? '').slice(0, 100), ip: req.tvine.ip, requestId: req.tvine.id, path: req.tvine.path }, { settings: b.settings, audit: false })
         send(res, 400, 'Bad Request (invalid host)')
       },
@@ -209,13 +209,17 @@ export const CATALOG: Record<string, Factory> = {
   IpFilter: (o, b) => {
     const allow = o.allow ? blockList(o.allow, 'IpFilter.allow') : undefined
     const deny = blockList(o.deny, 'IpFilter.deny')
+    const audited = new Map<string, number>()   // ip → last audit row: one per ip per minute (a refused scanner is a flood)
     return {
       name: 'IpFilter',
       processRequest(req, res) {
         if (o.paths && !prefixed(o.paths, req.tvine.path)) return
         const ip = req.tvine.ip
         if (!ipIn(deny, ip) && (!allow || ipIn(allow, ip))) return
-        securityEvent('ip_refused', { ip, path: req.tvine.path, requestId: req.tvine.id }, { settings: b.settings })
+        // an unparseable client ip never matches an allow rule: refused (ipIn is false for it)
+        const now = Date.now(), last = audited.get(ip) ?? 0
+        if (now - last >= 60_000) { audited.delete(ip); audited.set(ip, now); if (audited.size > 10_000) audited.delete(audited.keys().next().value!) }
+        securityEvent('ip_refused', { ip, path: req.tvine.path, requestId: req.tvine.id }, { settings: b.settings, audit: now - last >= 60_000 })
         send(res, 403, 'Forbidden')
       },
     }
@@ -254,17 +258,19 @@ export const CATALOG: Record<string, Factory> = {
     }
   },
 
-  // no response within `ms` → 503 (headers already out: the connection is cut). Streams (SSE, MCP) are exempt.
+  // no response started within `ms` → 503. A response that already started (headers out: a stream, a download) is
+  // never cut. Streams (SSE, tab, MCP) and the media route are exempt; `exempt` adds to them.
   Timeout: (o, b) => {
     const ms = (o.ms as number | undefined) ?? b.settings.limits.handlerMs + 5_000
-    const exempt = (o.exempt as string[] | undefined) ?? ['/tvine/channel', '/tvine/tab', '/mcp']
+    const exempt = ['/tvine/channel', '/tvine/tab', '/mcp', b.settings.media.route, ...((o.exempt as string[] | undefined) ?? [])]
     return {
       name: 'Timeout',
       processRequest(req, res) {
         if (prefixed(exempt, req.tvine.path) || typeof res.once !== 'function') return
         const t = setTimeout(() => {
+          if (res.headersSent) return   // started streaming: not ours to cut
           req.tvine.log.warn('request timed out', { path: req.tvine.path, ms })
-          if (!res.headersSent) send(res, 503, 'Service Unavailable (timeout)', { connection: 'close' }); else res.destroy()
+          if (!res.headersSent) send(res, 503, 'Service Unavailable (timeout)', { connection: 'close' })
         }, ms)
         t.unref()
         res.once('close', () => clearTimeout(t))

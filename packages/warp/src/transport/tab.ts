@@ -12,7 +12,7 @@ import { isProduction } from '../env.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
-import { clientIp } from '../core/request.js'
+import { clientIp, forwardedHostOf } from '../core/request.js'
 import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
 import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
@@ -368,7 +368,7 @@ const TAB_PATH = /^\/tvine\/tab\/(hello|request|approve|result|release)$/
 const AGENT_PATH = /^\/tvine\/agent\/(control|release)$/
 
 const hdrOf = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
-const hostOf = (req: IncomingMessage, settings: Settings) => ((settings.trustProxy > 0 && hdrOf(req, 'x-forwarded-host')?.split(',')[0]!.trim()) || hdrOf(req, 'host'))?.toLowerCase()
+const hostOf = (req: IncomingMessage, settings: Settings) => forwardedHostOf(req, settings.trustProxy)   // X-Forwarded-Host per trusted hops
 const httpsOf = (req: IncomingMessage, settings: Settings) => (req.socket as { encrypted?: boolean }).encrypted === true ||
   (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
 // The site's public origin as this request reached it (scheme by the same trusted hops as request.ip); '' if no Host.
