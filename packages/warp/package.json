@@ -1,6 +1,30 @@
 {
   "name": "@tvine/warp",
   "version": "0.0.0",
+  "description": "Warp: Tvine server. Django-style ORM, migrations, views, auth, admin, tasks, built-in MCP server.",
+  "keywords": [
+    "agent-native",
+    "ai-agents",
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "webmcp",
+    "django",
+    "typescript",
+    "nextjs",
+    "react",
+    "orm",
+    "admin-panel",
+    "web-framework",
+    "full-stack"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zohaib3249/tvine.git",
+    "directory": "packages/warp"
+  },
+  "homepage": "https://github.com/zohaib3249/tvine#readme",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

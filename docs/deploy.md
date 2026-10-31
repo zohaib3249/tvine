@@ -4,7 +4,10 @@ One Node process serves everything: the Next.js pages, `/tvine/*` (agent API, ta
 `/media`. Run one process by default; add copies plus Redis when one is not enough. A separate `tvine worker`
 runs background jobs.
 
-Commands below were run against `apps/demo-shop` unless marked otherwise.
+Commands below were run against an example store app built on Tvine unless marked otherwise.
+
+Related guides: [auth-and-security.md](auth-and-security.md) (hosts, CSP, CORS, secrets),
+[tasks-cache-email.md](tasks-cache-email.md) (worker, Redis cache, SMTP), [admin.md](admin.md) (System pages).
 
 ## 1. Production checklist
 
@@ -25,7 +28,7 @@ Commands below were run against `apps/demo-shop` unless marked otherwise.
 ```bash
 export TVINE_SECRET=$(openssl rand -hex 32)
 export TVINE_ALLOWED_HOSTS=shop.example.com
-NODE_ENV=production pnpm exec tvine check     # … ok: 40 actions
+NODE_ENV=production pnpm exec tvine check     # … ok: 57 actions (the demo)
 pnpm build
 pnpm start                                      # = tvine migrate && tvine start  (PORT or --port, default 3000)
 ```
@@ -56,7 +59,7 @@ Route these to the same copy per session (cookie `tvine_s`, or header `x-tvine-s
 `/tvine/tab/*`, `/tvine/agent/*`, and `/mcp` (for `request_control`). Everything else can go anywhere.
 Details: [backends.md](design/conventions/backends.md).
 
-Split mode (Next on one server, `tvine start --api-only` on another) exists but is parked (BACKLOG #37); don't
+Split mode (Next on one server, `tvine start --api-only` on another) exists but is not recommended yet; don't
 start there.
 
 ## 3. SQLite in production
@@ -155,13 +158,19 @@ email: {
 ```
 
 Credentials are only sent over TLS. With `tvine.tasks` installed, `sendMail(…, { background: true })` goes
-through the worker with retries. See [email.md](design/conventions/email.md).
+through the worker with retries. See [tasks-cache-email.md](tasks-cache-email.md).
 
 ## 7. Metrics
 
-Not built yet: a `/tvine/metrics` endpoint is being added (task-prodpack). Until then, use the `command` hook
-(`apps/<app>/hooks.ts`: called after every action with its outcome) to feed your own metrics client
-([middleware-hooks.md](design/conventions/middleware-hooks.md)).
+Prometheus text at `/tvine/metrics`, off by default:
+
+```ts
+metrics: { enabled: true, path: '/tvine/metrics', token: process.env.METRICS_TOKEN, allowIps: [] },
+```
+
+Scrape with `Authorization: Bearer <token>`, or from an address in `allowIps`. In production one of the two is
+required (boot error otherwise); in dev, loopback requests are allowed. Anyone else gets a 404. The admin's
+System → Metrics and Traffic pages show the same numbers without a scraper ([admin.md](admin.md)).
 
 ## 8. Health and restarts
 
@@ -169,7 +178,7 @@ Not built yet: a `/tvine/metrics` endpoint is being added (task-prodpack). Until
 
 ```json
 {"tasks":{"queued":0,"scheduled":0,"running":0,"dead":0,"workers":1,"staleWorkers":0,"ageMs":139},
- "backends":{"session":"memory","channels":"memory",…},"ok":true,"uptime":3,"actions":40,"sessions":0}
+ "backends":{"session":"memory","channels":"memory",…},"ok":true,"uptime":3,"actions":57,"sessions":0}
 ```
 
 Anyone else gets only `{"ok":true}`. The details above go to: `Authorization: Bearer <settings.health.token>`
@@ -189,19 +198,8 @@ streams and timers, and exits 0; if closing takes over 5 s it exits 1. So:
 
 ## 9. Docker
 
-`apps/demo-shop/Dockerfile` (multi-stage, pnpm, `next build`, non-root user, `/data` volume, healthcheck).
-Build from the repo root:
-
-```bash
-docker build -f apps/demo-shop/Dockerfile -t tvine-demo .
-docker run -p 3000:3000 -e TVINE_SECRET=$(openssl rand -hex 32) -e TVINE_ALLOWED_HOSTS=localhost -v tvine-data:/data tvine-demo
-docker run -e TVINE_SECRET=… -v tvine-data:/data tvine-demo node_modules/.bin/tvine worker
-```
-
-The volume holds `tvine.db` (+ WAL), `tasks.db` and `media/` (env `DATABASE_URL`, `TASKS_DB`, `MEDIA_DIR`).
-Ignore rules: `apps/demo-shop/Dockerfile.dockerignore` (BuildKit uses it for this Dockerfile).
-
-The image was not built while writing this (Docker hangs on the docs machine). Its steps were run by hand instead:
-`pnpm install --frozen-lockfile`, `pnpm --filter "@tvine/demo-shop..." build`,
-`pnpm --filter @tvine/demo-shop deploy --prod <dir>`, then `tvine migrate && tvine start` and the
-`HEALTHCHECK` command from that directory with `NODE_ENV=production` — all worked.
+A Dockerfile is not shipped yet. The steps a multi-stage image needs (each was run by hand, Docker itself was not):
+`pnpm install --frozen-lockfile`, `pnpm --filter "<your-app>..." build`, `pnpm --filter <your-app> deploy --prod <dir>`,
+then in `<dir>` with `NODE_ENV=production`: `tvine migrate && tvine start`. Mount a volume for `tvine.db` (+ WAL),
+`tasks.db` and `media/` (env `DATABASE_URL`, `TASKS_DB`, `MEDIA_DIR`), run as a non-root user, and use
+`/tvine/health` as the healthcheck. Run the worker as a second container: `tvine worker`.

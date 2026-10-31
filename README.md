@@ -1,83 +1,130 @@
 # Tvine
 
-Tvine is a web framework for apps that people and AI agents both use.
-You write Django-style backend code (models, migrations, views, admin) and Next.js pages, in TypeScript.
-Every page also has a compact JSON view for agents on the same URL, and every action is also an MCP tool.
-Agents can work through the real UI too: they read the page and click its widgets, or drive a user's open tab once the user clicks **Allow**.
-It runs as one Node process: **Warp** is the server and **Weft** the frontend. The name is Icelandic for "twine two threads".
+**The agent-native web framework: Django for TypeScript, with Next.js and React, where AI agents use your app through a built-in MCP server (Model Context Protocol) and WebMCP.** Own ORM, migrations, admin panel, auth, background tasks.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.15-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
+
+## Why Tvine
+
+- **People and AI agents use the same app.** Every action you write is also an MCP tool. Every page has a compact JSON view for agents on the same URL.
+- **Agents can drive the real UI.** An agent reads the page and clicks its widgets, or asks to control your open tab. You click **Allow**; **Stop** takes it back. You see where it is working.
+- **Django, in TypeScript.** Models, migrations, QuerySets, views, serializers, `urls.ts`, auth, admin, tasks, cache, email, audit, middleware. If you know Django, you know where things go.
+- **Next.js pages.** React 19 + Next 16 for the frontend, calling the backend through a typed `api.*` client.
+- **One Node process.** **Warp** is the server, **Weft** the frontend. Tvine is Icelandic for "twine two threads".
+- **Secure by default.** Host allow-list, CSP, CORS, sessions, 2FA, encrypted fields, human-only actions, confirm prompts for agents.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Admin dashboard](docs/images/admin-dashboard-light.png) Admin dashboard | ![Admin dashboard, dark](docs/images/admin-dashboard-dark.png) Dark mode |
+| ![Changelist with charts](docs/images/admin-orders.png) Changelist with charts | ![Change form](docs/images/admin-product-form.png) Change form |
+| ![System Agents](docs/images/admin-agents.png) System → Agents: who is using your app | ![System Traffic](docs/images/admin-traffic.png) System → Traffic |
+| ![System Health](docs/images/admin-health.png) System → Health | ![Example store](docs/images/shop-home.png) An example store app built with Weft |
+
+Screenshots are from an example store app built on Tvine.
 
 ## Quick start
 
 Needs Node 22.15+ and pnpm 9.
 
 ```bash
-pnpm install
-pnpm -r build                 # warp, weft, admin, inspect + the demo's next build
-cd apps/demo-shop
-pnpm demo                     # migrate, seed 60 products, serve on http://localhost:3000
+git clone https://github.com/zohaib3249/tvine && cd tvine
+pnpm install && pnpm -r build
+cd examples/notes && pnpm exec tvine migrate
+TVINE_SUPERUSER_USERNAME=admin TVINE_SUPERUSER_EMAIL=admin@example.com TVINE_SUPERUSER_PASSWORD='change-me-please-42' pnpm exec tvine createsuperuser --noinput
+pnpm exec tvine dev --port 4400
 ```
 
-- Shop: http://localhost:3000
-- Admin: http://localhost:3000/admin. Create a login first:
-  `TVINE_SUPERUSER_USERNAME=admin TVINE_SUPERUSER_EMAIL=admin@example.com TVINE_SUPERUSER_PASSWORD='change-me-please-42' pnpm exec tvine createsuperuser --noinput`
-- What an agent sees: `curl -H 'x-tvine: 1' http://localhost:3000/`
-- Health: http://localhost:3000/tvine/health
+- App: http://localhost:4400, admin: http://localhost:4400/admin
+- What an agent sees: `curl -H 'x-tvine: 1' http://localhost:4400/`
+- `tvine: command not found`? Use `pnpm exec tvine …`, or `cd packages/warp && npm link` once. See [Getting the `tvine` command](docs/installation.md#getting-the-tvine-command).
+- New project from scratch (new, after the scaffolding release): `npm create tvine@latest my-app`. See [installation.md](docs/installation.md).
 
-**Connect Claude.** Put this `.mcp.json` in the folder where you run `claude`. Claude Code then lists the shop's
-tools (`read_page`, `ui`, `do`, `catalog_list`, `catalog_addToCart`, …):
+**Connect Claude.** Put this `.mcp.json` in the folder where you run `claude`:
 
 ```json
-{ "mcpServers": { "tvine-shop": { "type": "http", "url": "http://localhost:3000/mcp" } } }
+{ "mcpServers": { "tvine-notes": { "type": "http", "url": "http://localhost:4400/mcp" } } }
 ```
 
-Try asking it: "browse the shop, add two hats to the cart and check out". If you have the shop open in a browser,
-it can ask to control that tab (`request_control`). You click **Allow**, and **Stop** takes control back.
+Claude Code then lists the app's tools (`read_page`, `ui`, `do`, `request_control`, …). Claude Desktop and more: [agents-and-mcp.md](docs/agents-and-mcp.md).
 
-Next: build your own app with [docs/getting-started.md](docs/getting-started.md). Ship it with
-[docs/deploy.md](docs/deploy.md).
+## How agents use your app
 
-## Feature map
+```
+            ┌───────────── one Node process ─────────────┐
+ Browser ──▶│  Next.js pages (Weft)    /admin            │
+            │        │  api.*                            │
+ Agent ────▶│  /mcp ─┼─▶ actions (Warp) ─▶ ORM ─▶ DB     │
+ (MCP)      │        │                                   │
+            │  tab socket ◀── request_control ── Allow   │
+            └────────────────────────────────────────────┘
+```
 
-| Area | What you get | Docs |
-|---|---|---|
-| Settings | one `settings.ts` (Django `settings.py`) drives every subsystem | [settings.md](docs/design/conventions/settings.md) |
-| Apps | `apps/<app>/{models,views,serializers,rules,urls,admin,tasks,hooks}.ts` | [apps-structure.md](docs/design/conventions/apps-structure.md) |
-| ORM + migrations | own ORM (no third-party), QuerySet, relations, aggregates, Django-style migration files | [models-db.md](docs/design/conventions/models-db.md), [orm-queryset.md](docs/design/conventions/orm-queryset.md), [orm-advanced.md](docs/design/conventions/orm-advanced.md) |
-| Databases | SQLite (default), Postgres, MySQL/MariaDB | [db-engines.md](docs/design/conventions/db-engines.md) |
-| Views | `defineAction`, ListView/DetailView/ModelViewSet with all DRF hooks, `@action` | [generic-views.md](docs/design/conventions/generic-views.md) |
-| URLs | `urls.ts`: `path`, `include`, routers, `reverse` | [urls.md](docs/design/conventions/urls.md) |
-| Security features | every built-in protection (signing, encrypted fields, private media, sessions, notifications, `safeFetch`, privacy export/erase, staff hardening), its setting and default | [security-features.md](docs/design/conventions/security-features.md) |
-| Permissions | DRF-style permissions, rate limits, `humanOnly`, `confirm` | [permissions.md](docs/design/conventions/permissions.md), [human-only.md](docs/design/frontend/v2/widgets/human-only.md) |
-| Request | `request.user`, `request.agent`, `request.ip` | [request.md](docs/design/conventions/request.md) |
-| Middleware + hooks | per-app middleware, `command`/`error`/`session` hooks, `ready()` | [middleware-hooks.md](docs/design/conventions/middleware-hooks.md) |
-| Auth | users, groups, passwords, login throttling, TOTP, agent tokens (`tvine.auth`) | [auth.md](docs/design/contrib/auth.md) |
-| Admin | Django admin at `/admin`, served by Warp (`tvine.admin`) | [admin.md](docs/design/contrib/admin.md) |
-| Background tasks | `defineTask`, `.delay()`, retries, cron, chains, `tvine worker` (`tvine.tasks`) | [tasks.md](docs/design/contrib/tasks.md) |
-| Cache / email / media | Django cache API, `sendMail` + SMTP, uploads | [cache.md](docs/design/conventions/cache.md), [email.md](docs/design/conventions/email.md), [media.md](docs/design/conventions/media.md) |
-| Scaling | memory or Redis per subsystem, named connections | [backends.md](docs/design/conventions/backends.md) |
-| Security | nonce CSP, headers, CORS, compression, signing, idempotency | [security-headers.md](docs/design/server/security-headers.md) |
-| Frontend | `api.*` typed client, Weft widgets, JSX runtime | [api-client.md](docs/design/frontend/v2/core/api-client.md), [frontend v2](docs/design/frontend/v2/README.md) |
-| Agents | snapshot format, progressive disclosure, MCP, tab control, WebMCP | [snapshot-format.md](docs/design/frontend/v2/core/snapshot-format.md), [transport-mcp.md](docs/design/server/transport-mcp.md), [agent-presence.md](docs/design/frontend/v2/core/agent-presence.md) |
-| Dev tools | `tvine dev`, `tvine inspect` split-view inspector, testing helpers | [inspector.md](docs/design/inspect/inspector.md), [testing.md](docs/design/conventions/testing.md) |
-| CLI | `tvine` with no arguments prints every command | [server-index.md](docs/design/server/server-index.md) |
-| Overview | architecture and core types | [00-overview.md](docs/design/00-overview.md), [BACKLOG](docs/design/BACKLOG-v1.1.md) |
+| Tool | What it does |
+|---|---|
+| `read_page` | the page as compact JSON: widgets, labels, data, what can be clicked |
+| `expand` | open a part of the page in more detail |
+| `ui` | act on a widget: click, fill, select |
+| `do` | run an action by id with params (no UI needed) |
+| `request_control` / `release` | ask to drive a person's open tab; they click **Allow**, **Stop** ends it |
+| `<app>_<action>` | every action you wrote, as its own tool |
+
+Two modes: **headless** (the agent works on the server-rendered page, no browser needed) and **tab control** (it drives the tab a person has open, with a visible agent cursor). Actions marked `humanOnly` refuse every agent path; `confirm` asks first. Details: [agents-and-mcp.md](docs/agents-and-mcp.md).
+
+## Features
+
+| Area | Guide |
+|---|---|
+| Install, new project, the `tvine` command | [installation.md](docs/installation.md) |
+| Settings and environment variables | [settings-and-env.md](docs/settings-and-env.md) |
+| Models, ORM (SQLite / Postgres / MySQL), migrations, encrypted fields | [models-and-orm.md](docs/models-and-orm.md) |
+| Actions, generic views, `@action`, `urls.ts`, `api.*` client | [views-urls-api.md](docs/views-urls-api.md) |
+| Weft widgets, forms, `HumanOnly`, confirm | [frontend-weft.md](docs/frontend-weft.md) |
+| MCP, tab control, WebMCP, inspector | [agents-and-mcp.md](docs/agents-and-mcp.md) |
+| Admin panel, dashboard, charts, system pages | [admin.md](docs/admin.md) |
+| Auth, 2FA, tokens, permissions, security features | [auth-and-security.md](docs/auth-and-security.md) |
+| Background tasks, cache, email | [tasks-cache-email.md](docs/tasks-cache-email.md) |
+| Testing | [testing.md](docs/testing.md) |
+| Every CLI command | [cli.md](docs/cli.md) |
+| Production | [deploy.md](docs/deploy.md) |
+| Tutorial: a notes app in 15 minutes | [getting-started.md](docs/getting-started.md) |
+| Design docs (the source of truth) | [docs/design](docs/design/00-overview.md) |
 
 ## Project layout
 
 ```
 packages/
-  warp/        @tvine/warp     server: dispatch, ORM + migrations, views, MCP/HTTP/SSE, auth/admin/tasks, CLI (tvine)
-  weft/        @tvine/weft     frontend: widgets, api.* client, tab socket, WebMCP
-  admin/       @tvine/admin    the /admin panel UI
-  inspect/     @tvine/inspect  dev inspector (tvine inspect)
-apps/
-  demo-shop/   reference app: catalog, cart, checkout, uploads, admin; Dockerfile
+  warp/      @tvine/warp     server: ORM + migrations, views, MCP/HTTP, auth, admin, tasks, CLI (tvine)
+  weft/      @tvine/weft     frontend: widgets, api.* client, tab control, WebMCP
+  admin/     @tvine/admin    the /admin panel UI
+  inspect/   @tvine/inspect  dev inspector (tvine inspect)
 examples/
-  notes/       the getting-started app
-docs/
-  getting-started.md   tutorial
-  deploy.md            production
-  design/              module docs (the source of truth)
+  notes/     the getting-started app
+docs/        guides; docs/design/ has the module design docs
 ```
 
-Tests: `pnpm test` (all packages), or `pnpm --filter @tvine/warp test`.
+## Requirements
+
+- Node.js 22.15 or newer
+- pnpm 9
+- SQLite works out of the box; Postgres and MySQL need `pg` / `mysql2` in your app
+
+## Contributing
+
+Issues and pull requests are welcome. Before a PR:
+
+```bash
+pnpm -r build
+pnpm --filter @tvine/warp test
+```
+
+Keep changes small, add a test, and update the matching guide in `docs/`.
+
+## License
+
+[MIT](LICENSE)
