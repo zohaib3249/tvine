@@ -8,13 +8,16 @@
 // same-origin (Origin must be present and match), carries `x-tvine-tab` (a cross-site page can't send it
 // without a CORS preflight we never answer), and its cookie session must own the tabId. tabId, requestId and
 // cmdId are 128-bit random. The agent's declared name is never verified and always shown as such.
+import { isProduction } from '../env.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
 import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
 import { limiterFor } from '../backends/index.js'
+import { metrics } from '../core/metrics.js'
 
 // a hub limiter from settings.limits.backend, its keys namespaced so two hub limiters never share a bucket
 type TabLimiter = { check(k: { sid: string }): ReturnType<Limiter['check']> }
@@ -101,6 +104,7 @@ export class TabHub {
 
   close(): void { clearInterval(this.timer); this.unwatch(); this.unrotate(); for (const t of [...this.tabs.values()]) this.drop(t) }
 
+  get size(): number { return this.tabs.size }   // metrics: connected tabs
   get on(): boolean { return this.server.settings.agent?.inTab !== 'off' }
 
   // ---- tab lifecycle (channel.ts) -----------------------------------------------------------
@@ -368,7 +372,16 @@ const hostOf = (req: IncomingMessage, settings: Settings) => ((settings.trustPro
 const httpsOf = (req: IncomingMessage, settings: Settings) => (req.socket as { encrypted?: boolean }).encrypted === true ||
   (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
 // The site's public origin as this request reached it (scheme by the same trusted hops as request.ip); '' if no Host.
-export const originOf = (req: IncomingMessage, settings: Settings) => { const h = hostOf(req, settings); return h && /^[\w.:[\]-]+$/.test(h) ? `${httpsOf(req, settings) ? 'https' : 'http'}://${h}` : '' }
+// The public origin for absolute links the server builds (approveUrl, sitemap): settings.siteUrl, else this request's
+// Host once the AllowedHosts middleware validated it (req.tvine.host). Unvalidated: dev keeps the Host; production
+// gets '' (a relative link) — a spoofed Host never lands in a link.
+export const originOf = (req: IncomingMessage, settings: Settings) => {
+  if (settings.siteUrl) return settings.siteUrl.replace(/\/$/, '')
+  const validated = (req as { tvine?: { host?: string } }).tvine?.host !== undefined
+  if (!validated && isProduction()) return ''
+  const h = hostOf(req, settings)
+  return h && /^[\w.:[\]-]+$/.test(h) ? `${httpsOf(req, settings) ? 'https' : 'http'}://${h}` : ''
+}
 
 export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings, sessions } = server
@@ -392,7 +405,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     try { return new URL(o).host === h } catch { return false }
   }
   const ipOf = (req: IncomingMessage) => clientIp(hdr(req, 'x-forwarded-for') ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-  const tooMany = (res: ServerResponse) => send(res, 429, { error: 'rate limited' })
+  const tooMany = (res: ServerResponse) => { metrics.inc('tvine_ratelimit_hits_total', { scope: 'tab' }); send(res, 429, { error: 'rate limited' }) }
 
   async function body(req: IncomingMessage, cap: number): Promise<Record<string, unknown> | undefined> {
     if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return undefined
@@ -420,7 +433,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
       if (!(await server.limiter.check({ ip })).ok) return tooMany(res)   // as the <Form> path, before minting
       session = await sessions.create()
       const c = await sessions.cookieFor(session.sid)
-      return send(res, 200, { ok: true }, { 'set-cookie': `${name}=${c}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${httpsOf(req, settings) ? '; Secure' : ''}` })
+      return send(res, 200, { ok: true }, { 'set-cookie': cookieHeader(settings, c) })
     }
     if (!session) return send(res, 401, { error: 'no session' })
     if (!hub.own(session, tabId)) return send(res, 403, { error: 'not your tab' })
@@ -446,7 +459,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
       return send(res, 200, { ok: true })
     }
     if (!(await server.limiter.check({ ip })).ok) return tooMany(res)
-    const r = await hub.request(async () => ((sidKey ? await sessions.resolve({ sid: sidKey }) : undefined) ?? await sessions.create()).sid, { name: b.name, ip, base: originOf(req, settings) })
+    const r = await hub.request(async () => ((sidKey ? await sessions.resolve({ sid: sidKey }) : undefined) ?? await sessions.create()).sid, { name: b.name, ip, base: originOf(req, settings) })   // siteUrl, else the Host AllowedHosts validated
     if (!r.ok) return send(res, r.code === 'rate_limited' ? 429 : 403, { ...(r.sid && { sid: r.sid }), error: r.message, code: r.code, reason: r.reason })
     send(res, 200, { sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
   }

@@ -10,6 +10,7 @@ import { postgres as pgDialect } from './sql/dialects/postgres.js'
 import { mysql as mysqlDialect } from './sql/dialects/mysql.js'
 import type { Dialect } from './sql/dialect.js'
 import { resolveDbUrl } from '../settings.js'
+import { metrics, since } from '../core/metrics.js'
 
 // `sqlite` is the raw handle, present only on sqlite connections (tests and the sqlite runner use it)
 export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite?: Database.Database }
@@ -33,30 +34,33 @@ export function sqlitePath(raw: string): string {
   throw new Error(`unsupported database url ${hasAuthority ? `'${scheme}'` : '(no scheme)'} — use file:./name.db for sqlite, postgres:// or mysql://`)
 }
 
-export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL): Connection {
-  if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: pgDriver(url.trim(), pool) }
-  if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: mysqlDriver(url.trim(), pool) }
-  const driver = sqliteDriver(sqlitePath(url))
+export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL, slowMs = 0): Connection {
+  if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: timed(pgDriver(url.trim(), pool), alias, slowMs) }
+  if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: timed(mysqlDriver(url.trim(), pool), alias, slowMs) }
+  const driver = timed(sqliteDriver(sqlitePath(url)), alias, slowMs)
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
 }
 
-// tvine.db: a statement slower than ms is a warn line with its SQL (never its params: they may hold secrets)
+// metrics (BACKLOG #9): statement count + duration per alias, inside transactions / sessions too; and tvine.db: a
+// statement slower than settings.db.slowQueryMs is a warn line with its SQL (never its params: they may hold secrets).
+// In place, so a driver's extras (sqlite db handle, pool stats) stay; a tx driver that IS this one is already timed.
 const dbLog = getLogger('tvine.db')
-function timed(d: Driver, ms: number, alias: string): Driver {
-  const watch = <T>(sql: string, p: Promise<T>): Promise<T> => {
+function timed<D extends Driver>(d: D, alias: string, slowMs = 0): D {
+  const { query, exec, transaction, session } = d
+  const time = <T>(op: string, sql: string, p: Promise<T>) => {
+    if (!metrics.enabled && !slowMs) return p
     const t0 = performance.now()
     return p.finally(() => {
+      if (metrics.enabled) metrics.observe('tvine_db_query_duration_seconds', { db: alias, op }, since(t0))
       const took = performance.now() - t0
-      if (took >= ms) dbLog.warn('slow query', { alias, ms: Math.round(took), sql: sql.slice(0, 2000) })
+      if (slowMs && took >= slowMs) dbLog.warn('slow query', { alias, ms: Math.round(took), sql: sql.slice(0, 2000) })
     })
   }
-  const wrap = (x: Driver): Driver => Object.assign(Object.create(x) as Driver, {
-    query: (sql: string, params: unknown[]) => watch(sql, x.query(sql, params)),
-    exec: (sql: string, params: unknown[]) => watch(sql, x.exec(sql, params)),
-    transaction: <T>(fn: (tx: Driver) => Promise<T>, o?: { signal?: AbortSignal }) => x.transaction((tx) => fn(wrap(tx)), o),
-    ...(x.session && { session: <T>(fn: (dd: Driver) => Promise<T>) => x.session!((dd) => fn(wrap(dd))) }),
-  })
-  return wrap(d)
+  d.query = (sql, params) => time('query', sql, query.call(d, sql, params))
+  d.exec = (sql, params) => time('exec', sql, exec.call(d, sql, params))
+  d.transaction = <T>(fn: (tx: Driver) => Promise<T>, opts?: { signal?: AbortSignal }) => transaction.call(d, (tx) => fn(tx === d ? tx : timed(tx, alias, slowMs)), opts) as Promise<T>
+  if (session) d.session = <T>(fn: (x: Driver) => Promise<T>) => session.call(d, (x) => fn(x === d ? x : timed(x, alias, slowMs))) as Promise<T>
+  return d
 }
 
 class ConnectionHandler {
@@ -73,8 +77,7 @@ class ConnectionHandler {
     if (!c) {
       const db = this.dbs.get(alias) ?? (alias === 'default' ? { url: resolveDbUrl() } : undefined)
       if (!db?.url) throw new Error(`database "${alias}" is not configured`)
-      c = openConn(db.url, alias, db.pool)
-      if (db.slowQueryMs) c.driver = timed(c.driver, db.slowQueryMs, alias)
+      c = openConn(db.url, alias, db.pool, db.slowQueryMs)
       this.open.set(alias, c)
     }
     return c

@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Dialog, Drawer, toast } from '@tvine/weft/widgets'
+import { safeHref } from '@tvine/weft/forms'
 import { href, listParams, queryOf, toggleSort, urlFor } from './routes.js'
 import type { ActionMeta, ActionResult, DeletePreview, Display, Facet, FilterMeta, ListResult, ModelMeta, Row } from './types.js'
 import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
@@ -15,7 +16,8 @@ export function show(v: Display | undefined, empty = '—', f?: { kind?: string;
     if (typeof m.value === 'number' && typeof m.currency === 'string') {
       try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: m.currency }).format(m.value) } catch { return `${m.value} ${m.currency}` }
     }
-    return v.href ? <a href={v.href} className="text-accent hover:underline">{v.text}</a> : v.text
+    const to = safeHref(v.href)   // app-code hrefs: same SAFE rule as rich text (no javascript:/data:, no //x)
+    return to ? <a href={to} className="text-accent hover:underline" {...(/^https?:/i.test(to) && { rel: 'noopener noreferrer nofollow' })}>{v.text}</a> : v.text
   }
   const label = f?.choices?.find((c) => c.value === String(v))?.label
   if (label) return label

@@ -44,7 +44,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   formats: { default: 'json', notationPath: true },
   trustProxy: 0,
   redis: {},
-  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default' },
+  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default', secure: false, sameSite: 'lax', maxAgeMs: 1_209_600_000 },
   channels: { backend: 'memory', redis: 'default' },
   limits: {
     bodyBytes: 65_536,
@@ -78,7 +78,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
       referrerPolicy: 'strict-origin-when-cross-origin',
       coop: 'same-origin',
       corp: 'same-origin',
-      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [] },
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [], 'clipboard-read': [] },
     },
   },
   cors: {
@@ -94,6 +94,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
   email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
     defaultFrom: 'webmaster@localhost', serverEmail: 'root@localhost', admins: [], subjectPrefix: '[Tvine] ', filePath: './mail' },
+  metrics: { enabled: false, path: '/tvine/metrics', allowIps: [] },
+  robots: { allow: [], disallow: [], extra: [] },
   installedApps: [],
 }
 
@@ -114,6 +116,8 @@ const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redi
 
 const schema: z.ZodType<Settings> = z.object({
   site: z.object({ name: z.string(), description: z.string() }),
+  siteUrl: z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'an origin like https://shop.example').optional(),
+  health: z.object({ token: z.string().min(16, 'health.token: at least 16 characters').optional() }).strict().optional(),
   header: z.string(),
   formats: z.object({ default: z.enum(['json', 'notation']), notationPath: z.boolean() }),
   trustProxy: posInt,
@@ -122,7 +126,8 @@ const schema: z.ZodType<Settings> = z.object({
     prefix: z.string().max(64).regex(/^[^\s*?[\]]*$/, 'prefix may not hold spaces or glob characters').optional(),
     connectTimeoutMs: z.number().int().positive().optional(),
   }).strict()),
-  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias }),
+  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias,
+    secure: z.boolean(), sameSite: z.enum(['lax', 'strict', 'none']), maxAgeMs: z.number().min(0) }).refine((s) => s.sameSite !== 'none' || s.secure, 'session.sameSite none needs session.secure'),
   channels: z.object({ backend, redis: alias }),
   limits: z.object({
     bodyBytes: posInt,
@@ -177,6 +182,8 @@ const schema: z.ZodType<Settings> = z.object({
       coop: z.union([z.literal(false), z.enum(['same-origin', 'same-origin-allow-popups', 'unsafe-none'])]),
       corp: z.union([z.literal(false), z.enum(['same-origin', 'same-site', 'cross-origin'])]),
       permissionsPolicy: z.record(z.string().regex(/^[a-z-]+$/), z.union([z.array(z.string().regex(/^(self|\*|https?:\/\/[^\s"()]+)$/, "'self', '*' or an origin")), z.literal(false)])),
+      coep: z.union([z.literal(false), z.enum(['require-corp', 'credentialless'])]).optional(),
+      trustedTypes: z.union([z.literal(false), z.literal('report-only')]).optional(),
     }),
   }),
   cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),
@@ -194,6 +201,10 @@ const schema: z.ZodType<Settings> = z.object({
     user: z.string(), password: z.string(), useTls: z.boolean(), useSsl: z.boolean(), allowPlainAuth: z.boolean(), timeoutMs: z.number().int().positive(),
     defaultFrom: z.string(), serverEmail: z.string(), admins: z.array(z.string()), subjectPrefix: z.string(), filePath: z.string().min(1),
   }).strict().refine((e) => !(e.useTls && e.useSsl), 'email.useTls and email.useSsl are mutually exclusive'),
+  metrics: z.object({ enabled: z.boolean(), path: z.string().regex(/^\/[\w\-/.]*$/, 'a path starting with /'),
+    token: z.string().min(16, 'metrics.token: at least 16 chars').optional(), allowIps: z.array(z.string().min(1)) }).strict(),
+  robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
+    sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
@@ -227,13 +238,15 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const prod = process.env.NODE_ENV === 'production'
   const { secret: given, ...rest } = input
   // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below
-  const secret = given ?? process.env.TVINE_SECRET ?? (prod ? undefined : randomBytes(32).toString('hex'))
+  // TVINE_SECRET may be a comma-separated rotation list (new first): `new,old`
+  const fromEnv = env.has('TVINE_SECRET') ? env.list('TVINE_SECRET') : undefined
+  const secret = given ?? (fromEnv && (fromEnv.length === 1 ? fromEnv[0] : fromEnv)) ?? (prod ? undefined : randomBytes(32).toString('hex'))
   const keys = secret === undefined ? [] : [secret].flat()
-  const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
+  const ok = keys.length > 0 && keys.every((k) => k.length >= 32) && new Set(keys).size === keys.length
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
   const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
-  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const base = { ...DEFAULTS, session: { ...DEFAULTS.session, secure: env.bool('TVINE_SESSION_SECURE', prod) }, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   // every named cache (not only `default`) is completed from the cache defaults
   if (isPlain(merged.caches)) merged.caches = Object.fromEntries(Object.entries(merged.caches).map(([k, c]) => [k, { ...CACHE_DEFAULTS, ...(c as object) }]))
@@ -250,6 +263,8 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
   if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
   const settings = schema.parse(merged)
+  // secreview M2: a Secure cookie on Path=/ with no Domain is a __Host- cookie (a subdomain or http page cannot plant it)
+  if (settings.session.secure && !settings.session.cookieName.startsWith('__')) settings.session.cookieName = `__Host-${settings.session.cookieName}`
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
   // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
   // merging these settings again (loadSettings) re-resolves the secret instead of tripping here.
@@ -263,7 +278,7 @@ export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
   return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
 }
 
-const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
+const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars; a rotation list (comma-separated, new first) needs each key >= 32 chars and no duplicates (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
 
 // Every subsystem whose backend is 'redis' must name a configured connection. Run at boot (loadSettings,
 // tvine check), not in defineSettings: a page may import settings.ts during `next build` with no REDIS_URL.

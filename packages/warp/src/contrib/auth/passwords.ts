@@ -73,13 +73,17 @@ const hashers = (s: Settings): PasswordHasher[] => s.auth?.hashers ?? [(fallback
 export const makePassword = (pw: string, s: Settings): Promise<string> => hashers(s)[0]!.encode(pw)
 export const isUsable = (enc: string | null | undefined) => !!enc && !enc.startsWith(UNUSABLE)
 
-// The same work whether or not there is a real hash to check: no timing oracle for "this user exists".
+// The same work whether or not there is a real hash to check, and whichever hasher it is on: every configured hasher
+// runs once per check (secreview L3), so neither "this user exists" nor "this user is on the old hasher" shows in timing.
+// ponytail: costs the sum of all hashers per login; only more than one while a hasher migration is configured
 const dummies = new WeakMap<PasswordHasher, Promise<string>>()
-async function dummy(pw: string, s: Settings): Promise<false> {
-  const h = hashers(s)[0]!
-  let d = dummies.get(h)
-  if (!d) dummies.set(h, (d = h.encode(randomBytes(16).toString('hex'))))
-  await h.verify(pw, await d)
+async function dummy(pw: string, s: Settings, skip?: PasswordHasher): Promise<false> {
+  for (const h of hashers(s)) {
+    if (h === skip) continue
+    let d = dummies.get(h)
+    if (!d) dummies.set(h, (d = h.encode(randomBytes(16).toString('hex'))))
+    await h.verify(pw, await d)
+  }
   return false
 }
 
@@ -89,6 +93,7 @@ export async function checkPassword(pw: string, enc: string | null | undefined, 
   const h = isUsable(enc) ? list.find((x) => x.algorithm === alg) : undefined
   if (!h || pw.length > MAX_PASSWORD) return { ok: await dummy(pw, s), upgrade: false }
   const ok = await h.verify(pw, enc!)
+  await dummy(pw, s, h)
   return { ok, upgrade: ok && (h !== list[0] || list[0]!.mustUpdate(enc!)) }
 }
 export const dummyCheck = (pw: string, s: Settings) => dummy(pw, s)

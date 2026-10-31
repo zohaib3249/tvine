@@ -4,7 +4,7 @@ import { securityEvent } from '../../core/audit.js'
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
-import type { ActionCtx, TvineUser } from '../../core/types.js'
+import type { ActionCtx, Permission, TvineUser } from '../../core/types.js'
 import { onCommit } from '../../data/engine.js'
 import { sendMail } from '../../mail/index.js'
 import { denyAgents, isAuthenticated } from '../../security/permissions.js'
@@ -22,6 +22,8 @@ import type { Settings } from '../../core/types.js'
 
 const resetRates = new WeakMap<Settings, Limiter>()
 const resetRate = (s: Settings) => { let r = resetRates.get(s); if (!r) resetRates.set(s, (r = limiterFor(s, { limit: 3, windowMs: 3_600_000 }))); return r }   // settings.limits.backend
+const accountRates = new WeakMap<Settings, Limiter>()
+const accountRate = (s: Settings) => { let r = accountRates.get(s); if (!r) accountRates.set(s, (r = limiterFor(s, { limit: 10, windowMs: 3_600_000 }))); return r }
 
 const pw = () => z.string().min(1).max(MAX_PASSWORD)
 const me = (ctx: ActionCtx) => ctx.request.user as AuthUser
@@ -60,6 +62,10 @@ async function locked(ctx: ActionCtx, username: string): Promise<void> {
 const loginFailed = (ctx: ActionCtx, username: string, why: string) =>
   securityEvent('login_failed', { username: username.slice(0, 150), why }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
 
+// secreview L1: an agent acting in the human's tab (the tab channel, WebMCP, the inspector) never signs that browser in
+// or out. An agent on its own sid (HTTP/MCP) still may: that session is its own.
+const notInTab: Permission = (ctx) => !(ctx.agent?.is && ['channel', 'webmcp', 'inspector'].includes(String(ctx.agent.via)))
+
 export const loginAction = defineAction('login', z.object({
   username: z.string().min(1).max(150),
   password: pw(),
@@ -78,9 +84,9 @@ export const loginAction = defineAction('login', z.object({
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
   return safeUser(await login(ctx, current))
-}, { rate: { limit: 10, windowMs: 60_000 } })
+}, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
 
-export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { logout(ctx); return null })
+export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { logout(ctx); return null }, { permissions: [notInTab] })
 
 export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promise<SafeUser | null> => {
   const u: TvineUser = ctx.request.user
@@ -107,8 +113,10 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
 export const requestPasswordReset = defineAction('requestPasswordReset', z.object({ email: z.string().email().max(254) }), async ({ email }, ctx) => {
   const send = ctx.settings.auth?.sendPasswordReset
   const want = email.normalize('NFKC').trim().toLowerCase()
-  // per-email cap (3/hour): silently nothing more — the answer stays the same, so it says nothing either
-  if (!(await resetRate(ctx.settings).check({ sid: `reset:${want}` })).ok) return null
+  // silent caps (the answer stays the same, so they say nothing either): 3/hour per email from one client, so one client
+  // cannot use up a victim's resets (secreview L5), and 10/hour per account from everyone (no mail-bombing)
+  if (!(await resetRate(ctx.settings).check({ sid: `reset:${want}:${ctx.request.ip}` })).ok) return null
+  if (!(await accountRate(ctx.settings).check({ sid: `reset:${want}` })).ok) return null
   // case-insensitive (Django get_users: email__iexact): contains narrows in SQL, the exact match is here
   const rows = (await User.objects.filter([{ field: 'email', op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
     .filter((r) => r.email?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
@@ -162,13 +170,18 @@ export const totpConfirm = defineAction('totpConfirm', z.object({ otp: z.string(
   return { recoveryCodes: codes }
 }, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 
-export const totpDisable = defineAction('totpDisable', z.object({ password: pw() }), async ({ password }, ctx) => {
+// secreview L4: the password AND a current code (or a recovery code): a stolen session plus a phished password is not enough
+export const totpDisable = defineAction('totpDisable', z.object({ password: pw(), otp: z.string().max(32) }), async ({ password, otp }, ctx) => {
   const u = sessionOnly(ctx)
   await locked(ctx, u.username)
   const row = (await User.get(Number(u.id)))!
   if (!(await checkPassword(password, row.password, ctx.settings)).ok) {
     await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the password is not correct', 'password')
+  }
+  if (!(await checkSecondFactor(ctx.settings, row.id, otp))) {
+    await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
+    throw new DomainError('invalid_credentials', 'that code is not valid', 'otp')
   }
   await Totp.objects.filter({ userId: row.id }).delete()
   await RecoveryCode.objects.filter({ userId: row.id }).delete()
@@ -194,14 +207,19 @@ export const createToken = defineAction('createToken', z.object({
   return { token, key, name, scopes: [...new Set(scopes)], expiresAt: expiresAt.toISOString() }   // the token: shown this once
 }, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 
+// secreview L2: an agent sees and revokes only the token it runs on (an agent on a session: none); a human, all of theirs
+const ownOnly = (ctx: ActionCtx) => (ctx.request.agent.is ? { key: me(ctx).tokenKey ?? '' } : {})
 export const listTokens = defineAction('listTokens', z.object({}), async (_p, ctx) =>
-  (await Token.objects.filter({ userId: Number(me(ctx).id), revoked: false }).order('-createdAt').all(200)).map((t) => ({
+  (await Token.objects.filter({ userId: Number(me(ctx).id), revoked: false, ...ownOnly(ctx) }).order('-createdAt').all(200)).map((t) => ({
     key: t.key, name: t.name, scopes: t.scopes, createdAt: t.createdAt.toISOString(),
     expiresAt: t.expiresAt?.toISOString() ?? null, lastUsed: t.lastUsed?.toISOString() ?? null,
   })), { permissions: [isAuthenticated], readOnly: true })
 
 export const revokeToken = defineAction('revokeToken', z.object({ key: z.string().max(20) }), async ({ key }, ctx) => {
-  const n = await Token.objects.filter({ userId: Number(sessionOnly(ctx).id), key, revoked: false }).update({ revoked: true })
+  const u = sessionOnly(ctx)   // M5: a token never revokes tokens
+  const own = ownOnly(ctx)
+  if (own.key !== undefined && own.key !== key) throw new DomainError('not_found', 'no such token')
+  const n = await Token.objects.filter({ userId: Number(u.id), key, revoked: false }).update({ revoked: true })
   if (!n) throw new DomainError('not_found', 'no such token')
   return null
 }, { permissions: [isAuthenticated] })

@@ -1,9 +1,14 @@
+import { timingSafeEqual } from 'node:crypto'
+import { isProduction } from '../env.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ActionManifest } from '../core/actions.js'
 import type { ActionRef, Settings } from '../core/types.js'
 import { connections } from '../data/db.js'
+import { isLocalRequest } from '../core/request.js'
+import { hiddenFromAnon } from '../security/permissions.js'
+import { originOf } from './tab.js'
 
 export interface RouteInfo { path: string; name?: string }
 export interface HealthStats { sessions: number; db?: unknown; extra?: Record<string, unknown> }   // extra: apps' sections (ServerCtx.health)
@@ -17,11 +22,42 @@ export interface DiscoveryDeps {
   routes: RouteInfo[]
   stats: () => HealthStats
   startedAt: number
+  isStaff?: (req: IncomingMessage) => Promise<boolean>   // the session user is active staff (server.ts wires it)
+  // BACKLOG #11: own = the app ships its robots.txt (public/ or an app/robots route): we serve none.
+  // sitemap = the app serves /sitemap.xml; admin = the admin panel's path when tvine.admin is installed
+  robots?: { own: boolean; sitemap: boolean; admin?: string }
+}
+
+// /tvine/health details (secreview-3 L2): settings.health.token as a Bearer, a staff session, or a direct loopback
+// request (isLocalRequest, shared with metrics). Everyone else: { ok }.
+async function healthDetails(req: IncomingMessage, settings: Settings, isStaff?: DiscoveryDeps['isStaff']): Promise<boolean> {
+  const token = settings.health?.token, auth = req.headers.authorization
+  if (token && auth?.startsWith('Bearer ')) {
+    const a = Buffer.from(auth.slice(7)), b = Buffer.from(token)
+    if (a.length === b.length && timingSafeEqual(a, b)) return true
+  }
+  if (isLocalRequest(req, settings)) return true
+  return !!isStaff && (await isStaff(req).catch(() => false))
+}
+
+// The default robots.txt: crawlers may read the agent surface, never Tvine internals or the admin.
+// (Bot-protection layers: exempt these same paths so agents can reach them.)
+export function robotsTxt(settings: Settings, o: { sitemap?: string; admin?: string }): string {
+  const r = settings.robots
+  return [
+    'User-agent: *',
+    ...['/llms.txt', '/agent.txt', '/.well-known/tvine.json', '/tvine/manifest', '/mcp', ...r.allow].map((p) => `Allow: ${p}`),
+    ...['/tvine/', ...(o.admin ? [`${o.admin}/`] : []), ...r.disallow].map((p) => `Disallow: ${p}`),
+    ...r.extra,
+    ...(o.sitemap ? ['', `Sitemap: ${o.sitemap}`] : []),
+    '',
+  ].join('\n')
 }
 
 export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
   const apps: SiteManifest['apps'] = {}
   for (const d of manifest.all()) {
+    if (hiddenFromAnon(d)) continue
     const app = d.id.slice(0, d.id.indexOf('.'))
     ;(apps[app] ??= { actions: [] }).actions.push({ id: d.id, params: manifest.paramSpecs(d.id) })
   }
@@ -42,7 +78,7 @@ const JSON_CT = 'application/json; charset=utf-8'
 const CACHED = 'public, max-age=3600'
 
 export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
-  const { settings, manifest, routes, stats, startedAt } = deps
+  const { settings, manifest, routes, stats, startedAt, isStaff, robots } = deps
   const send = (res: ServerResponse, type: string, cache: string, body: string) => {
     res.writeHead(200, { 'content-type': type, 'cache-control': cache })
     res.end(body)
@@ -85,14 +121,24 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
       case '/.well-known/tvine.json': return get(JSON_CT, CACHED, () => wellKnown)
       case '/tvine/manifest': return get(JSON_CT, CACHED, () => site)
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
+      case '/robots.txt': {
+        if (!robots || robots.own) return next()
+        // an auto sitemap link is absolute from this request's Host (originOf: validated by AllowedHosts): Vary keeps caches per host.
+        // Production: only settings.robots.sitemap (a spoofed Host must not land in a cached robots.txt)
+        const auto = robots.sitemap && !settings.robots.sitemap && !isProduction() ? originOf(req, settings) : ''
+        if (auto) res.setHeader('vary', 'host')
+        return get('text/plain; charset=utf-8', CACHED, () => robotsTxt(settings, { sitemap: settings.robots.sitemap ?? (auto ? `${auto}/sitemap.xml` : undefined), admin: robots.admin }))
+      }
       case '/tvine/health':
-        return get(JSON_CT, 'no-store', () => {
+        if (req.method !== 'GET') return get(JSON_CT, 'no-store', () => '')
+        return void healthDetails(req, settings, isStaff).then((full) => get(JSON_CT, 'no-store', () => {
+          if (!full) return '{"ok":true}'
           const { sessions, db = connections.stats(), extra } = stats()   // pool stats unless the caller supplies db
           return JSON.stringify({
             ...extra, ok: true, uptime: Math.floor((Date.now() - startedAt) / 1000),
             actions: manifest.all().length, sessions, ...(db !== undefined && { db }),
           })
-        })
+        }))
       default: return next()
     }
   }

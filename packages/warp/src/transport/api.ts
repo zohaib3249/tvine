@@ -6,10 +6,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
 import { authenticate } from '../core/auth.js'
+import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
+import { isAgent } from './http.js'
 
 export const API_PREFIX = '/tvine/api/'
 export const FORWARD = 'x-tvine-forward'        // `<b64url(json)>.<b64url(hmac)>`, from a Next server holding the secret
@@ -165,9 +168,9 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
   const shown = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !k.startsWith('x-tvine-')).map(([k, v]) => [k, String(v)]))
   const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
   const request = await buildRequest({ url: page, route: o.route(page) ?? page, headers: shown, ip, via: 'human' }, settings)
+  // secreview H1: the agent markers are read from the RAW headers (`shown` drops x-tvine-*): a declared agent stays one
+  if (isAgent(req, settings)) request.agent = { ...request.agent, is: true, via: 'http' }
   request.raw = req   // the endpoint (/tvine/api/<id>, or a urls.ts path) + method for settings.cors (core/cors-match)
-  const secure = (req.socket as { encrypted?: boolean }).encrypted === true ||
-    (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
   let cookie: string | undefined
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const i = part.indexOf('=')
@@ -175,7 +178,7 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
   }
   return {
     request, cookie, mode: 'action',
-    mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`) },
+    mint: async (s) => { res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(s.sid))) },
   }
 }
 
@@ -204,9 +207,12 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       // only actions that declare `multipart` take files here; the body is buffered under bodyBytes + their cap
       if (!mpDef?.multipart) return send(res, fail('invalid_param', 'this action does not take multipart bodies'))
       // nothing is buffered for a caller that cannot run it: uploads need a signed-in user, same-origin, a rate token
-      // (the action's own permissions, e.g. isStaff, still run in dispatch)
-      await authenticate(settings, who.request, await server.sessions.peek({ sid: who.sid, cookie: who.cookie }))
+      const sess = await server.sessions.peek({ sid: who.sid, cookie: who.cookie })
+      await authenticate(settings, who.request, sess)
       if (!who.request.user?.isAuthenticated) { res.setHeader('connection', 'close'); return send(res, fail('domain', 'forbidden: uploads need a signed-in user', 'forbidden')) }
+      // the action's static permissions (admin: isStaff) before a byte is buffered; dispatch runs them again
+      try { await runPermissions(mpDef.rules?.permissions ?? [], permissionCtx({ sid: sess?.sid ?? '', session: sess as Session, request: who.request }, mpDef.id)) }
+      catch { res.setHeader('connection', 'close'); return send(res, FORBIDDEN) }
       if (crossOrigin(who.request, settings)) return send(res, FORBIDDEN)
       const rl = await server.limiter.check({ ip: who.request.ip })
       if (!rl.ok) { res.setHeader('connection', 'close'); return send(res, toApiResult([rateLimited(rl.retryAfterMs)])) }

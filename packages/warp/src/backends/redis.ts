@@ -170,6 +170,7 @@ export class RedisSessionStore extends SessionStore {
       return undefined
     }
     const [sid, rev, data, created, seen, ver] = r
+    if (this.tooOld(Number(created))) { await this.delete(sid); return undefined }
     let s = this.byId.get(sid)
     if (!s) s = this.cache({ sid, rev: Number(rev), data: dec(data), createdAt: Number(created), lastSeen: Number(seen) }, Number(ver))
     else {

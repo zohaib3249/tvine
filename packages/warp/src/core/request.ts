@@ -46,6 +46,13 @@ function normalizeIp(raw: string): string {
   return m ? m[1]! : a
 }
 
+// A direct local request (metrics + health details): the socket itself is loopback, nothing claims to be forwarded,
+// and no proxy is trusted — a same-host proxy would otherwise make every request look local.
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+export const isLocalRequest = (req: IncomingMessage, settings: Pick<Settings, 'trustProxy'>): boolean =>
+  settings.trustProxy === 0 && LOOPBACK.has(req.socket.remoteAddress ?? '') &&
+  !Object.keys(req.headers).some((h) => h.startsWith('x-forwarded-') || h === 'forwarded' || h === 'x-real-ip')
+
 // Walk X-Forwarded-For right-to-left exactly `hops` steps; never trust entries further left.
 // Fewer entries than hops -> socket address: DELIBERATE fail-closed (the leftmost entry would
 // hand the rate-limit key to a client hitting us directly).

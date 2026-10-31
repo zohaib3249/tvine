@@ -24,7 +24,8 @@ function summary(params: Record<string, unknown>): Record<string, unknown> {
 const refused = (why: string) => ev.err('domain', `confirmation refused (${why}); call again without $confirm for a new token`, { reason: 'confirm_invalid' })
 
 export async function confirmGate(def: ActionDef, input: Record<string, unknown>, token: unknown, params: unknown, ctx: ActionCtx, server: ServerCtx): Promise<Event | undefined> {
-  const rule = def.rules?.confirm
+  const r = def.rules?.confirm
+  const rule = typeof r === 'function' ? r(input, ctx) : r
   if (!rule) return undefined
   const by = rule === true ? 'anyone' : rule.by ?? 'anyone'
   const agent = ctx.request.agent.is

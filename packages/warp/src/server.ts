@@ -7,14 +7,16 @@ import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
+import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
-import { buildRequest, clientIp } from './core/request.js'
+import { buildRequest, clientIp, isLocalRequest } from './core/request.js'
+import { cookieOpts } from './core/session.js'
+import { metrics, since } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
@@ -48,7 +50,7 @@ type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => 
 export type HeadersLike = Iterable<[string, string]>   // a fetch Headers, or Next's headers()
 export interface CookieJar {                           // Next's cookies()
   get(name: string): { value: string } | undefined
-  set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax'; secure: boolean; path: string; maxAge: number }): unknown
+  set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax' | 'strict' | 'none'; secure: boolean; path: string; maxAge: number }): unknown
 }
 export interface NextApp {
   prepare(): Promise<void>
@@ -226,6 +228,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
   const tabs = new TabHub(ctx)
   ctx.tabs = tabs
+  metrics.enabled = settings.metrics.enabled
+  if (metrics.enabled) {
+    metrics.gauge('tvine_sse_connections', () => [[{}, sse.size]])
+    metrics.gauge('tvine_tab_connections', () => [[{}, tabs.size]])
+    metrics.gauge('tvine_sessions', () => [[{}, ctx.sessions.size]])
+  }
   const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs })
   const mcp = mcpHandler(ctx, { route, tabs })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
@@ -250,7 +258,13 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const reqLog = getLogger('tvine.request')
   const chain: Handler[] = [
     ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
+    ...(settings.metrics.enabled ? [metricsHandler(settings)] : []),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now(), robots: robotsOf(routes, fe?.nextDir, adminBase),
+      isStaff: async (req) => {   // /tvine/health details for a staff session
+        const request = await buildRequest({ req, route: '/tvine/health', isAgent: false }, settings)
+        await authenticate(settings, request, await ctx.sessions.peek({ cookie: cookieOf(request, settings) }))
+        return request.user.isStaff === true && request.user.isActive !== false
+      } }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
@@ -281,6 +295,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const mediaRoot = settings.media.route.replace(/\/$/, '')
   const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
     p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!(urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })()) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
+  // metrics label: which transport answered (a fixed set, never the raw path)
+  const transportOf = (p: string) => p === '/mcp' ? 'mcp' : p === '/tvine/channel' ? 'channel'
+    : p.startsWith('/tvine/tab/') || p.startsWith('/tvine/agent/') ? 'tab' : p.startsWith('/tvine/api/') ? 'api'
+    : urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })() ? 'urls'
+    : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}
@@ -307,6 +326,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       ;(req as MwRequest).tvine = st
       delete req.headers['x-tvine-locale']   // only the Locale middleware sets it
       weakIfNoneMatch(req)
+      if (metrics.enabled) {
+        const t0 = performance.now(), p = pathOf(req)
+        res.once('close', () => metrics.observe('tvine_http_request_duration_seconds', { transport: transportOf(p), status: res.headersSent ? `${Math.floor(res.statusCode / 100)}xx` : 'aborted' }, since(t0)))
+      }
       // a real node response only (a test double without header methods is passed through untouched)
       const hookOpts = { get compression() { return st.compression }, onHeaders: () => { for (let k = headerFns.length - 1; k >= 0; k--) headerFns[k]!() } }
       if (typeof res.getHeader === 'function') unhook = hookResponse(req, res, hookOpts)
@@ -401,6 +424,33 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
   }
 }
 
+// BACKLOG #9: GET settings.metrics.path → Prometheus text. Allowed: the bearer token, or the client ip in allowIps;
+// neither configured = loopback only. Anything else gets a plain 404 (the endpoint's existence is not disclosed).
+function metricsHandler(settings: Settings): Handler {
+  const { path, token, allowIps } = settings.metrics
+  // production: a same-host proxy (or a proxy that strips X-Forwarded-For) makes every request look local, so
+  // "loopback only" is never a production guard
+  if (isProduction() && !token && !allowIps.length) throw new Error('settings.metrics.enabled in production needs metrics.token or metrics.allowIps (loopback-only is dev only)')
+  const allowed = (req: IncomingMessage) => {
+    const given = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
+    if (token && given) { const a = Buffer.from(given), b = Buffer.from(token); if (a.length === b.length && timingSafeEqual(a, b)) return true }
+    if (allowIps.length) return allowIps.includes(clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
+    return !token && isLocalRequest(req, settings)
+  }
+  return (req, res, next) => {
+    if (pathOf(req) !== path) return next()
+    if (!allowed(req)) return void res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
+    res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8', 'cache-control': 'no-store' }).end(metrics.render())
+  }
+}
+
+// BACKLOG #11: the app's own robots.txt (public/robots.txt, or an app/robots route) wins over the default
+function robotsOf(routes: RouteInfo[], nextDir: string | undefined, admin: string | undefined) {
+  const pub = join(nextDir ? dirname(resolve(nextDir)) : process.cwd(), 'public')
+  const has = (f: string) => routes.some((r) => r.path === `/${f}`) || existsSync(join(pub, f))
+  return { own: has('robots.txt'), sitemap: has('sitemap.xml'), admin }
+}
+
 // apps' /tvine/health sections (ServerCtx.health); a failing one reports itself, never fails health
 function healthSections(ctx: ServerCtx): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -453,7 +503,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     try { path = new URL(h.referer).pathname } catch { /* refused below */ }
     const pattern = path === undefined ? undefined : route(path)
     if (path === undefined || pattern === undefined) return { ok: false, message: 'forbidden: the referer is not a page of this site' }
-    let { ip, secure } = stampOf(h, settings, src.nonce)
+    let { ip } = stampOf(h, settings, src.nonce)
     if (!ip) {
       ip = 'unknown'
       if (!warned) { warned = true; server.log('warn', '<Form> request did not pass through the tvine handler and trustProxy is 0: all such submits share one rate-limit key') }
@@ -470,7 +520,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
       if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
       cookie = await sessions.cookieFor((await sessions.create()).sid)
       // the same attributes as transport/http.ts sets on its session cookie
-      jar.set(name, cookie, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+      jar.set(name, cookie, cookieOpts(settings))
       const others = (h.cookie ?? '').split(';').map((p) => p.trim()).filter((p) => p && !p.startsWith(`${name}=`))
       const header = [...others, `${name}=${cookie}`].join('; ')
       const base = request.headers
@@ -478,7 +528,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     }
     const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
     const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
-    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), cookieOpts(settings))
     return out
   }
 }
@@ -569,7 +619,7 @@ export function apiFor(server: ServerCtx, route: (path: string) => string | unde
     const action = h['next-action'] !== undefined
     return invoke(server, call, {
       request, cookie: jar.get(name)?.value, mode: action ? 'action' : 'render',
-      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
+      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), cookieOpts(settings)) },
     })
   }
 }

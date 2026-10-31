@@ -38,6 +38,7 @@ export class AuthUser implements TvineUser {
   #groups?: Promise<string[]>
   #settings: Settings
 
+  tokenKey?: string   // via 'token': the key of the token this request runs on
   constructor(row: UserRow, settings: Settings, readonly via: 'session' | 'token', readonly scopes?: readonly string[]) {
     this.id = String(row.id); this.name = this.username = row.username; this.email = row.email
     this.isActive = row.isActive; this.isStaff = row.isStaff; this.isSuperuser = row.isSuperuser
@@ -125,6 +126,14 @@ export const recentlyAuthenticated = (ctx: ActionCtx, now = Date.now()) => {
   return typeof at === 'number' && now - at <= RECENT_MS && now >= at
 }
 
+// Django update_session_auth_hash: after this session's own user changed the password, keep this session (new sid);
+// every other session of the user is already stale (bound to the old hash)
+export function updateSessionAuthHash(ctx: Pick<ActionCtx, 'session' | 'settings'>, row: { id: number; password: string }): void {
+  if (ctx.session?.data.get(SESSION_USER) !== String(row.id)) return
+  ctx.session.data.set(SESSION_HASH, sessionHash(ctx.settings, row.password))
+  cycleSession(ctx)
+}
+
 // every token of a user stops working (password reset / change: a token made by an attacker dies with it)
 export const revokeTokens = (userId: number) => Token.objects.filter({ userId, revoked: false }).update({ revoked: true })
 
@@ -153,7 +162,9 @@ export async function tokenUser(settings: Settings, token: string): Promise<Auth
   if (!user?.isActive) return undefined
   // at most once a minute, outside the request's transaction; a failed stamp never fails the request
   if (!row.lastUsed || Date.now() - row.lastUsed.getTime() > LAST_USED_MS) void Token.objects.filter({ id: row.id }).update({ lastUsed: new Date() }).catch(() => undefined)
-  return new AuthUser(user, settings, 'token', Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [])
+  const u = new AuthUser(user, settings, 'token', Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [])
+  u.tokenKey = row.key
+  return u
 }
 
 export function backendFor(settings: Settings): AuthBackend {

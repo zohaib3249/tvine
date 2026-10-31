@@ -20,6 +20,7 @@ import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
 import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
+import { metrics } from './metrics.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
 import { cachedRun } from '../cache/index.js'
@@ -123,6 +124,12 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   securityOutcome(server, cmd, sid, events, hold.req!)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
+  if (metrics.enabled) {
+    const outcome = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')?.code ?? 'ok'
+    // only registered ids label a series (an unknown id is caller-chosen text: cardinality)
+    metrics.inc('tvine_actions_total', { action: server.actions.get(cmd.action) ? cmd.action : '_unknown', outcome, via: request.agent.is ? 'agent' : 'human' })
+    if (outcome === 'rate_limited') metrics.inc('tvine_ratelimit_hits_total', { scope: 'action' })
+  }
   yield* events
 }
 
@@ -206,7 +213,7 @@ export function formResult(events: Event[]): FormResult {
 // ---- helpers -------------------------------------------------------------------------------
 const pageOf = (r: Request) => { const q = r.query.toString(); return q ? `${r.path}?${q}` : r.path }
 
-function cookieOf(r: Request, s: Settings): string | undefined {
+export function cookieOf(r: Request, s: Settings): string | undefined {
   for (const part of (r.headers.get('cookie') ?? '').split(';')) {
     const i = part.indexOf('=')
     if (i > 0 && part.slice(0, i).trim() === s.session.cookieName) return part.slice(i + 1).trim()

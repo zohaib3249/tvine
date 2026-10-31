@@ -15,6 +15,7 @@ import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
+import type { Settings } from './core/types.js'
 import { mcpEnabled } from './transport/mcp.js'
 import { backendTable } from './backends/index.js'
 import { redisUsers } from './settings.js'
@@ -218,6 +219,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         io.out(`action middleware: ${srv.ctx.settings.actionMiddleware.length} global`)
         io.out(`env set: ${envReport().filter((e) => e.set).map((e) => e.name).join(', ') || '(none)'}`)
         for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
+        io.out(metricsLine(srv.ctx.settings.metrics))
         let down = false
         for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
           const p = await redis.ping(alias)
@@ -372,4 +374,11 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void main(process.argv.slice(2)).then((code) => { if (code !== undefined) process.exit(code) })
+}
+
+// `tvine check`: the metrics endpoint and its guard (the token itself is never printed)
+export function metricsLine(m: Settings['metrics']): string {
+  if (!m.enabled) return 'metrics: off'
+  const guard = [m.token && 'bearer token', m.allowIps.length && `allowIps (${m.allowIps.length})`].filter(Boolean).join(' or ') || 'loopback only'
+  return `metrics: on at ${m.path} (${guard})`
 }

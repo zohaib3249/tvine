@@ -34,11 +34,17 @@ export async function importApp(file: string): Promise<Record<string, unknown>> 
   return import(pathToFileURL(file).href)
 }
 const TS = /\.m?ts$/
+// esbuild is an optional peer: only TypeScript app loading (tvine start/dev/worker on .ts apps) and the FE/DB
+// boundary check need it. Hidden from bundlers: Next bundles warp into page chunks and must not follow its native binary.
+export async function loadEsbuild(why: string): Promise<typeof import('esbuild')> {
+  try { return (await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'esbuild')) as typeof import('esbuild') }
+  catch (e) { throw new Error(`${why} needs esbuild: pnpm add esbuild (or compile apps/ to .js)`, { cause: e }) }
+}
 let hooked: Promise<void> | undefined
 async function tsHooks(): Promise<void> {
   if (typeof registerHooks !== 'function') throw new Error(`loading TypeScript app modules needs Node >= 22.15 (this is ${process.version}); or compile apps/ to .js`)
   // hidden from bundlers: Next bundles warp into page chunks and must not follow esbuild's native binary
-  const { transformSync } = (await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'esbuild')) as typeof import('esbuild')
+  const { transformSync } = await loadEsbuild('loading TypeScript app modules (apps/**/*.ts)')
   process.setSourceMapsEnabled(true)   // stack traces point at the app's .ts lines (inline maps below)
   // ponytail: tsconfig is not read (no tsconfigRaw: TC39 decorators, ES2022 class fields) and only .ts/.mts are
   // transformed (.tsx/.cts go to Node as-is); read the app's tsconfig if an app needs other compiler options.
