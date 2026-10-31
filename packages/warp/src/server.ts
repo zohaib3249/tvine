@@ -136,7 +136,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
-  const ctx = serverCtx({ actions, settings, appMiddleware, snapshot: (route, sid) => snapshot(route, sid) })
+  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (route, sid) => snapshot(route, sid) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
   // AppConfig.ready(): each app's hooks.ts ready(server), awaited, in installed-app order (contrib auth installs its backend here)
   for (const { app, fn } of signals.ready) {
@@ -178,7 +178,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
   }
   const chain: Handler[] = [
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size }), startedAt: Date.now() }),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
@@ -286,6 +286,15 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       await connections.closeAll()
     },
   }
+}
+
+// apps' /tvine/health sections (ServerCtx.health); a failing one reports itself, never fails health
+function healthSections(ctx: ServerCtx): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [name, fn] of ctx.health) {
+    try { out[name] = fn() } catch (e) { out[name] = { error: (e as Error).message } }
+  }
+  return out
 }
 
 // https per the same trusted hops as request.ip (transport/http.ts): socket TLS, or rightmost-trustProxy X-Forwarded-Proto.

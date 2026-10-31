@@ -53,8 +53,13 @@ export type Event =
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
-  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent'; action?: ActionId }   // v2 live; action: an agent's server action (presence outlines its widget)
+  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' | 'job'   // v2 live; 'job': tvine.tasks progress
+      action?: ActionId                                                // an agent's server action (presence outlines its widget)
+      job?: JobUpdate }                                                // tvine.tasks: a background job of this session moved
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
+
+// tvine.tasks progress / completion carried on an `update` event (docs/design/contrib/tasks.md §Results)
+export interface JobUpdate { id: string; task: string; status: string; progress?: number; message?: string }
 
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
@@ -200,6 +205,9 @@ export interface Settings {
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
+  // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
+  // SIGTERM grace, how long final job rows are kept
+  tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
