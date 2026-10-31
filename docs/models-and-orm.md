@@ -13,8 +13,8 @@ Nothing for development: the database is `./tvine.db`. For another engine, set t
 | `postgres://user:pass@host/db` | Postgres | `pg` |
 | `mysql://user:pass@host/db`, `mariadb://…` | MySQL / MariaDB | `mysql2` |
 
-Set it as `DATABASE_URL` or `settings.db.url`. Pool and engine details:
-[design/conventions/db-engines.md](design/conventions/db-engines.md).
+Set it as `DATABASE_URL` or `settings.db.url`. Pool settings: `settings.db.pool` (`{ max, acquireMs, idleMs }`); production notes in
+[deploy.md](deploy.md).
 
 ## A model
 
@@ -93,8 +93,8 @@ defineModel('patient', {
 ```
 
 Keys come from `settings.encryption.keys` / `TVINE_ENCRYPTION_KEYS` (default: derived from the secret).
-After adding a key, rewrite old rows: `pnpm exec tvine encryption rotate`. Rules:
-[design/conventions/security-features.md](design/conventions/security-features.md).
+After adding a key, rewrite old rows: `pnpm exec tvine encryption rotate`.
+Key handling: [auth-and-security.md](auth-and-security.md).
 
 ### Meta
 
@@ -142,8 +142,6 @@ await Product.objects.values('category').annotate({ n: Count('id') }).order('-n'
 
 Also `getOrCreate`, `updateOrCreate`, `bulkCreate`, `bulkUpdate`, `inBulk`, `selectRelated`, `prefetchRelated`,
 `selectForUpdate`, `distinct`, `values`, `valuesList`, `exists`, `last`, and `Paginator(qs, perPage)` for page numbers.
-Full list: [design/conventions/orm-advanced.md](design/conventions/orm-advanced.md),
-[design/conventions/orm-queryset.md](design/conventions/orm-queryset.md).
 
 ## Await or not
 
@@ -176,7 +174,8 @@ pnpm exec tvine migrate notes               # forward to the latest again
 
 Other flags: `makemigrations --name x --empty --merge --allow-drop`, `migrate --fake`, `sqlmigrate --backwards`.
 Migrations are TypeScript files with `ops.*` calls (`createModel`, `addField`, `runSQL(sql, { reverse })`, …).
-Rollback rules and every op: [design/conventions/orm-advanced.md](design/conventions/orm-advanced.md#5-migrations).
+Roll back by migrating to an earlier name (`migrate <app> <name>`, or `zero`); a `runSQL` without `reverse` cannot
+be rolled back.
 
 ## Fixtures
 
@@ -196,5 +195,3 @@ pnpm exec tvine loaddata notes.json                    # one transaction, upsert
 - A partial unique index (`UniqueConstraint({ condition })`) is refused on MySQL.
 - An index added by a hand-written migration must also be in Meta, or `makemigrations` proposes removing it.
 - Pages never import models; `tvine check` fails if they do. Pages use `api.*` ([views-urls-api.md](views-urls-api.md)).
-
-Depth: [design/conventions/models-db.md](design/conventions/models-db.md).

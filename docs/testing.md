@@ -62,8 +62,6 @@ pnpm exec vitest run
 | `normalize(snapshot)` | Replaces sid, rev, binds and ISO timestamps with placeholders |
 | `signedBind(action, payload, settings)` | The bind a page would sign for `<Form action bind={…}>`, for backend-only tests |
 
-Signatures: [design/conventions/testing.md](design/conventions/testing.md).
-
 ## Full-stack tests
 
 For end-to-end tests, boot a real `tvine start` child process on a temp database (`DATABASE_URL=file:/tmp/x.db`)
