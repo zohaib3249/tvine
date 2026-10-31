@@ -106,7 +106,12 @@ export function ModelForm(props: ModelFormProps) {
 
   const controls: Record<string, Control<any, any>> = readOnly ? {} : {
     submit: { kind: 'submit', label: 'Save', run: async () => {
-      const r = await submitRef.current()
+      let r: unknown
+      try { r = await submitRef.current() } catch (e) {
+        if (e instanceof WeftError) throw e
+        const m = mapServerErrors(e), [f, msg] = Object.entries(m.fields)[0] ?? [undefined, m.nonField.join(' ')]
+        throw new WeftError('invalid_param', msg || 'submit failed', undefined, f)
+      }
       if (r && typeof r === 'object' && (r as { ok?: boolean }).ok === false) throw new WeftError('invalid_param', (r as { message: string }).message)
       return (r ?? { ok: true }) as Json
     }, ...(call && { headless: { call: call.id, ...(call.args && { args: call.args }) } satisfies HeadlessMap }) },
