@@ -15,7 +15,7 @@ export type UrlEntry = UrlPattern | UrlInclude
 
 // Django's default converters: regex + to_python. path matches across '/'.
 const CONVERTERS: Record<string, { re: string; parse?: (s: string) => unknown }> = {
-  int: { re: '[0-9]+', parse: Number },
+  int: { re: '[0-9]{1,15}', parse: Number },   // ponytail: ≤ 15 digits stays exact as a JS number (Django: unbounded int)
   str: { re: '[^/]+' },
   slug: { re: '[-a-zA-Z0-9_]+' },
   uuid: { re: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' },

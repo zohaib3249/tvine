@@ -229,7 +229,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // the paths this server itself answers (embedded mode hands everything else to the host app)
   const mediaRoot = settings.media.route.replace(/\/$/, '')
   const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
-    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!urls?.match(p).length || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
+    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!(urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })()) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}

@@ -5,19 +5,22 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import type { UrlTable } from '../urls.js'
+import { coerceQuery, creates } from '../views/generic.js'
 import { API_FORBIDDEN, apiFail, callerOf, invoke, readBody, sendApi, tooDeep, type ApiTransportOptions } from './api.js'
 
 export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransportOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings } = server
 
   async function handle(req: IncomingMessage, res: ServerResponse, hit: ReturnType<UrlTable['match']>[number]) {
-    const def = hit.route.methods.get(req.method!)!
+    const method = req.method === 'HEAD' ? 'GET' : req.method!   // Django: HEAD = GET without a body (node drops it)
+    const def = hit.route.methods.get(method)!
     const who = await callerOf(server, o, req, res)
     if (!who) return sendApi(res, API_FORBIDDEN)
     let given: Record<string, unknown> = {}
-    if (req.method === 'GET') {
+    if (method === 'GET') {
       const q = new URL(req.url ?? '/', 'http://tvine.local').searchParams
       for (const k of new Set(q.keys())) { const all = q.getAll(k); given[k] = all.length > 1 ? all : all[0] }
+      given = coerceQuery(def, given)
     } else {
       const raw = await readBody(req, settings.limits.bodyBytes)
       if (raw === null) { res.setHeader('connection', 'close'); return sendApi(res, apiFail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
@@ -34,7 +37,8 @@ export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransport
       given[k] = v
     }
     const h = (n: string) => { const v = req.headers[n]; return typeof v === 'string' ? v : undefined }
-    sendApi(res, await invoke(server, { id: def.id, params: given, bind: h('x-tvine-bind'), cmdId: h('idempotency-key') }, who))
+    const r = await invoke(server, { id: def.id, params: given, bind: h('x-tvine-bind'), cmdId: h('idempotency-key') }, who)
+    sendApi(res, r, ...(r.ok && creates.has(def) ? [201] : []))
   }
 
   return (req, res, next) => {
@@ -42,9 +46,10 @@ export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransport
     try { path = decodeURIComponent((req.url ?? '/').split('?')[0]!) } catch { return next() }
     const hits = urls.match(path)
     if (!hits.length) return next()
-    const hit = hits.find((x) => x.route.methods.has(req.method!))
+    const method = req.method === 'HEAD' ? 'GET' : req.method!
+    const hit = hits.find((x) => x.route.methods.has(method))
     if (!hit) {
-      const allow = [...new Set(hits.flatMap((x) => [...x.route.methods.keys()]))].join(', ')
+      const allow = [...new Set(hits.flatMap((x) => [...x.route.methods.keys()].flatMap((m) => (m === 'GET' ? ['GET', 'HEAD'] : [m]))))].join(', ')
       return sendApi(res, apiFail('invalid_param', `method ${String(req.method).slice(0, 10)} not allowed`), 405, { allow })
     }
     void handle(req, res, hit).catch((e: unknown) => {

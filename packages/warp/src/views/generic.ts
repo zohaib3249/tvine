@@ -3,7 +3,7 @@
 // its hooks / @action method on a fresh `Object.create(view)`, so `this.x = …` never leaks between
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
-import { liveManifest } from '../core/actions.js'
+import { liveManifest, paramSpecs } from '../core/actions.js'
 import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
@@ -87,7 +87,9 @@ function parseLookup(l: string): { field: string; op: Op | undefined } {
 
 // URL params arrive as strings; coerce through the field's type ("30" → 30, "a,b" → [a, b]).
 // A blank string stays a string, so z.number rejects it (never silently 0).
-const num = z.preprocess(v => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v), z.number())
+const toNum = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? Number(v) : v)
+const toBool = (v: unknown) => (v === 'true' ? true : v === 'false' ? false : v)
+const num = z.preprocess(toNum, z.number())
 function valueSchema(f: AnyField): z.ZodTypeAny {
   switch (f.kind) {
     // money: major units ("30" = $30). A URL string must be plain decimal (no 0x1E / 1e1 / 29.999…9
@@ -97,7 +99,7 @@ function valueSchema(f: AnyField): z.ZodTypeAny {
       .refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
     case 'id': case 'int': case 'float': return num
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
-    case 'bool': return z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
+    case 'bool': return z.preprocess(toBool, z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
     case 'enum': return f.zod()
     default: return z.string()
@@ -107,6 +109,12 @@ function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
   if (op === 'contains') return z.string()
   if (op === 'in') return z.preprocess(v => (typeof v === 'string' ? v.split(',') : v), z.array(valueSchema(f)).max(MAX_IN))
   return valueSchema(f)
+}
+
+// urls.ts GET: query strings → the action's number/boolean params, with the same coercion as the lookups above
+export function coerceQuery(def: Pick<ActionDef, 'schema' | 'rules'>, q: Record<string, unknown>): Record<string, unknown> {
+  const types = new Map(paramSpecs(def).map((p) => [p.name, p.type]))
+  return Object.fromEntries(Object.entries(q).map(([k, v]) => [k, types.get(k) === 'number' ? toNum(v) : types.get(k) === 'boolean' ? toBool(v) : v]))
 }
 
 // zod failure → DomainError invalid_param naming the offending param
@@ -254,6 +262,7 @@ const actionName = new WeakMap<ActionDef, string>()
 const registered = new WeakMap<Function, Map<string, ActionDef>>()
 export function bindRegistered(V: Function, original: ActionDef, def: ActionDef, views: Map<string, Map<string, ActionDef>[]>): void {
   const name = actionName.get(original)!
+  if (name === 'create' && (V as unknown as typeof GenericView).actions?.includes('create')) creates.add(def)
   let byName = registered.get(V)
   if (!byName) registered.set(V, (byName = new Map()))
   byName.set(name, def)
@@ -269,6 +278,8 @@ function registeredDef(V: Function, name: string): ActionDef | undefined {
   return hits[0]?.get(name)
 }
 
+// generated create actions: transport/urls answers them 201 (DRF CreateModelMixin)
+export const creates = new WeakSet<ActionDef>()
 // Routers (urls.ts): each registered action of a view with its DRF detail flag and HTTP methods.
 export interface ViewRoute { name: string; def: ActionDef; detail: boolean; methods: string[] }
 const GENERATED: Record<GeneratedAction, [detail: boolean, methods: string[]]> = {
