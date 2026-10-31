@@ -30,6 +30,14 @@ const localHost = (h: string | undefined) => {
   try { return h !== undefined && LOCAL_HOSTS.has(new URL(`http://${h}`).hostname) } catch { return false }
 }
 
+// The inspector rule (dev surfaces only): socket loopback (never X-Forwarded-For), no proxy header (a local reverse
+// proxy makes every client look like 127.0.0.1), and a loopback Host. `listen(port)` binds every interface.
+export function localOnly(req: IncomingMessage): boolean {
+  const hdr = (n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
+  const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
+  return !proxied && LOOPBACK.has(clientIp(null, req.socket.remoteAddress ?? '', 0)) && localHost(hdr('host'))
+}
+
 function cookieValue(header: string | undefined, name: string): string | undefined {
   for (const part of (header ?? '').split(';')) {
     const i = part.indexOf('=')
@@ -56,10 +64,8 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const ip = ipKey(clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy))   // IPv6 per /64, like rate buckets
 
     const inspector = url.searchParams.get('group') === 'inspector'
-    // Inspector feed: dev only, AND socket loopback (never X-Forwarded-For), AND no proxy header (a local
-    // reverse proxy makes every client look like 127.0.0.1), AND a loopback Host. `listen(port)` binds every interface.
-    const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
-    if (inspector && (!isDev || proxied || !LOOPBACK.has(clientIp(null, remote, 0)) || !localHost(hdr('host')))) return json(403, ev.err('domain', 'forbidden'))
+    // Inspector feed: dev only, AND loopback only (localOnly).
+    if (inspector && (!isDev || !localOnly(req))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)

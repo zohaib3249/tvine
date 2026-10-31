@@ -26,7 +26,7 @@ import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
 import { TabHub, tabTransport } from './transport/tab.js'
-import { inspectorFeed } from './transport/inspector.js'
+import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 
@@ -179,6 +179,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       channel(req, res, next)
     },
     (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
+    ...(feed ? [widgetsTransport(feed)] : []),   // W10 inspector Widgets tab; dev only, like the feed
     tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
     apiTransport(ctx, { route, tokens, asSession: (v) => internalOf(v, nonce) }),
