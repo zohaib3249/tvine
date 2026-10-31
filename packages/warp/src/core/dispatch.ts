@@ -22,6 +22,7 @@ import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
+import { cachedRun } from '../cache/index.js'
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 
@@ -179,8 +180,8 @@ export function formResult(events: Event[]): FormResult {
   for (const e of events) {
     if (e.kind === 'err') {
       const errs = e.code !== 'invalid_param' ? undefined
-        : e.errors?.length ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
-        : e.field ? { [e.field]: e.message } : undefined
+        : e.errors && e.errors.length > 1 ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
+        : (e.field ?? e.errors?.[0]?.field) ? { [(e.field ?? e.errors![0]!.field)]: e.message } : undefined   // one field: the "field: message" text, as before errors[]
       return { ok: false, ...(errs && { errors: errs }), message: e.message, ...(e.confirm && { confirm: e.confirm }) }
     }
     if (e.kind === 'goto') return { ok: true, goto: e.url }
@@ -525,8 +526,11 @@ type Outcome = { result: unknown } | { goto: string }
 async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
+    // rules.cache (Django cache_page): a fresh stored result skips the handler; errors are never stored. A cache hit
+    // is still an audited command (the audit write below runs either way)
+    const handler = () => scope.run(ctx, () => def.run(params, ctx))
     let out: Outcome
-    try { out = { result: await scope.run(ctx, () => def.run(params, ctx)) } }
+    try { out = { result: await (def.rules?.cache ? cachedRun(def, params, ctx, handler) : handler()) } }
     catch (e) {
       const url = redirectUrl(e)
       if (url === undefined) throw e

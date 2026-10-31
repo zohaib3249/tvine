@@ -75,7 +75,8 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
       // Django auto_now: Model.update is save(); a QuerySet.update() leaves the field alone (Django too)
       const now: Record<string, unknown> = {}
       for (const [n, f] of concrete(fields)) if (f.opts.autoNow && !(keyOf(n, f) in patch)) now[keyOf(n, f)] = new Date()
-      const n = await objects.filter({ id }).update({ ...now, ...patch })
+      const data = { ...now, ...patch }
+      const n = Object.keys(data).length ? await objects.filter({ id }).update(data) : 1   // nothing to write (a form saved unchanged): still a save
       const row = n ? await source.get(id) : undefined
       if (!row) throw new DomainError('domain', `${name} ${id} not found`)
       return row

@@ -154,8 +154,17 @@ function searchInput(p: FieldWidgetProps, s: ReturnType<typeof useSearch>, pick:
     onFocus={() => { s.setOpen(true); if (!s.res.length) s.run(s.q) }} onBlur={() => s.setOpen(false)}
     onChange={(e) => { s.setQ(e.target.value); s.setOpen(true); s.setHi(-1); s.run(e.target.value) }} {...extra} />
 }
+// Django's default fk / m2m widget: a <select> of the related rows the server listed (FieldMeta.choices)
+const selectRel = (p: FieldWidgetProps) => !!p.meta.relation && !p.meta.relation.autocomplete && !p.meta.relation.rawId && !!p.meta.choices
+const toRef = (p: FieldWidgetProps, pk: string): SearchResult => ({ pk, text: p.meta.choices!.find((c) => c.value === pk)?.label ?? pk })
 function Fk(p: FieldWidgetProps) {
   const rel = p.meta.relation, s = useSearch(p), v = p.value as SearchResult | null
+  if (selectRel(p)) {
+    return <select className="tf-input" value={v?.pk ?? ''} onChange={(e) => p.onChange(e.target.value ? toRef(p, e.target.value) : null)} {...common(p)}>
+      <option value="">---------</option>
+      {p.meta.choices!.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+    </select>
+  }
   if (rel?.rawId || !p.search) {   // Django raw_id_fields: type the pk
     return <input className="tf-input" type="text" inputMode="numeric" value={v?.pk ?? ''} placeholder="id"
       onChange={(e) => p.onChange(e.target.value ? { pk: e.target.value, text: e.target.value } : null)} {...common(p)} />
@@ -170,6 +179,11 @@ function Fk(p: FieldWidgetProps) {
 }
 function M2m(p: FieldWidgetProps) {
   const s = useSearch(p), vs = (p.value ?? []) as SearchResult[]
+  if (selectRel(p)) {
+    return <select className="tf-input" multiple value={vs.map((r) => r.pk)} onChange={(e) => p.onChange([...e.target.selectedOptions].map((o) => toRef(p, o.value)))} {...common(p)}>
+      {p.meta.choices!.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+    </select>
+  }
   const pick = (r: SearchResult) => { if (!vs.some((x) => x.pk === r.pk)) p.onChange([...vs, r]); s.setQ('') }
   return <div className="tf-autocomplete tf-multi" data-part="m2m">
     <ul className="tf-chips" aria-label={`${p.meta.label} selected`}>
@@ -226,6 +240,12 @@ export function display(p: FieldWidgetProps): ReactElement {
     case 'm2m': t = (v ?? []).map((r: SearchResult) => r.text).join(', '); break
     case 'password': t = v ? '••••••••' : '—'; break
     case 'file': case 'image': t = fileName(v); break
+    // in the viewer's locale (Django formats read-only dates with the active locale); SSR may differ from the tab
+    case 'date': case 'datetime': {
+      const d = v ? new Date(m.kind === 'date' ? `${String(v).slice(0, 10)}T00:00:00Z` : v) : undefined
+      t = !d || isNaN(+d) ? String(v ?? '') : m.kind === 'date' ? d.toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      return <div className="tf-readonly" id={p.id} data-part="readonly" suppressHydrationWarning>{t || '—'}</div>
+    }
     case 'rich': return <div className="tf-readonly tf-rich-view" id={p.id} dangerouslySetInnerHTML={{ __html: sanitizeHtml(v ?? '') }} />
     default: t = v == null ? '' : String(v)
   }

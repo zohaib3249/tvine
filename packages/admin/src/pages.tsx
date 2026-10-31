@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { toast } from '@tvine/weft/widgets'
 import type { Call, RouteData } from './data.js'
 import { href } from './routes.js'
@@ -191,5 +191,35 @@ export function Login({ error, user, call, onDone }: { error?: { code: string; m
         </PlainForm>
       </Region>
     </div>
+  )
+}
+
+// Django user_change_password: two password inputs that must match → the UserAdmin getUrls view (validators run there)
+export function PasswordChange({ args, data }: { args?: Record<string, string>; data?: unknown }) {
+  const { call, base, navigate } = useAdmin()
+  const [err, setErr] = useState<string>(), [busy, setBusy] = useState(false)
+  const id = args?.id ?? ''
+  const who = (data as ObjectData | undefined)?.display ?? id
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const f = new FormData(e.currentTarget), p1 = String(f.get('password1') ?? ''), p2 = String(f.get('password2') ?? '')
+    if (p1 !== p2) return setErr('The two password fields didn’t match.')
+    setBusy(true)
+    const r = await call('admin.auth_user_password_change', { id, password: p1 })
+    setBusy(false)
+    if (!r.ok) return setErr(r.message.replace(/^password: /, ''))
+    toast({ kind: 'success', title: 'Password changed', description: who })
+    navigate(href(base, { name: 'change', model: 'auth.user', pk: id }))
+  }
+  return (
+    <PlainForm onSubmit={submit} className="tva-card max-w-xl space-y-4 p-4">
+      <p className="text-muted">Enter a new password for the user <strong>{who}</strong>.</p>
+      {(['password1', 'password2'] as const).map((n, i) => (
+        <label key={n} className="block space-y-1"><span className="text-sm font-medium">{i ? 'Password (again)' : 'Password'}</span>
+          <input name={n} type="password" required autoComplete="new-password" className="tf-input w-full" agentId={n} /></label>
+      ))}
+      {err && <p role="alert" className="text-sm text-danger">{err}</p>}
+      <button type="submit" disabled={busy} className="tva-btn tva-btn-primary" agentId="save">{busy ? 'Saving…' : 'Change password'}</button>
+    </PlainForm>
   )
 }

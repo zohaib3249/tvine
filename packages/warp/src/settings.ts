@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import type { AuthSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
+import type { AuthSettings, CacheSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
 
 // Canonical shape: docs/design/conventions/settings.md. Validated at boot.
 type Fn = (...args: never[]) => unknown
@@ -28,6 +28,8 @@ export function redisFromEnv(): Settings['redis'] {
   if (!env.trim()) throw new Error('REDIS_URL is set but empty')
   return { default: { url: env } }
 }
+
+export const CACHE_DEFAULTS: CacheSettings = { backend: 'memory', redis: 'default', timeout: 300, keyPrefix: '', version: 1, maxEntries: 300 }
 
 export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   site: { name: 'tvine app', description: '' },
@@ -78,6 +80,10 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
   tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
   admin: { path: '/admin', theme: { dark: 'auto' } },
+  caches: { default: CACHE_DEFAULTS },
+  // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
+  email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
+    defaultFrom: 'webmaster@localhost', serverEmail: 'root@localhost', admins: [], subjectPrefix: '[Tvine] ', filePath: './mail' },
   installedApps: [],
 }
 
@@ -154,6 +160,15 @@ const schema: z.ZodType<Settings> = z.object({
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
     theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }) }),
+  caches: z.record(alias, z.object({
+    backend: z.enum(['memory', 'redis', 'file', 'dummy']), redis: alias, location: z.string().min(1).optional(),
+    timeout: z.number().min(0).nullable(), keyPrefix: z.string().max(64), version: z.number().int(), maxEntries: z.number().int().positive(),
+  }).strict().refine((c) => c.backend !== 'file' || !!c.location, 'a file cache needs location (a directory)')),
+  email: z.object({
+    backend: z.enum(['console', 'smtp', 'file', 'memory', 'dummy']), host: z.string(), port: z.number().int().min(1).max(65_535),
+    user: z.string(), password: z.string(), useTls: z.boolean(), useSsl: z.boolean(), allowPlainAuth: z.boolean(), timeoutMs: z.number().int().positive(),
+    defaultFrom: z.string(), serverEmail: z.string(), admins: z.array(z.string()), subjectPrefix: z.string(), filePath: z.string().min(1),
+  }).strict().refine((e) => !(e.useTls && e.useSsl), 'email.useTls and email.useSsl are mutually exclusive'),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
@@ -162,6 +177,7 @@ const schema: z.ZodType<Settings> = z.object({
     validators: z.array(fn<PasswordValidator>()).optional(),
     login: z.object({ maxFailures: z.number().int().positive(), accountMaxFailures: z.number().int().positive(), ipMaxFailures: z.number().int().positive(), windowMs: z.number().positive(), lockoutMs: z.number().positive() }).partial().optional(),
     resetTimeoutMs: z.number().positive().optional(),
+    resetUrl: z.string().optional(),
     sendPasswordReset: fn<NonNullable<AuthSettings['sendPasswordReset']>>().optional(),
     objectPermission: fn<NonNullable<AuthSettings['objectPermission']>>().optional(),
     tokens: z.object({ defaultDays: z.number().positive(), maxDays: z.number().positive() }).partial().optional(),
@@ -191,13 +207,23 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
-  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
-  const settings = schema.parse(merge(base as Record<string, unknown>, rest as Record<string, unknown>))
+  const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
+  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
+  // every named cache (not only `default`) is completed from the cache defaults
+  if (isPlain(merged.caches)) merged.caches = Object.fromEntries(Object.entries(merged.caches).map(([k, c]) => [k, { ...CACHE_DEFAULTS, ...(c as object) }]))
+  const settings = schema.parse(merged)
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
   // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
   // merging these settings again (loadSettings) re-resolves the secret instead of tripping here.
   if (!ok) Object.defineProperty(settings, 'secret', { enumerable: false, get: () => { throw new Error(SECRET_HELP) } })
   return settings
+}
+
+// Django parity: smtp in production, the in-memory outbox under tests (locmem), console in dev
+export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
+  if (process.env.NODE_ENV === 'production') return 'smtp'
+  return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
 }
 
 const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
@@ -207,6 +233,7 @@ const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (
 export function redisUsers(s: Settings): { key: string; alias: string }[] {
   const out: { key: string; alias: string }[] = []
   for (const k of ['session', 'channels', 'limits', 'snapshotCache'] as const) if (s[k].backend === 'redis') out.push({ key: `settings.${k}.backend`, alias: s[k].redis })
+  for (const [k, c] of Object.entries(s.caches ?? {})) if (c.backend === 'redis') out.push({ key: `settings.caches.${k}.backend`, alias: c.redis })
   if (s.tasks.broker === 'redis') out.push({ key: 'settings.tasks.broker', alias: s.tasks.redis })
   return out
 }

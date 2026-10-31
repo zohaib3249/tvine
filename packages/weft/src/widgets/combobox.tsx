@@ -1,5 +1,5 @@
 'use client'
-import { useId, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useEffect, useId, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { ActionHandle, Control } from '../widget/types.js'
@@ -9,7 +9,7 @@ import { AutoOff, flag, headlessOf, inner, invalid, part, typeText, useControlla
 // widgets/combobox.md: APG combobox (input + listbox). Async `items` get an AbortSignal and a sequence
 // number: only the newest request may write suggestions, so a slow old response never overwrites a newer one.
 // Results commit with flushSync so the options (and choose's enum) are live as soon as the load resolves.
-// ponytail: no debounce (each keystroke aborts the previous load); add one when a backend needs it.
+// Typing waits DEBOUNCE_MS before an async load (each keystroke restarts the wait); the agent `search` control loads at once.
 type C = Record<string, Control<any, any>>
 type Opt = { value: string; label: string }
 type S = { query: string; value: string | null; open: boolean; suggestions: Opt[]; loading: boolean }
@@ -26,10 +26,11 @@ export type ComboboxProps<T = any> = {
   placeholder?: string
   className?: SlotProps<S>['className']; slots?: Slots<'root' | 'label' | 'input' | 'content' | 'item' | 'empty' | 'loading', S>
 }
-type Internal = ComboboxProps & { s: S; load: { current: Promise<Opt[]> } }
+type Internal = ComboboxProps & { s: S; load: { current: Promise<Opt[]> }; flush: { current: () => void } }
 
 const MAX = 10
 const WAIT_MS = 3000
+const DEBOUNCE_MS = 200
 
 const useCombobox = defineWidget<Internal, S, C>({
   kind: 'combobox',
@@ -40,6 +41,7 @@ const useCombobox = defineWidget<Internal, S, C>({
       search: { kind: 'input', params: { text: { type: 'string' } }, run: async (a: { text: string }, ctx) => {
         const end = Date.now() + WAIT_MS
         await typeText(ctx, field(ctx), a.text)
+        p.flush.current()   // no debounce for agents
         let t: ReturnType<typeof setTimeout> | undefined
         const late = new Promise<Opt[]>((res) => { t = setTimeout(() => res([]), WAIT_MS) })
         let out: Opt[]
@@ -90,6 +92,10 @@ export function Combobox<T>(props: DefinedProps<ComboboxProps<T>, C>) {
   const seq = useRef(0)
   const ctrl = useRef<AbortController | null>(null)
   const load = useRef<Promise<Opt[]>>(Promise.resolve([]))
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pending = useRef<string | null>(null)
+  const flush = useRef(() => {})
+  useEffect(() => () => clearTimeout(timer.current), [])
   const id = useId()
 
   const toOpt = (t: T): Opt => ({ value: itemValue(t), label: itemLabel(t) })
@@ -112,7 +118,13 @@ export function Combobox<T>(props: DefinedProps<ComboboxProps<T>, C>) {
     const text = e.target.value
     setQ(text); onQueryChange?.(text); setOpen(true); setHi(-1)
     if (freeText) { setV(text || null); onValueChange?.(text || null) }
-    void fetchFor(text)
+    if (typeof items !== 'function') return void fetchFor(text)
+    clearTimeout(timer.current); pending.current = text
+    timer.current = setTimeout(() => flush.current(), DEBOUNCE_MS)
+  }
+  flush.current = () => {
+    clearTimeout(timer.current)
+    if (pending.current !== null) { const t = pending.current; pending.current = null; void fetchFor(t) }
   }
   const pick = (o: Opt) => {
     setQ(o.label); onQueryChange?.(o.label); setOpen(false)
@@ -128,7 +140,7 @@ export function Combobox<T>(props: DefinedProps<ComboboxProps<T>, C>) {
   }
 
   const s: S = { query: q, value: v, open, suggestions: sugg, loading }
-  const w = useCombobox({ ...props, s, load } as Internal)
+  const w = useCombobox({ ...props, s, load, flush } as Internal)
   return part('div', {
     ref: w.ref, ...w.props, 'data-tvine-widget': 'combobox', 'data-state': open ? 'open' : 'closed',
     'data-loading': flag(loading), 'data-disabled': flag(disabled),
