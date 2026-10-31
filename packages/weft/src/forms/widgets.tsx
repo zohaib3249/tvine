@@ -240,6 +240,12 @@ export function display(p: FieldWidgetProps): ReactElement {
     case 'm2m': t = (v ?? []).map((r: SearchResult) => r.text).join(', '); break
     case 'password': t = v ? '••••••••' : '—'; break
     case 'file': case 'image': t = fileName(v); break
+    // in the viewer's locale (Django formats read-only dates with the active locale); SSR may differ from the tab
+    case 'date': case 'datetime': {
+      const d = v ? new Date(m.kind === 'date' ? `${String(v).slice(0, 10)}T00:00:00Z` : v) : undefined
+      t = !d || isNaN(+d) ? String(v ?? '') : m.kind === 'date' ? d.toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      return <div className="tf-readonly" id={p.id} data-part="readonly" suppressHydrationWarning>{t || '—'}</div>
+    }
     case 'rich': return <div className="tf-readonly tf-rich-view" id={p.id} dangerouslySetInnerHTML={{ __html: sanitizeHtml(v ?? '') }} />
     default: t = v == null ? '' : String(v)
   }
