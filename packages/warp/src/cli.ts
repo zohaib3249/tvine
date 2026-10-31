@@ -29,7 +29,10 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
   migrate [--check] [--plan] [--fake]
   sqlmigrate <app> <migration>
-  showmigrations`
+  showmigrations
+  worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
+                                (SIGTERM: stop claiming, finish or release running jobs within the grace)
+  tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -45,6 +48,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
   sqlmigrate: { options: {}, args: [2, 2] },
   showmigrations: { options: {}, args: [0, 0] },
+  worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
+  tasks: { options: { status: str, queue: str, limit: str, dead: bool }, args: [0, 2] },
 }
 
 class Usage extends Error {}
@@ -125,6 +130,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         }
         process.once('SIGTERM', stop); process.once('SIGINT', stop)
         return undefined
+      }
+      case 'worker': {
+        const { workerCommand } = await import('./contrib/tasks/cli.js')
+        return await workerCommand(apps, await loadSettings(), o, io)
+      }
+      case 'tasks': {
+        const { tasksCommand } = await import('./contrib/tasks/cli.js')
+        return await tasksCommand(apps, await loadSettings(), args, o, io)
       }
       case 'inspect': {
         const port = o.port === undefined ? 7357 : Number(o.port)
