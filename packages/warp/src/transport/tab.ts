@@ -338,8 +338,8 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
   async function tab(req: IncomingMessage, res: ServerResponse, op: string) {
     if (!sameOrigin(req) || hdr(req, 'x-tvine-tab') !== '1') return send(res, 403, { error: 'forbidden' })
     const ip = ipOf(req)
-    const rl = server.limiter.check({ ip }), own = hub.postRate.check({ sid: `ip:${ipKey(ip)}` })
-    if (!rl.ok || !own.ok) return send(res, 429, { error: 'rate limited' })
+    // own bucket: result POSTs of a busy agent must not drain the ip's dispatch budget
+    if (!hub.postRate.check({ sid: `ip:${ipKey(ip)}` }).ok) return send(res, 429, { error: 'rate limited' })
     const b = await body(req, op === 'result' ? TAB_LIMITS.resultBytes : settings.limits.bodyBytes)
     if (!b) { res.setHeader('connection', 'close'); return send(res, 400, { error: 'body must be a JSON object' }) }
     const cookie = cookieOf(req)
@@ -347,6 +347,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     if (op === 'hello') {
       // a tab needs a cookie session to be controlled: mint one (after the origin + rate checks), never echo it
       if (session) return send(res, 200, { ok: true })
+      if (!server.limiter.check({ ip }).ok) return send(res, 429, { error: 'rate limited' })   // as the <Form> path, before minting
       session = sessions.create()
       const c = sessions.cookieFor(session.sid)
       return send(res, 200, { ok: true }, { 'set-cookie': `${name}=${c}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${https(req) ? '; Secure' : ''}` })

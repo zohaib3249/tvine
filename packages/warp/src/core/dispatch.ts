@@ -302,7 +302,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       // 9. committed: apply staged session data, bump rev, flush channel events
       try {
         session.data = staged.data
-        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
+        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)

@@ -5,6 +5,8 @@ import { getOverlay } from '../presence/overlay.js'
 import { showConnect, showRequest } from '../presence/chrome.js'
 import { abortRunning, setStopped } from './exec.js'
 import { pageTools, tabControl, webmcpActive, withNav } from './webmcp.js'
+import { getRegistry, type RegistryNode } from './registry.client.js'
+import { listed } from '../widget/vocabulary.js'
 
 const DECAY_MS = 30_000
 
@@ -77,6 +79,19 @@ function takeParam(name: string): string | null {
 }
 const store = () => { try { return globalThis.sessionStorage } catch { return undefined } }
 
+// agent-presence.md: an agent's server-side `do` → outline the mounted widget bound to that action, if any.
+function outlineAction(action: string): void {
+  const find = (n: RegistryNode): RegistryNode | undefined => {
+    for (const c of n.children) {
+      if (c.el && c.spec && listed(c.spec).some(([, ctl]) => !!ctl.headless && 'params' in ctl.headless && ctl.headless.params.id === action)) return c
+      const hit = find(c)
+      if (hit) return hit
+    }
+  }
+  const w = find(getRegistry().tree())
+  if (w?.el && w.spec) getOverlay().begin(w.el, { verb: 'submit', label: w.spec.label, control: 'submit', options: w.spec.presence as never })()
+}
+
 export function connectTab(): () => void {
   if (typeof EventSource === 'undefined') return () => {}
   const overlay = getOverlay()
@@ -142,6 +157,7 @@ export function connectTab(): () => void {
     s.addEventListener('control', (m) => controlled(parse(m)))
     s.addEventListener('release', () => released())
     s.addEventListener('cmd', (m) => { void onCmd(parse(m)) })
+    s.addEventListener('update', (m) => { const d = parse(m); if (d.source === 'agent' && typeof d.action === 'string') outlineAction(d.action) })
     s.addEventListener('error', () => {
       s.close()
       if (!got) { hello = undefined; return }   // no session yet (401): nothing to control; a later ensure(true) mints one

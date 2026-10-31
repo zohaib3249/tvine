@@ -13,7 +13,7 @@ export const ev = {
     return e
   },
   goto: (url: string): Event => ({ kind: 'goto', url }),
-  update: (sid: Sid, rev: Rev, source: 'human' | 'agent'): Event => ({ kind: 'update', rev, sid, source }),
+  update: (sid: Sid, rev: Rev, source: 'human' | 'agent', action?: ActionId): Event => ({ kind: 'update', rev, sid, source, ...(action && { action }) }),
 }
 
 // snapshot | goto | err end a sync exchange.

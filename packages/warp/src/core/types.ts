@@ -53,7 +53,7 @@ export type Event =
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
-  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' }   // v2 live
+  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent'; action?: ActionId }   // v2 live; action: an agent's server action (presence outlines its widget)
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
 
 export type ErrCode =
