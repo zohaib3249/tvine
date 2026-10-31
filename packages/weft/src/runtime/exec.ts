@@ -19,6 +19,7 @@ export interface UiError { code: ErrCode; message: string; reason?: string; fiel
 
 export interface ExecOptions {
   via: CallOptions['via']
+  source?: CallOptions['source']   // 'gallery': the dev gallery's "try it as agent" (same executor, same hooks)
   agent?: CallOptions['agent']
   // ActionHandle → server dispatch, with the per-step cmdId `${cmdId}.${i}` (retries never re-run it).
   run?: (handle: ActionHandle, params: Record<string, unknown>, cmdId: string) => Promise<ActionOutcome>
@@ -49,6 +50,11 @@ const seen = new Map<string, Promise<Out>>()
 let tail: Promise<void> = Promise.resolve()
 export function resetExecutor(): void { seen.clear(); setStopped(false) }
 
+// Dev observers (the gallery's inspector feed): told after every command, with what ran. Empty in production
+// unless dev code subscribed, so the cost there is one size check.
+export type ExecSeen = { cmd: UiCommand; via: ExecOptions['via']; source?: ExecOptions['source']; out: Out; ms: number }
+export const execWatchers = new Set<(e: ExecSeen) => void>()
+
 export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   const cmdId = typeof cmd.cmdId === 'string' && cmd.cmdId ? cmd.cmdId.slice(0, 128) : newCmdId()
   const hit = seen.get(cmdId)
@@ -56,7 +62,9 @@ export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   // One command at a time per tab: steps of two commands never interleave.
   // A timed-out/stopped step's control keeps running: the next command waits for it (bounded by drainMs).
   let running: Promise<unknown> = Promise.resolve()
+  const t0 = Date.now()
   const p = tail.then(() => execute(cmd, cmdId, o, (c) => { running = c }))
+  if (execWatchers.size) void p.then((out) => { for (const f of execWatchers) try { f({ cmd, via: o.via, source: o.source, out, ms: Date.now() - t0 }) } catch { /* a dev observer never breaks a command */ } })
   tail = p.then(() => drain(running), () => drain(running))
   seen.set(cmdId, p)
   // Blocked before anything ran (Stop): not a result worth replaying after Resume.
@@ -119,7 +127,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     try {
       if (POINTED.has(c.kind)) await presence.point(e.el)
       const call = callControl(target, control, args, {
-        via: o.via, cmdId, step: i, signal, presence, agent: o.agent,
+        via: o.via, source: o.source, cmdId, step: i, signal, presence, agent: o.agent,
         // In-tab navigate: same-site client transition, resolves after the new page settles (navigation-spa.md).
         navigate: o.navigate ?? (async (href) => { await agentNavigate(href, signal) }),
         ...(o.run && { run: (h, p) => o.run!(h, p ?? {}, `${cmdId}.${i}`) }),

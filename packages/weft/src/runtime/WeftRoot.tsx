@@ -24,5 +24,15 @@ export function WeftRoot({ hooks, auto, children, inTab = 'on', presence }: { ho
   useEffect(() => (inTab === 'off' ? undefined : registerWebMcp()), [inTab])
   // W7: the tab socket — a remote agent may control this tab after the human clicks Allow (production too)
   useEffect(() => (inTab === 'off' ? undefined : connectTab()), [inTab])
+  // W10: dev tools (Alt+Shift+W gallery + the inspector's Widgets feed). The NODE_ENV test is inlined by every
+  // bundler, so in a production build this branch and its dynamic import are dead code: no gallery chunk exists.
+  // Keep the import INSIDE the if-block: bundlers drop a constant-false branch before collecting imports.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'production') {
+      let off: (() => void) | undefined, gone = false
+      void import('../dev/Gallery.js').then((m) => { if (!gone) off = m.mountDevtools() }, () => {})
+      return () => { gone = true; off?.() }
+    }
+  }, [])
   return auto === false ? <AutoOff>{children}</AutoOff> : <>{children}</>
 }

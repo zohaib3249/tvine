@@ -155,8 +155,9 @@ export async function withNav<T>(fn: () => Promise<T>): Promise<T | Obj> {
 }
 
 // The page tools that run IN the tab on the registry: for an in-browser agent (WebMCP) and for a remote
-// agent's forwarded command (via 'tab'). Results are plain JSON values.
-export function pageTools(via: 'webmcp' | 'tab', header?: string) {
+// agent's forwarded command (via 'tab'), and the dev gallery's "try it as agent" (via 'inspector',
+// source 'gallery': same executor, hooks and presence). Results are plain JSON values.
+export function pageTools(via: 'webmcp' | 'tab' | 'inspector', header?: string, source?: 'gallery') {
   const agentVia = via === 'webmcp' ? 'webmcp' : 'channel'
   const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
     outcome(await agentPost({ action: h.id, params, bind: h.bind, cmdId, agentCmd: { cmdId, via: agentVia } }, header))
@@ -167,7 +168,7 @@ export function pageTools(via: 'webmcp' | 'tab', header?: string) {
       (expand(tree(), String(id), { offset, limit }) as Obj | undefined) ?? { kind: 'err', code: 'unknown_action', message: `no node ${id}; ids come from read_page` },
     ui: async (cmd: UiCommand): Promise<Obj> => {
       const from = currentPage()
-      const { result, error } = await runUi(cmd, { via, run })
+      const { result, error } = await runUi(cmd, { via, run, ...(source && { source }) })
       // stale_rev, or a step that changed the page (navigate), carries a fresh L0 map so the agent
       // can re-plan without another call.
       const map = error?.code === 'stale_rev' || result.page !== from ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
