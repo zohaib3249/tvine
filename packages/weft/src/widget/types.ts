@@ -19,7 +19,7 @@ export type WidgetKind =
 // Mirror of warp core/types ErrCode (weft does not import warp).
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
-  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
+  | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only' | 'confirm_required'
 
 export interface ParamSpec {
   type: 'string' | 'number' | 'boolean' | 'date' | 'file' | 'json'
