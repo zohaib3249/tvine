@@ -6,6 +6,9 @@ runs background jobs.
 
 Commands below were run against `apps/demo-shop` unless marked otherwise.
 
+Related guides: [auth-and-security.md](auth-and-security.md) (hosts, CSP, CORS, secrets),
+[tasks-cache-email.md](tasks-cache-email.md) (worker, Redis cache, SMTP), [admin.md](admin.md) (System pages).
+
 ## 1. Production checklist
 
 | Item | What to do |
@@ -25,7 +28,7 @@ Commands below were run against `apps/demo-shop` unless marked otherwise.
 ```bash
 export TVINE_SECRET=$(openssl rand -hex 32)
 export TVINE_ALLOWED_HOSTS=shop.example.com
-NODE_ENV=production pnpm exec tvine check     # … ok: 40 actions
+NODE_ENV=production pnpm exec tvine check     # … ok: 57 actions (the demo)
 pnpm build
 pnpm start                                      # = tvine migrate && tvine start  (PORT or --port, default 3000)
 ```
@@ -56,7 +59,7 @@ Route these to the same copy per session (cookie `tvine_s`, or header `x-tvine-s
 `/tvine/tab/*`, `/tvine/agent/*`, and `/mcp` (for `request_control`). Everything else can go anywhere.
 Details: [backends.md](design/conventions/backends.md).
 
-Split mode (Next on one server, `tvine start --api-only` on another) exists but is parked (BACKLOG #37); don't
+Split mode (Next on one server, `tvine start --api-only` on another) exists but is not recommended yet; don't
 start there.
 
 ## 3. SQLite in production
@@ -155,13 +158,19 @@ email: {
 ```
 
 Credentials are only sent over TLS. With `tvine.tasks` installed, `sendMail(…, { background: true })` goes
-through the worker with retries. See [email.md](design/conventions/email.md).
+through the worker with retries. See [tasks-cache-email.md](tasks-cache-email.md).
 
 ## 7. Metrics
 
-Not built yet: a `/tvine/metrics` endpoint is being added (task-prodpack). Until then, use the `command` hook
-(`apps/<app>/hooks.ts`: called after every action with its outcome) to feed your own metrics client
-([middleware-hooks.md](design/conventions/middleware-hooks.md)).
+Prometheus text at `/tvine/metrics`, off by default:
+
+```ts
+metrics: { enabled: true, path: '/tvine/metrics', token: process.env.METRICS_TOKEN, allowIps: [] },
+```
+
+Scrape with `Authorization: Bearer <token>`, or from an address in `allowIps`. In production one of the two is
+required (boot error otherwise); in dev, loopback requests are allowed. Anyone else gets a 404. The admin's
+System → Metrics and Traffic pages show the same numbers without a scraper ([admin.md](admin.md)).
 
 ## 8. Health and restarts
 
@@ -169,7 +178,7 @@ Not built yet: a `/tvine/metrics` endpoint is being added (task-prodpack). Until
 
 ```json
 {"tasks":{"queued":0,"scheduled":0,"running":0,"dead":0,"workers":1,"staleWorkers":0,"ageMs":139},
- "backends":{"session":"memory","channels":"memory",…},"ok":true,"uptime":3,"actions":40,"sessions":0}
+ "backends":{"session":"memory","channels":"memory",…},"ok":true,"uptime":3,"actions":57,"sessions":0}
 ```
 
 Anyone else gets only `{"ok":true}`. The details above go to: `Authorization: Bearer <settings.health.token>`
