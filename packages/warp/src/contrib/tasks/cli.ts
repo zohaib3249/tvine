@@ -2,7 +2,8 @@
 import { connections } from '../../data/db.js'
 import type { Settings } from '../../core/types.js'
 import { Beat } from './beat.js'
-import { broker } from './broker.js'
+import { broker, closeBroker } from './broker.js'
+import { benchConfigured } from './bench.js'
 import { STATUSES, type JobStatus } from './models.js'
 import { OutboxRelay } from './relay.js'
 import { configureTasks, discoverTasks } from './task.js'
@@ -19,8 +20,12 @@ export function logger(mode: Settings['logging']): Log {
   }
 }
 
-async function boot(apps: string, settings: Settings) {
+// broker 'memory' lives inside ONE process: a separate worker / CLI would see an empty, private store
+const MEMORY = "settings.tasks.broker is 'memory': jobs live inside the web server's process only, so a separate `tvine worker` / `tvine tasks` cannot see them (the web server runs them itself). Use broker 'file' (default) or 'redis' to run workers as separate processes."
+
+async function boot(apps: string, settings: Settings, cmd: string) {
   if (!settings.installedApps.includes('tvine.tasks')) throw new Error("tvine.tasks is not installed: add 'tvine.tasks' to settings.installedApps")
+  if (settings.tasks.broker === 'memory' && cmd !== 'bench') throw new Error(MEMORY)
   configureTasks(settings.tasks)
   connections.configure(settings)
   return discoverTasks(apps, settings.installedApps)
@@ -34,7 +39,7 @@ const int = (v: unknown, name: string, min: number): number | undefined => {
 }
 
 export async function workerCommand(apps: string, settings: Settings, o: Flags, io: Io): Promise<undefined> {
-  const found = await boot(apps, settings)
+  const found = await boot(apps, settings, 'worker')
   const log = logger(settings.logging)
   const queues = typeof o.queues === 'string' && o.queues !== '*' ? o.queues.split(',').map((q) => q.trim()).filter(Boolean) : '*'
   const w = new Worker({ name: o.name as string | undefined, queues, concurrency: int(o.concurrency, 'concurrency', 0), graceMs: int(o.grace, 'grace', 0), log })
@@ -43,7 +48,7 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   await w.start()
   beat?.start()
   outbox.start()
-  io.out(`worker ${w.name}: ${found.length} task(s), queues ${queues === '*' ? '*' : queues.join(',')}, concurrency ${w.concurrency}${beat ? ', beat' : ''}`)
+  io.out(`worker ${w.name}: ${found.length} task(s), broker ${settings.tasks.broker}, queues ${queues === '*' ? '*' : queues.join(',')}, concurrency ${w.concurrency}${beat ? ', beat' : ''}`)
   let stopping = false
   const stop = () => {
     if (stopping) { io.err('tvine worker: second signal, exiting now'); io.exit(1); return }
@@ -53,6 +58,7 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
       await beat?.stop()
       await outbox.stop()
       await w.stop()
+      await closeBroker()
       await connections.closeAll()
     })().then(() => io.exit(0), (e: unknown) => { io.err(`tvine worker: stop failed: ${String(e)}`); io.exit(1) })
   }
@@ -60,11 +66,19 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   return undefined
 }
 
-export async function tasksCommand(apps: string, settings: Settings, args: string[], o: Flags, io: Io): Promise<number> {
-  await boot(apps, settings)
-  const b = broker()
+export async function tasksCommand(apps: string, settings: Settings, args: string[], o_: Flags, io: Io): Promise<number> {
+  const o = o_
+  const [sub, id] = args
+  await boot(apps, settings, sub ?? '')
   try {
-    const [sub, id] = args
+    if (sub === 'bench') {
+      const o = { jobs: int(o_.jobs, 'jobs', 1) ?? 5000, workers: int(o_.workers, 'workers', 1) ?? 4, batch: int(o_.batch, 'batch', 1) ?? settings.tasks.claimBatch }
+      if (o.batch > 100) throw new Error('--batch must be <= 100')
+      const r = await benchConfigured(settings.tasks, o)
+      io.out(`${r.broker}: ${r.jobs} jobs · enqueue ${r.enqueuePerSec}/s (one transaction each) · claim+complete ${r.jobsPerSec} jobs/s (${o.workers} claimers, batch ${o.batch}) · claim p50 ${r.claimP50Ms} ms, p99 ${r.claimP99Ms} ms${r.busyRetries ? ` · ${r.busyRetries} SQLITE_BUSY retries` : ''}`)
+      return 0
+    }
+    const b = broker()
     switch (sub) {
       case 'list': {
         if (typeof o.status === 'string' && !(STATUSES as readonly string[]).includes(o.status)) throw new Error(`--status must be one of ${STATUSES.join(', ')}`)
@@ -92,9 +106,15 @@ export async function tasksCommand(apps: string, settings: Settings, args: strin
         io.out(`purged ${await b.purge('dead' as JobStatus)} dead job(s)`)
         return 0
       }
+      case 'compact': {
+        if (!b.compact) { io.err(`tvine tasks compact: broker '${settings.tasks.broker}' has nothing to compact`); return 1 }
+        const r = await b.compact()
+        io.out(`compacted ${settings.tasks.file}: ${(r.before / 1e6).toFixed(1)} MB → ${(r.after / 1e6).toFixed(1)} MB`)
+        return 0
+      }
       default:
-        io.err('usage: tvine tasks list [--status s] [--queue q] [--limit n] | inspect <jobId> | retry <jobId> | purge --dead')
+        io.err('usage: tvine tasks list [--status s] [--queue q] [--limit n] | inspect <jobId> | retry <jobId> | purge --dead | compact | bench [--jobs n] [--workers n] [--batch n]')
         return 1
     }
-  } finally { await connections.closeAll() }
+  } finally { await closeBroker(); await connections.closeAll() }
 }

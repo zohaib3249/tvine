@@ -45,7 +45,8 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   changepassword <username>                                 (tvine.auth)
   worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
-  tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead`
+  tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
+        | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -64,7 +65,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   createsuperuser: { options: { username: str, email: str, noinput: bool }, args: [0, 0] },
   changepassword: { options: {}, args: [1, 1] },
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
-  tasks: { options: { status: str, queue: str, limit: str, dead: bool }, args: [0, 2] },
+  tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
 }
 
 class Usage extends Error {}
