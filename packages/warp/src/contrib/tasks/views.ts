@@ -1,5 +1,5 @@
-// Built-in actions (MCP tools too): tasks.status / tasks.revoke. Only the job's session, its user or staff see a
-// job; anyone else gets "not found" (existence is not leaked). Args are never returned; error text only to staff
+// Built-in actions (MCP tools too): tasks.status / tasks.revoke. Only the job's session, its user, or staff with
+// tasks.view_job (status) / tasks.change_job (revoke) see a job; anyone else gets "not found" (existence is not leaked). Args are never returned; error text only to staff
 // (others get a DomainError / Retry message, else "failed").
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
@@ -19,18 +19,26 @@ export const isStaff = (ctx: Pick<ActionCtx, 'request'>): boolean => {
   return u.isAuthenticated && flag('isActive') !== false && (flag('isStaff') === true || flag('isSuperuser') === true)
 }
 
-export function canSee(job: Pick<JobRow, 'sid' | 'userId'>, ctx: Pick<ActionCtx, 'sid' | 'request'>): boolean {
+// staff holding the model permission (a superuser holds every one)
+export async function staffWith(ctx: Pick<ActionCtx, 'request'>, perm: string): Promise<boolean> {
+  const u = ctx.request.user as U
+  if (!isStaff(ctx)) return false
+  if ((u.isSuperuser ?? u.claims?.isSuperuser) === true) return true
+  try { return !!u.hasPerm && (await u.hasPerm(perm)) } catch { return false }
+}
+
+export async function canSee(job: Pick<JobRow, 'sid' | 'userId'>, ctx: Pick<ActionCtx, 'sid' | 'request'>, perm = 'tasks.view_job'): Promise<boolean> {
   const u = ctx.request.user
-  return (job.sid != null && job.sid === ctx.sid) || (job.userId != null && u.isAuthenticated && u.id !== undefined && job.userId === String(u.id)) || isStaff(ctx)
+  return (job.sid != null && job.sid === ctx.sid) || (job.userId != null && u.isAuthenticated && u.id !== undefined && job.userId === String(u.id)) || (await staffWith(ctx, perm))
 }
 
 // the requested row decides access (a deduped id is the requester's own row); the original it follows shows its
 // status, but its result / error only when the caller may see that original too
-async function visible(jobId: string, ctx: ActionCtx): Promise<{ asked: JobRow; job: JobRow; full: boolean }> {
+async function visible(jobId: string, ctx: ActionCtx, perm: string): Promise<{ asked: JobRow; job: JobRow; full: boolean }> {
   const asked = await broker().get(jobId)
-  if (!asked || !canSee(asked, ctx)) throw new DomainError('not_found', 'job not found')
+  if (!asked || !(await canSee(asked, ctx, perm))) throw new DomainError('not_found', 'job not found')
   const job = asked.status === 'deduped' ? (await resolveJob(jobId)) ?? asked : asked
-  return { asked, job, full: job === asked || canSee(job, ctx) }
+  return { asked, job, full: job === asked || (await canSee(job, ctx, perm)) }
 }
 
 const publicError = (e: string) => (/^(DomainError|Retry): /.test(e) ? e.replace(/^\w+: /, '') : 'failed')
@@ -47,12 +55,12 @@ export function view(asked: JobRow, j: JobRow, full: boolean, staff: boolean) {
 }
 
 export const status = defineAction('status', params, async ({ jobId }, ctx) => {
-  const { asked, job, full } = await visible(jobId, ctx)
-  return view(asked, job, full, isStaff(ctx))
+  const { asked, job, full } = await visible(jobId, ctx, 'tasks.view_job')
+  return view(asked, job, full, await staffWith(ctx, 'tasks.view_job'))
 }, { readOnly: true })
 
 export const revoke = defineAction('revoke', params, async ({ jobId }, ctx) => {
-  const { job, full } = await visible(jobId, ctx)
+  const { job, full } = await visible(jobId, ctx, 'tasks.change_job')
   if (!full) throw new DomainError('not_found', 'job not found')
   return { jobId, status: await revokeJob(job.id) }
 }, { destructive: true })

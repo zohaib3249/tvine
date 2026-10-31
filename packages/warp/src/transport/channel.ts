@@ -6,6 +6,7 @@ import { ev } from '../core/events.js'
 import { RING } from '../core/channels.js'
 import { render } from '../serialize/envelope.js'
 import { ipKey } from '../security/ratelimit.js'
+import { metrics } from '../core/metrics.js'
 import type { Frame, TabHub } from './tab.js'
 
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
@@ -85,7 +86,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const byCookie = cookieSession
     const ctx = () => ({ sid: byCookie ? '' : sid, rev: session?.rev ?? 0, page: '' })
 
-    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid)   // I3: never the cookie session's sid
+    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) { metrics.inc('tvine_ratelimit_hits_total', { scope: 'sse' }); return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid) }   // I3: never the cookie session's sid
 
     const group = channels.group(inspector ? 'inspector' : `sid:${sid}`)
     req.socket.setTimeout(0) // SSE is exempt from request timeouts

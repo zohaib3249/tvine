@@ -20,6 +20,7 @@ import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
 import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
+import { metrics } from './metrics.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
 import { cachedRun } from '../cache/index.js'
@@ -119,6 +120,12 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   const { sid, events } = await run(cmd, server, request, hold)
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
+  if (metrics.enabled) {
+    const outcome = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')?.code ?? 'ok'
+    // only registered ids label a series (an unknown id is caller-chosen text: cardinality)
+    metrics.inc('tvine_actions_total', { action: server.actions.get(cmd.action) ? cmd.action : '_unknown', outcome, via: request.agent.is ? 'agent' : 'human' })
+    if (outcome === 'rate_limited') metrics.inc('tvine_ratelimit_hits_total', { scope: 'action' })
+  }
   yield* events
 }
 

@@ -47,3 +47,4 @@ export {
   type SendMailOpts, type Attachment, type MailPending,
 } from './mail/index.js'
 export { SmtpError } from './mail/smtp.js'
+export { metrics } from './core/metrics.js'   // BACKLOG #9: apps may add counters/gauges to the same /tvine/metrics

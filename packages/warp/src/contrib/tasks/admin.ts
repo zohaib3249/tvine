@@ -27,6 +27,9 @@ export class JobAdmin extends ModelAdmin<JobRow> {
   listFilter = ['status']
   showFacets = false
   readonlyFields = Object.keys(Job.fields)
+  // args / result / error can carry reset links, API keys, PII: left out of the form (and so of agent snapshots).
+  // Opt in per project: site.register(Job, class extends JobAdmin { exclude = [] }) after unregistering this one.
+  exclude = ['args', 'result', 'error']
   actions = [retryJobs, revokeJobs]
   str(j: Record<string, unknown>) { return `${String(j.task)} ${String(j.id)}` }
 

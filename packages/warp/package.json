@@ -58,7 +58,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "better-sqlite3": "^13.0.3",
-    "esbuild": "0.28.2",
     "nanoid": "^5",
     "zod": "^3.25.76"
   },
@@ -69,12 +68,14 @@
     "pg": "^8.13.0",
     "react": "^19",
     "react-dom": "^19",
-    "redis": "6.3.0"
+    "redis": "6.3.0",
+    "esbuild": "0.28.2"
   },
   "peerDependencies": {
     "mysql2": "^3",
     "pg": "^8",
-    "redis": "^6"
+    "redis": "^6",
+    "esbuild": ">=0.25"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -84,6 +85,9 @@
       "optional": true
     },
     "redis": {
+      "optional": true
+    },
+    "esbuild": {
       "optional": true
     }
   }

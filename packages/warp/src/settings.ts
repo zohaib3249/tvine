@@ -84,6 +84,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
   email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
     defaultFrom: 'webmaster@localhost', serverEmail: 'root@localhost', admins: [], subjectPrefix: '[Tvine] ', filePath: './mail' },
+  metrics: { enabled: false, path: '/tvine/metrics', allowIps: [] },
+  robots: { allow: [], disallow: [], extra: [] },
   installedApps: [],
 }
 
@@ -172,6 +174,10 @@ const schema: z.ZodType<Settings> = z.object({
     user: z.string(), password: z.string(), useTls: z.boolean(), useSsl: z.boolean(), allowPlainAuth: z.boolean(), timeoutMs: z.number().int().positive(),
     defaultFrom: z.string(), serverEmail: z.string(), admins: z.array(z.string()), subjectPrefix: z.string(), filePath: z.string().min(1),
   }).strict().refine((e) => !(e.useTls && e.useSsl), 'email.useTls and email.useSsl are mutually exclusive'),
+  metrics: z.object({ enabled: z.boolean(), path: z.string().regex(/^\/[\w\-/.]*$/, 'a path starting with /'),
+    token: z.string().min(16, 'metrics.token: at least 16 chars').optional(), allowIps: z.array(z.string().min(1)) }).strict(),
+  robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
+    sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
@@ -205,9 +211,11 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const prod = process.env.NODE_ENV === 'production'
   const { secret: given, ...rest } = input
   // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below
-  const secret = given ?? process.env.TVINE_SECRET ?? (prod ? undefined : randomBytes(32).toString('hex'))
+  // TVINE_SECRET may be a comma-separated rotation list (new first): `new,old`
+  const env = process.env.TVINE_SECRET?.split(',').map((k) => k.trim()).filter(Boolean)
+  const secret = given ?? (env && (env.length === 1 ? env[0] : env)) ?? (prod ? undefined : randomBytes(32).toString('hex'))
   const keys = secret === undefined ? [] : [secret].flat()
-  const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
+  const ok = keys.length > 0 && keys.every((k) => k.length >= 32) && new Set(keys).size === keys.length
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
   const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
@@ -229,7 +237,7 @@ export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
   return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
 }
 
-const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
+const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars; a rotation list (comma-separated, new first) needs each key >= 32 chars and no duplicates (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
 
 // Every subsystem whose backend is 'redis' must name a configured connection. Run at boot (loadSettings,
 // tvine check), not in defineSettings: a page may import settings.ts during `next build` with no REDIS_URL.

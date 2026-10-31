@@ -20,12 +20,13 @@ export const Job = defineModel('tasks_job', {
   runAt: field.int(),
   leaseUntil: field.int({ optional: true }),
   worker: field.text({ optional: true }),
-  token: field.text({ optional: true }),
+  token: field.text({ optional: true, hidden: true }),   // lease fencing token: never shown (admin, serializers)
   acksLate: field.bool({ default: true }),
   expiresAt: field.int({ optional: true }),
   progress: field.float({ optional: true }),
   message: field.text({ optional: true }),
-  sid: field.text({ optional: true }),
+  // the owner's live session id (the relay routes progress to it): hidden, never in admin values or serializer output
+  sid: field.text({ optional: true, hidden: true }),
   userId: field.text({ optional: true }),
   groupId: field.uuid({ optional: true, index: true }),
   groupIndex: field.int({ optional: true }),

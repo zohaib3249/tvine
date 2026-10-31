@@ -281,6 +281,12 @@ export interface Settings {
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
   admin: { path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' } }
+  // BACKLOG #9: Prometheus text at `path`, off by default. Guard: a bearer `token`, or the client ip in `allowIps`;
+  // neither set = loopback only. Never listed in agent discovery.
+  metrics: { enabled: boolean; path: string; token?: string; allowIps: string[] }
+  // BACKLOG #11: /robots.txt when the app ships none (public/robots.txt or an app/robots route wins). allow/disallow:
+  // extra path rules for every agent; extra: raw lines appended; sitemap: an absolute url (else /sitemap.xml if the app has one)
+  robots: { allow: string[]; disallow: string[]; extra: string[]; sitemap?: string }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
