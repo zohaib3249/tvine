@@ -61,7 +61,7 @@ export interface NextApp {
   getUpgradeHandler?(): (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>
   close?(): Promise<void>
 }
-export type NextFactory = (o: { dev: boolean; dir: string }) => NextApp
+export type NextFactory = (o: { dev: boolean; dir: string; port?: number }) => NextApp
 
 // next dev blocks /_next/* (HMR) from any page host not in next.config allowedDevOrigins. A custom server's
 // next({ conf }) is ignored by prepare(), but Next caches the loaded config per (phase, dir): load it first and add
@@ -335,6 +335,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       channel(req, res, next)
     },
     (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
+    // Browsers ask for /favicon.ico when the page links no icon: answer 204 (no console 404) unless the project has one.
+    ...(fe ? [((req, res, next) => pathOf(req) === '/favicon.ico' && !['public', 'app', 'src/app'].some((d) => existsSync(join(dirname(resolve(fe.nextDir)), d, 'favicon.ico')))
+      ? void res.writeHead(204, { 'cache-control': 'public, max-age=3600' }).end() : next()) as Handler] : []),
     ...(feed ? [widgetsTransport(feed)] : []),   // W10 inspector Widgets tab; dev only, like the feed
     tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
@@ -344,11 +347,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ...(admin ? [admin] : []),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
-  const startNext = () => (next ??= (async () => {
+  // `port`: the one listen() bound, so next dev's lock and log name the real URL (not its default 3000).
+  const startNext = (port?: number) => (next ??= (async () => {
     const factory = fe!.next ?? ((m: { default?: NextFactory } & NextFactory) => m.default ?? m)(await fromApp('next'))
     const dir = dirname(resolve(fe!.nextDir))
     if (opts.dev && !fe!.next) await devOrigins(dir, devHosts(settings))
-    const app = factory({ dev: !!opts.dev, dir })
+    const app = factory({ dev: !!opts.dev, dir, ...(port !== undefined && { port }) })
     await app.prepare()
     return { app, handle: app.getRequestHandler(), upgrade: app.getUpgradeHandler?.() }
   })())
@@ -490,11 +494,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   return {
     ctx, urls, server, handler,
     async listen(port, host) {
-      if (fe) await startNext()
       await new Promise<void>((ok, bad) => {
         server.once('error', bad)
         server.listen(port, host, () => { server.off('error', bad); ok() })
       })
+      if (fe) await startNext((server.address() as { port: number }).port)
       if (fe && !fe.origin) snapshot = renderer(`http://127.0.0.1:${(server.address() as { port: number }).port}`)
     },
     // stop accepting, drain SSE, clear intervals; in-flight requests get ≤ 4 s before sockets are cut
