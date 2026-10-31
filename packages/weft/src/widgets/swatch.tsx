@@ -24,11 +24,12 @@ const name = (o: SwatchOption) => [o.label, o.price, !open(o) && 'unavailable'].
 const useSwatch = defineWidget<SwatchProps, S, C>({
   kind: 'radio',
   state: (p) => ({ value: p.value || null, options: p.options.map((o) => ({ value: o.value, available: open(o), ...(o.price && { price: o.price }) })) }),
-  controls: ({ props: p, el }) => ({
+  // no available option → no select (an empty enum is a control that can never work)
+  controls: ({ props: p, el }) => (!p.options.some(open) ? {} as C : {
     select: { kind: 'select', params: { value: { type: 'string', enum: p.options.filter(open).map((o) => o.value) } },
       run: async (a: { value: string }, ctx) => { inner<HTMLInputElement>(ctx, el(), `input[value="${CSS.escape(a.value)}"]`).click() } },
   }),
-  headless: (p) => { const h = headlessOf(p); return h ? { select: h } : {} },
+  headless: (p) => { const h = p.options.some(open) && headlessOf(p); return h ? { select: h } : {} },
   describe: (p) => ({ label: p.label }),
   spec: (p) => ({ name: p.name, changesContent: true }),
 })
