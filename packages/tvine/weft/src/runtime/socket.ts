@@ -88,8 +88,8 @@ let connect: (() => void) | undefined
 export function openConnect(): void { connect?.() }
 
 // Read and strip a one-time param from the address bar (approveUrl must not linger in history/Referer).
-// The value is remembered for this document: React StrictMode (on in dev) mounts, unmounts and re-mounts the
-// tab, and the first mount must not swallow the approve code the live (second) mount needs.
+// The value is remembered until used: React StrictMode (on in dev) mounts, unmounts and re-mounts the tab,
+// and the first (discarded) mount must not swallow the approve code the live mount needs.
 const taken = new Map<string, string>()
 function takeParam(name: string): string | null {
   const l = (globalThis as any).location
@@ -176,6 +176,7 @@ export function connectTab(): () => void {
   }
   const allow = () => { flag(STOP_KEY, false); setStopped(false) }
   const ask = async (requestId: string) => {
+    taken.delete('tvine-approve')   // used by the live mount: a later remount must not ask again
     const r = await post('request', { requestId })
     if (r.status !== 200) return   // expired, used, or busy (the server told the agent)
     if (webmcpActive()) { void post('approve', { requestId, allow: false, reason: 'busy' }); return }
@@ -232,6 +233,7 @@ export function connectTab(): () => void {
 
   connect = () => {
     void ensure(true).then(() => {
+      taken.delete('tvine-connect')   // only the live mount gets here (a discarded mount never opens its stream)
       closePrompt()
       closePrompt = showConnect(async (code) => {
         allow()
