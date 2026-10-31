@@ -39,6 +39,8 @@ export function setStopped(on: boolean): void {
   try { on ? store()?.setItem(STOP_KEY, '1') : store()?.removeItem(STOP_KEY) } catch { /* private mode */ }
   if (on) { stopAc.abort(); stopAc = new AbortController() }
 }
+// Remote Stop/release (security.md §Remote agents): abort the running command's steps without blocking the tab.
+export function abortRunning(): void { stopAc.abort(); stopAc = new AbortController() }
 const stopped = (): UiError => ({ code: 'domain', reason: 'stopped', message: 'the human pressed Stop; agent control is blocked in this tab' })
 
 // ---- Idempotency: a repeated cmdId returns the stored result (last 32); a concurrent repeat joins.

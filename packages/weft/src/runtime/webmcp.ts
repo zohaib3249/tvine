@@ -106,71 +106,103 @@ function tree() {
   return toTree({ page: l.pathname + l.search, title: globalThis.document?.title ?? '', nodes: [], links: [], widgets }, { headless: false })
 }
 
-// ponytail: tolerant read of the Warp reply (json envelope or bare event); tighten when W7 lands agentCmd.
+// ponytail: tolerant read of the Warp reply (json envelope or bare event).
 function outcome(text: string): ActionOutcome {
   let j: any
   try { j = JSON.parse(text) } catch { return { ok: false, code: 'internal', message: text.slice(0, 200) } }
   const evs: any[] = Array.isArray(j) ? j : Array.isArray(j?.events) ? j.events : [j]
-  const e = evs.find((x) => x && (x.kind === 'ok' || x.kind === 'err' || x.kind === 'goto'))
-  if (e?.kind === 'err') return { ok: false, code: e.code, message: e.message, ...(e.field && { field: e.field }) }
-  if (e?.kind === 'goto') return { ok: true, goto: e.url }
+  const e = evs.find((x) => x && (x.kind === 'ok' || x.kind === 'err' || x.kind === 'goto' || x.status === 'ok' || x.status === 'err' || x.status === 'goto'))
+  const kind = e?.kind ?? e?.status
+  if (kind === 'err') return { ok: false, code: e.code, message: e.message, ...(e.field && { field: e.field }) }
+  if (kind === 'goto') return { ok: true, goto: e.url }
   return { ok: true, ...(e?.result !== undefined && { result: e.result }) }
+}
+
+const pageUrl = () => { const l = (globalThis as any).location; return l.pathname + l.search }
+
+// A server action FOR an agent: same-origin POST with the httpOnly cookie, the agent header, and the
+// downgrade-only `agentCmd` marker (control-protocol.md): dispatch sets agent.is=true, via webmcp|channel.
+export async function agentPost(body: object, header = 'x-tvine'): Promise<string> {
+  try {
+    const res = await fetch(pageUrl(), {
+      method: 'POST', credentials: 'same-origin',
+      headers: { [header]: '1', 'content-type': 'application/json', accept: 'application/tvine+json' },
+      body: JSON.stringify(body),
+    })
+    return await res.text()
+  } catch (e) {
+    // Thrown messages never reach the agent; return the error as a value.
+    return `err internal "network error: ${(e instanceof Error ? e.message : String(e)).replace(/"/g, "'")}"`
+  }
+}
+
+// Who controls this tab right now (security.md: an in-browser and a remote agent never at once).
+export const tabControl = { remote: false, webmcpAt: 0 }
+const WEBMCP_ACTIVE_MS = 300_000
+export const webmcpActive = () => !tabControl.remote && !isStopped() && Date.now() - tabControl.webmcpAt < WEBMCP_ACTIVE_MS
+
+type Obj = Record<string, unknown>
+// navigation-spa.md: tell the agent when the page moved under it (human click, back/forward), let a client
+// transition settle before reading, and say `pending` while streamed regions are open.
+export async function withNav<T>(fn: () => Promise<T>): Promise<T | Obj> {
+  const notice = navNotice()
+  await settle()
+  const out = await fn()
+  const pending = pendingRegions()
+  markSeen()
+  if ((!notice && !pending) || !out || typeof out !== 'object' || Array.isArray(out)) return out
+  return { ...(out as Obj), ...(notice && { notice }), ...(pending && { pending }) }
+}
+
+// The page tools that run IN the tab on the registry: for an in-browser agent (WebMCP) and for a remote
+// agent's forwarded command (via 'tab'). Results are plain JSON values.
+export function pageTools(via: 'webmcp' | 'tab', header?: string) {
+  const agentVia = via === 'webmcp' ? 'webmcp' : 'channel'
+  const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
+    outcome(await agentPost({ action: h.id, params, bind: h.bind, cmdId, agentCmd: { cmdId, via: agentVia } }, header))
+  return {
+    read_page: async ({ view }: { view?: 'auto' | 'L0' | 'L1' | 'full' } = {}): Promise<Obj> =>
+      ({ rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) }),
+    expand: async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }): Promise<Obj> =>
+      (expand(tree(), String(id), { offset, limit }) as Obj | undefined) ?? { kind: 'err', code: 'unknown_action', message: `no node ${id}; ids come from read_page` },
+    ui: async (cmd: UiCommand): Promise<Obj> => {
+      const from = currentPage()
+      const { result, error } = await runUi(cmd, { via, run })
+      // stale_rev, or a step that changed the page (navigate), carries a fresh L0 map so the agent
+      // can re-plan without another call.
+      const map = error?.code === 'stale_rev' || result.page !== from ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
+      return error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result: { ...result, ...(map && { map }) } }
+    },
+  }
 }
 
 export function registerWebMcp(opts: { header?: string; agent?: string } = {}): () => void {
   const header = opts.header ?? 'x-tvine'
-  const url = () => { const l = (globalThis as any).location; return l.pathname + l.search }
-  const post = async (body: object): Promise<string> => {
-    try {
-      const res = await fetch(url(), {
-        method: 'POST', credentials: 'same-origin',
-        headers: { [header]: '1', 'content-type': 'application/json', accept: 'application/tvine+json' },
-        body: JSON.stringify(body),
-      })
-      return await res.text()
-    } catch (e) {
-      // Thrown messages never reach the agent; return the error as a value.
-      return `err internal "network error: ${(e instanceof Error ? e.message : String(e)).replace(/"/g, "'")}"`
-    }
-  }
+  const tools = pageTools('webmcp', header)
 
   // The pill: "Agent connected · Stop" from the first tool call; Stop ↔ Resume. Name is never verified.
   const who = opts.agent ? `${opts.agent} (unverified)` : 'Agent'
   const overlay = getOverlay()
   const connected = () => overlay.setPill({ text: `${who} connected`, button: 'Stop', onClick: () => { setStopped(true); blocked() } })
   const blocked = () => overlay.setPill({ text: `${who} stopped`, button: 'Resume', onClick: () => { setStopped(false); connected() } })
-  const guard = <A,>(fn: (a: A) => Promise<Text>) => async (a: A): Promise<Text> => {
+  const guard = <A,>(fn: (a: A) => Promise<unknown>) => async (a: A): Promise<Text> => {
     if (isStopped()) { blocked(); return errOut('domain', 'the human pressed Stop; agent control is blocked in this tab', { reason: 'stopped' }) }
+    if (tabControl.remote) return errOut('domain', 'busy: a remote agent controls this tab', { reason: 'busy' })
+    tabControl.webmcpAt = Date.now()
     connected()
-    // navigation-spa.md: tell the agent when the page moved under it (human click, back/forward), let
-    // a client transition settle before reading, and say `pending` while streamed regions are open.
-    const notice = navNotice()
-    await settle()
-    const out = await fn(a ?? ({} as A))
-    const pending = pendingRegions()
-    markSeen()
-    if (!notice && !pending) return out
-    try {
-      const j = JSON.parse(out.content[0]!.text)
-      if (j && typeof j === 'object' && !Array.isArray(j)) return reply({ ...j, ...(notice && { notice }), ...(pending && { pending }) })
-    } catch { /* plain-text reply (do): leave as is */ }
-    return out
+    return reply(await withNav(() => fn(a ?? ({} as A))))
   }
 
   const off = provideTools([
     {
       name: 'read_page', description: DESCRIPTIONS.read_page,
       inputSchema: { type: 'object', properties: { view: { type: 'string', enum: ['auto', 'L0', 'L1', 'full'] } } },
-      execute: guard(async ({ view }: { view?: 'auto' | 'L0' | 'L1' | 'full' }) =>
-        reply({ rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) })),
+      execute: guard(tools.read_page),
     },
     {
       name: 'expand', description: DESCRIPTIONS.expand,
       inputSchema: { type: 'object', properties: { id: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['id'] },
-      execute: guard(async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }) => {
-        const r = expand(tree(), String(id), { offset, limit })
-        return r ? reply(r) : errOut('unknown_action', `no node ${id}; ids come from read_page`)
-      }),
+      execute: guard(tools.expand),
     },
     {
       name: 'ui', description: DESCRIPTIONS.ui,
@@ -184,16 +216,7 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
         },
       },
       annotations: { destructiveHint: true },
-      execute: guard(async (cmd: UiCommand) => {
-        const run = async (h: ActionHandle, params: Record<string, unknown>, cmdId: string) =>
-          outcome(await post({ action: h.id, params, bind: h.bind, cmdId }))
-        const from = currentPage()
-        const { result, error } = await runUi(cmd, { via: 'webmcp', run })
-        // stale_rev, or a step that changed the page (navigate), carries a fresh L0 map so the agent
-        // can re-plan without another call.
-        const map = error?.code === 'stale_rev' || result.page !== from ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
-        return reply(error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result: { ...result, ...(map && { map }) } })
-      }),
+      execute: guard(tools.ui),
     },
     {
       name: 'do', description: DESCRIPTIONS.do,
@@ -203,8 +226,11 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
         required: ['action'],
       },
       annotations: { destructiveHint: true },
-      execute: guard(async ({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) =>
-        reply(await post({ action, params, cmdId: cmdId ?? newId() }))),
+      execute: guard(async ({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) => {
+        const id = cmdId ?? newId()
+        const t = await agentPost({ action, params, cmdId: id, agentCmd: { cmdId: id, via: 'webmcp' } }, header)
+        try { const j = JSON.parse(t); return j && typeof j === 'object' && !Array.isArray(j) ? j : t } catch { return t }
+      }),
     },
   ])
   return () => { off(); overlay.setPill(null) }

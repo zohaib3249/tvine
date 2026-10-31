@@ -7,7 +7,7 @@ import { Link as LinkPrimitive } from './primitives.js'
 import { useAgent as serverUseAgent } from './useAgent.js'
 import type { AgentSpec, Link as LinkSpec } from './types.js'
 
-export { AgentBadge, registerWebMcp, useTvineChannel, type TvineEvent } from './index.js'
+export { AgentBadge, connectTab, openConnect, registerWebMcp, useTvineChannel, type TvineEvent } from './index.js'
 export {
   ACTION_KINDS, defineWidget, signature, useWidget, useWidgetScope, WeftError,
   type ActionKind, type ActionOutcome, type AgentActionEvent, type AgentState, type AutoChild, type ChildPolicy, type Control,
