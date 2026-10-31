@@ -1,9 +1,14 @@
 'use client'
 // One built-in widget per FieldKind, on native elements. Each gets FieldWidgetProps (form-shape value).
 // Classes are `tf-*` (forms.css); every part also carries data-attributes for Tailwind (`data-[invalid]:…`).
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import type { FieldKind, FieldWidget, FieldWidgetProps, SearchResult } from './types.js'
-import { sanitizeHtml } from './rich.js'
+import { countryName, sanitizeHtml } from './rich.js'
+import { RichEditor } from './rich-editor.js'
+import { CodeEditor, highlight } from './code.js'
+import { markdownToHtml } from './richdoc.js'
+import { fromApi } from './values.js'
+import * as I from './inputs.js'
 
 const common = (p: FieldWidgetProps) => ({
   id: p.id, name: p.name, disabled: p.readOnly, required: p.meta.required,
@@ -197,35 +202,15 @@ function M2m(p: FieldWidgetProps) {
   </div>
 }
 
-// ---- rich: contentEditable + execCommand (native, deprecated but everywhere); output always sanitized ----
-// ponytail: execCommand toolbar; swap for a Selection/Range editor if a browser drops it.
-function Rich(p: FieldWidgetProps) {
-  const ed = useRef<HTMLDivElement>(null)
-  const clean = sanitizeHtml(p.value ?? '')
-  const [first] = useState(clean)   // SSR + first paint; later values sync in the effect (no caret jumps)
-  useLayoutEffect(() => { if (ed.current && ed.current.innerHTML !== clean) ed.current.innerHTML = clean }, [clean])
-  const emit = () => { if (ed.current) p.onChange(sanitizeHtml(ed.current.innerHTML)) }
-  const cmd = (c: string, arg?: string) => { ed.current?.focus(); document.execCommand?.(c, false, arg); emit() }
-  const tools: [string, string, () => void][] = [
-    ['B', 'Bold', () => cmd('bold')], ['I', 'Italic', () => cmd('italic')],
-    ['🔗', 'Link', () => { const u = prompt('Link URL (https://…)'); if (u) cmd('createLink', u) }],
-    ['•', 'Bulleted list', () => cmd('insertUnorderedList')], ['1.', 'Numbered list', () => cmd('insertOrderedList')],
-  ]
-  return <div className="tf-rich" data-part="rich">
-    {!p.readOnly && <div className="tf-toolbar" role="toolbar" aria-label={`${p.meta.label} formatting`}>
-      {tools.map(([t, l, f]) => <button key={l} type="button" className="tf-btn tf-btn-ghost tf-tool" aria-label={l} title={l} onMouseDown={(e) => e.preventDefault()} onClick={f}>{t}</button>)}
-    </div>}
-    <div ref={ed} className="tf-input tf-editor" id={p.id} role="textbox" aria-multiline="true" aria-describedby={p.describedBy} aria-invalid={p.invalid || undefined}
-      aria-readonly={p.readOnly || undefined} contentEditable={!p.readOnly} suppressContentEditableWarning onInput={emit} onBlur={emit}
-      dangerouslySetInnerHTML={{ __html: first }} />
-    <input type="hidden" name={p.name} value={clean} />
-  </div>
-}
-
 export const BUILTIN: Record<FieldKind, FieldWidget> = {
   text: TextInput, email: TextInput, url: TextInput, slug: TextInput, uuid: TextInput, date: TextInput, datetime: TextInput, time: TextInput,
   textarea: TextArea, duration: Duration, int: NumberInput, decimal: NumberInput, money: Money, bool: Bool, choice: Choice,
-  password: Password, json: Json, file: Upload, image: Upload, fk: Fk, m2m: M2m, rich: Rich,
+  password: Password, json: Json, file: Upload, image: Upload, fk: Fk, m2m: M2m, rich: RichEditor,
+  color: I.Color, range: I.Range, phone: I.Phone, search: I.Native, month: I.Native, week: I.Native, ip: I.Native, slugAuto: I.Native,
+  tags: I.Tags, checkboxes: I.Checkboxes, switch: I.Switch, segmented: I.Segmented, rating: I.Rating, otp: I.Otp, markdown: I.Markdown,
+  code: CodeEditor, daterange: I.DateRange, country: I.Country, address: I.Address, keyvalue: I.KeyValue, signature: I.Signature,
+  currency: I.Currency, percent: I.Percent,
+  list: (p) => <I.List {...p} widgetFor={(m) => { const W = BUILTIN[m.kind] ?? TextInput; return (q) => <W {...q} /> }} blank={(m) => fromApi(m, undefined)} />,
 }
 
 // Read-only display (Django readonly_fields): text, never an input.
@@ -247,6 +232,22 @@ export function display(p: FieldWidgetProps): ReactElement {
       return <div className="tf-readonly" id={p.id} data-part="readonly" suppressHydrationWarning>{t || '—'}</div>
     }
     case 'rich': return <div className="tf-readonly tf-rich-view" id={p.id} dangerouslySetInnerHTML={{ __html: sanitizeHtml(v ?? '') }} />
+    case 'markdown': return <div className="tf-readonly tf-rich-view" id={p.id} dangerouslySetInnerHTML={{ __html: markdownToHtml(v ?? '') }} />
+    case 'code': return <pre className="tf-readonly tf-code-hl tf-code-ro" id={p.id} dangerouslySetInnerHTML={{ __html: highlight(v ?? '', m.language) }} />
+    case 'color': return <div className="tf-readonly" id={p.id} data-part="readonly">{v ? <><span className="tf-palette-dot" style={{ background: v }} aria-hidden="true" /> {v}</> : '—'}</div>
+    case 'signature': return <div className="tf-readonly" id={p.id}>{fileUrl(v) ? <img className="tf-preview" src={fileUrl(v)} alt={m.label} /> : v ? 'Signed' : '—'}</div>
+    case 'switch': t = v ? 'On' : 'Off'; break
+    case 'rating': t = v ? `${'★'.repeat(v)}${'☆'.repeat(Math.max(0, (m.max ?? 5) - v))}` : ''; break
+    case 'tags': case 'checkboxes': t = (v ?? []).map((x: string) => m.choices?.find((c) => c.value === x)?.label ?? x).join(', '); break
+    case 'segmented': t = m.choices?.find((c) => c.value === v)?.label ?? v ?? ''; break
+    case 'range': t = Array.isArray(v) ? v.join(' – ') : String(v ?? ''); break
+    case 'percent': t = v === '' || v == null ? '' : `${v} %`; break
+    case 'daterange': t = v?.start || v?.end ? `${v.start} – ${v.end}` : ''; break
+    case 'country': t = v ? `${countryName(v)} (${v})` : ''; break
+    case 'address': t = v ? [v.line1, v.line2, v.city, v.region, v.postal, v.country && countryName(v.country)].filter(Boolean).join(', ') : ''; break
+    case 'keyvalue': t = (v ?? []).map((r: { key: string; value: string }) => `${r.key}: ${r.value}`).join('; '); break
+    case 'list': t = (v ?? []).map((x: unknown) => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(', '); break
+    case 'otp': t = v ? '••••••' : ''; break
     default: t = v == null ? '' : String(v)
   }
   return <div className="tf-readonly" id={p.id} data-part="readonly">{t || '—'}</div>
