@@ -4,10 +4,10 @@
 // fks live on their field (kind 'fk', `to` = target model name); field-level `index: true` stays
 // a field option (Django's db_index). Field instances are rebuilt from specs only to render DDL.
 import { field } from '../fields.js'
-import { FkField, pkField, type Field, type Kind, type ModelDef, type Opts } from '../fields/index.js'
+import { FkField, M2MField, pkField, type Field, type Kind, type ModelDef, type Opts } from '../fields/index.js'
 import type { Model } from '../model.js'
 
-export interface FieldSpec { kind: Kind; opts: Opts; values?: string[]; to?: string }
+export interface FieldSpec { kind: Kind; opts: Opts; values?: string[]; to?: string; through?: string }   // through: m2m custom through model
 export interface IndexSpec { fields: string[]; unique?: boolean }
 export interface ModelState { fields: Record<string, FieldSpec>; indexes: Record<string, IndexSpec> }
 export interface ProjectState { apps: Record<string, Record<string, ModelState>> }
@@ -17,8 +17,9 @@ export const emptyState = (): ProjectState => ({ apps: {} })
 
 // boolean flags that mean nothing when false; `default: false` is a real value and stays
 const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto'])
-// view-only flags (generic views' serializers): no DDL, so they never enter state or migrations
-const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly'])
+// view-only flags (generic views' serializers) and the reverse accessor name: no DDL, so they never
+// enter state or migrations
+const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly', 'relatedName'])
 
 // Field → spec (Django's deconstruct). Opts sorted so specs and generated code are deterministic.
 export function specOf(f: AnyField): FieldSpec {
@@ -29,7 +30,8 @@ export function specOf(f: AnyField): FieldSpec {
   }
   const s: FieldSpec = { kind: f.kind, opts }
   if (f.kind === 'enum') s.values = [...f.values!]
-  if (f.kind === 'fk') s.to = f.target!().name
+  if (f.kind === 'fk' || f.kind === 'm2m') s.to = f.target!().name
+  if (f.kind === 'm2m' && f.through) s.through = f.through().name
   return s
 }
 
@@ -40,6 +42,7 @@ export function fieldOf(s: FieldSpec, state: ProjectState): AnyField {
     case 'id': return field.id()
     case 'enum': return field.enum(s.values!, o)
     case 'fk': return new FkField(() => modelDef(state, s.to!), o)
+    case 'm2m': return new M2MField(() => modelDef(state, s.to!), { ...o, ...(s.through ? { through: () => modelDef(state, s.through!) } : {}) })
     default: return (field[s.kind] as (o: Opts) => AnyField)(o)
   }
 }

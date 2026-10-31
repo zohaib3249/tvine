@@ -337,6 +337,7 @@ function createInput(model: Model<any, any>): z.ZodObject<z.ZodRawShape> {
   const ro = modelReadOnly(model)
   const shape: z.ZodRawShape = {}
   for (const [n, f] of Object.entries(model.fields as Record<string, AnyField>)) {
+    if (f.kind === 'm2m') continue                      // no column: written through Model.related()
     if (!ro.has(f.key(n))) shape[f.key(n)] = hasDefault(f) ? f.schema().optional() : f.schema()
   }
   return z.object(shape)

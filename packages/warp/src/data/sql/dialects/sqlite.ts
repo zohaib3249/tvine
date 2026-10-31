@@ -47,7 +47,7 @@ export const sqlite: Dialect = {
   name: 'sqlite',
   quoteIdent: n => `"${checkIdent(n)}"`,
   param: () => '?',
-  render: node => renderNode(node, sqlite),
+  render: (node, o) => renderNode(node, sqlite, o),
   lowerFn: 'tv_lower',
   transactionalDDL: true,
   likeEscape: "'\\'",

@@ -90,15 +90,18 @@ export const mysql: Dialect = {
   name: 'mysql',
   quoteIdent: q,
   param: () => '?',
-  render(node) {
+  render(node, o) {
     if (node.t === 'createTable') {
-      const s = renderNode(node, mysql)
+      const s = renderNode(node, mysql, o)
       return { ...s, sql: `${s.sql} DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin` }
     }
     if (node.t === 'insert' && !node.cols.length) return raw(`INSERT INTO ${q(node.into)} () VALUES ()`)
     if (node.t === 'dropIndex') return raw(`DROP INDEX ${q(fit(node.name))}${node.table ? ` ON ${q(node.table)}` : ''}`)
-    if (node.t === 'createIndex') return renderNode({ ...node, name: fit(node.name) }, mysql)
-    return renderNode(node, mysql)
+    if (node.t === 'createIndex') {
+      if (node.where) throw new Error(`index ${node.name}: mysql has no partial (conditional) indexes; drop the condition or use postgres / sqlite`)
+      return renderNode({ ...node, name: fit(node.name) }, mysql, o)
+    }
+    return renderNode(node, mysql, o)
   },
   lowerFn: 'lower',
   transactionalDDL: false,

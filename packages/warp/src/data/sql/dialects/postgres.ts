@@ -59,7 +59,7 @@ export const postgres: Dialect = {
   name: 'postgres',
   quoteIdent: n => `"${checkIdent(n)}"`,
   param: i => `$${i}`,
-  render: node => renderNode(node, postgres),
+  render: (node, o) => renderNode(node, postgres, o),
   lowerFn: 'lower',
   transactionalDDL: true,
   likeEscape: "E'\\\\'",
