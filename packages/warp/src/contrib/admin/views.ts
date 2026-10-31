@@ -160,20 +160,36 @@ async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, str
   const vals = await a.model.objects.values(key).distinct().order(key).all(200)
   return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
 }
+// Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
+function dateRange(a: ModelAdmin, s: Spec, v: string): Record<string, string> {
+  const n = s.field!, f = a.model.fields[n]!, key = f.key(n)
+  const day = (d: Date) => d.toISOString().slice(0, 10), t = new Date(), today = day(t)
+  const from = v === 'today' ? today : v === 'past7' ? day(new Date(t.getTime() - 6 * 86_400_000)) : v === 'month' ? today.slice(0, 8) + '01' : v === 'year' ? today.slice(0, 5) + '01-01' : undefined
+  if (!from) throw bad(`filters.${n}`, 'not a choice')
+  const k = f.kind === 'date' ? key : `${key}__date`
+  return { [`${k}__gte`]: from, [`${k}__lte`]: today }
+}
+// one query per filter: GROUP BY the column (choice / boolean / related / all values), one conditional COUNT per
+// date range; a custom filter's queryset() is opaque, so one COUNT per lookup (Django does the same)
+async function facetCounts(a: ModelAdmin, ctx: Ctx, base: QuerySet<any>, s: Spec, ch: [string, string][]): Promise<number[]> {
+  if (s.cls) return Promise.all(ch.map(async ([v]) => (await applyFilter(a, ctx, base, s, v)).count()))
+  const f = a.model.fields[s.field!]!, key = f.key(s.field!)
+  if (s.kind === 'date') {
+    const aggs = Object.fromEntries(ch.map(([v], i) => [`c${i}`, Count('*', { filter: v === 'null' ? { [key]: null } : dateRange(a, s, v) })]))
+    const r = await base.aggregate(aggs)
+    return ch.map((_, i) => Number(r[`c${i}`] ?? 0))
+  }
+  const rows = await base.values(key).annotate({ _n: Count('*') }).order().all(1000)
+  const by = new Map(rows.map((r: Row) => [r[key] == null ? 'null' : r[key] instanceof Date ? r[key].toISOString() : String(r[key]), Number(r._n)]))
+  return ch.map(([v]) => by.get(v) ?? 0)
+}
 async function applyFilter(a: ModelAdmin, ctx: Ctx, qs: QuerySet<any>, s: Spec, v: string): Promise<QuerySet<any>> {
   if (v.length > 200) throw bad(`filters.${s.name}`, 'value too long')
   if (s.cls) return (await new s.cls(v).queryset(ctx, qs)) ?? qs
   const n = s.field!, f = a.model.fields[n]!, key = f.key(n)
   if (v === 'null' && f.opts.optional) return qs.filter({ [key]: null })
   if (s.kind === 'boolean') { if (v !== 'true' && v !== 'false') throw bad(`filters.${n}`, 'expected true or false'); return qs.filter({ [key]: v === 'true' }) }
-  if (s.kind === 'date') {
-    // Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
-    const day = (d: Date) => d.toISOString().slice(0, 10), t = new Date(), today = day(t)
-    const from = v === 'today' ? today : v === 'past7' ? day(new Date(t.getTime() - 6 * 86_400_000)) : v === 'month' ? today.slice(0, 8) + '01' : v === 'year' ? today.slice(0, 5) + '01-01' : undefined
-    if (!from) throw bad(`filters.${n}`, 'not a choice')
-    const k = f.kind === 'date' ? key : `${key}__date`
-    return qs.filter({ [`${k}__gte`]: from, [`${k}__lte`]: today })
-  }
+  if (s.kind === 'date') return qs.filter(dateRange(a, s, v))
   if (f.kind === 'enum' && !(f.values ?? []).includes(v)) throw bad(`filters.${n}`, 'not a choice')
   if (s.kind === 'related') { const pk = coercePk(f.target!(), v); if (pk === undefined) throw bad(`filters.${n}`, 'not a valid key'); return qs.filter({ [key]: pk }) }
   const r = fromWire(n, f, v)
@@ -283,31 +299,25 @@ async function relatedReprs(a: ModelAdmin, rows: Row[], cols: Col[]): Promise<Ma
 async function hierarchyFacets(a: ModelAdmin, ctx: Ctx, p: ListParams): Promise<Record<string, { value: string; label: string; count: number }[]>> {
   const dh = a.dateHierarchy!, key = a.model.fields[dh]!.key(dh), f = p.filters ?? {}
   const base = applyHierarchy(a, await changelistQs(a, ctx, { ...p, filters: Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${dh}__`))) }), {})
-  const at = (o: Record<string, number>) => base.filter(Object.fromEntries(Object.entries(o).map(([k, n]) => [`${key}__${k}`, n]))).count()
+  // one query per level: a conditional COUNT per bucket (≤ 50 years, 12 months, 31 days)
+  const counts = async (buckets: Record<string, number>[]) => {
+    const r = await base.aggregate(Object.fromEntries(buckets.map((o, i) => [`c${i}`, Count('*', { filter: Object.fromEntries(Object.entries(o).map(([k, n]) => [`${key}__${k}`, n])) })])))
+    return buckets.map((_, i) => Number(r[`c${i}`] ?? 0))
+  }
   const y = f[`${dh}__year`], m = f[`${dh}__month`]
-  const out: { value: string; label: string; count: number }[] = []
+  const level = async (name: string, buckets: Record<string, number>[], label: (o: Record<string, number>) => string, part: string) => {
+    const n = await counts(buckets)
+    return { [`${dh}__${name}`]: buckets.flatMap((o, i) => (n[i] ? [{ value: String(o[part]), label: label(o), count: n[i]! }] : [])) }
+  }
   if (y === undefined) {
     const { lo, hi } = await base.aggregate({ lo: Min(key), hi: Max(key) })
     if (!lo) return { [`${dh}__year`]: [] }
-    // ponytail: one COUNT per year, capped at 50 years
-    for (let yr = Math.max(new Date(lo).getUTCFullYear(), new Date(hi).getUTCFullYear() - 49); yr <= new Date(hi).getUTCFullYear(); yr++) {
-      const n = await at({ year: yr })
-      if (n) out.push({ value: String(yr), label: String(yr), count: n })
-    }
-    return { [`${dh}__year`]: out }
+    const last = new Date(hi).getUTCFullYear(), years = []
+    for (let yr = Math.max(new Date(lo).getUTCFullYear(), last - 49); yr <= last; yr++) years.push({ year: yr })
+    return level('year', years, (o) => String(o.year), 'year')
   }
-  if (m === undefined) {
-    for (let mo = 0; mo < 12; mo++) {
-      const n = await at({ year: +y, month: mo + 1 })
-      if (n) out.push({ value: String(mo + 1), label: new Date(+y, mo, 1).toLocaleString('en', { month: 'long' }), count: n })
-    }
-    return { [`${dh}__month`]: out }
-  }
-  for (let d = 1; d <= new Date(+y, +m, 0).getDate(); d++) {
-    const n = await at({ year: +y, month: +m, day: d })
-    if (n) out.push({ value: String(d), label: String(d), count: n })
-  }
-  return { [`${dh}__day`]: out }
+  if (m === undefined) return level('month', Array.from({ length: 12 }, (_, i) => ({ year: +y, month: i + 1 })), (o) => new Date(+y, o.month! - 1, 1).toLocaleString('en', { month: 'long' }), 'month')
+  return level('day', Array.from({ length: new Date(+y, +m, 0).getDate() }, (_, i) => ({ year: +y, month: +m, day: i + 1 })), (o) => String(o.day), 'day')
 }
 
 // ---- delete collector (Django NestedObjects) --------------------------------------------------------------
@@ -490,10 +500,9 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
     facets = {}
     for (const s of filterSpecs(a)) {
       const base = await changelistQs(a, ctx, p, s.name)
-      // ponytail: one COUNT per choice, capped at 50 choices; a GROUP BY per filter if facets get slow
       const ch = (await choicesOf(a, ctx, s)).slice(0, 50)
-      facets[s.name] = []
-      for (const [value, label] of ch) facets[s.name]!.push({ value, label, count: await (await applyFilter(a, ctx, base, s, value)).count() })
+      const n = await facetCounts(a, ctx, base, s, ch)
+      facets[s.name] = ch.map(([value, label], i) => ({ value, label, count: n[i]! }))
     }
   }
   if (a.dateHierarchy && !a.changelist) (facets ??= {}) && Object.assign(facets, await hierarchyFacets(a, ctx, p))
