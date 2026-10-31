@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { nanoid } from 'nanoid'
@@ -15,7 +15,9 @@ export interface Storage {
   delete(key: string): Promise<void>
 }
 
-const KEY_RE = /^[A-Za-z0-9_-]+\.[a-z0-9]+$/
+// `<id>.<ext>`, optionally under uploadTo folders (`docs/2024/<id>.<ext>`). No dots in folder names: no `..`.
+const KEY_RE = /^(?:[A-Za-z0-9_-]+\/){0,8}[A-Za-z0-9_-]+\.[a-z0-9]+$/
+const UPLOAD_TO = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+){0,7}$/
 const BASE64_MAX = 256 * 1024
 
 // Magic-byte table (v1 types). Hand-rolled instead of `file-type`: 5 signatures, no dependency.
@@ -35,7 +37,7 @@ export class DiskStorage implements Storage {
 
   async put(key: string, data: Readable | Buffer, meta: { type: string; size: number }): Promise<void> {
     if (!KEY_RE.test(key)) throw new Error(`bad storage key ${key}`)
-    await mkdir(this.dir, { recursive: true })
+    await mkdir(dirname(join(this.dir, key)), { recursive: true })
     const tmp = join(this.dir, `.tmp-${nanoid()}`)
     const metaTmp = `${tmp}.json`
     try {
@@ -62,8 +64,9 @@ export class DiskStorage implements Storage {
 }
 
 type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
-export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions'] }
-export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage'> }
+// uploadTo: key folder (Django upload_to), e.g. 'avatars' → 'avatars/<id>.png'; pass the file / image field's own uploadTo
+export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string }
+export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage' | 'uploadTo'> }
 type Media = Settings['media']
 
 // The def's own storage, else disk at settings.media (known only once the server runs, so resolved per use).
@@ -73,7 +76,9 @@ export const storageOf = (def: UploadDef, media: Media = { dir: './media', route
 // Returns an ordinary ActionDef (JSON/base64 path via `file: {base64}`); transports call
 // receiveUpload(stream, def, {field, media}) directly for multipart.
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
-  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage }
+  const uploadTo = opts.uploadTo?.replace(/^\/+|\/+$/g, '')
+  if (uploadTo !== undefined && !UPLOAD_TO.test(uploadTo)) throw new Error(`defineUpload ${name}: uploadTo must be folder names (letters, digits, _ -) joined by /`)
+  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage, uploadTo }
   // the 5/min default yields to apps/<app>/rules.ts (defaultRules); an explicit opts.rate beats both
   const rules: UploadRules = { ...(opts.rate && { rate: opts.rate }), ...(opts.permissions && { permissions: opts.permissions }) }
   const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
@@ -133,7 +138,7 @@ export async function receiveUpload(
     source.destroy()
     throw new DomainError('unsupported_type', `file type not allowed (allowed: ${types.join(', ')})`, field)
   }
-  const key = `${nanoid()}.${found.ext}`
+  const key = `${def.upload.uploadTo ? `${def.upload.uploadTo}/` : ''}${nanoid()}.${found.ext}`
   let size = 0
   const counted = Readable.from((async function* () {
     for await (const b of guarded(head, it as AsyncIterator<Buffer>, maxBytes, source)) { size += b.length; yield b }
