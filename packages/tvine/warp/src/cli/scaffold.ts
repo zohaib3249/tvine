@@ -23,11 +23,13 @@ const commonRoot = (a: string, b: string) => {
 const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n'
 
 // Installed as `tvine` (code imports 'tvine'): --local links this clone; otherwise an npm alias to the running
-// CLI's own package and version (npm name `tvinejs`).
+// CLI's own package (npm name `tvinejs`), as ^major.minor.0: a just-published patch can still be processing on npm
+// when npx already runs it, so pinning the exact patch would make the first install fail.
 function tvineDep(o: ProjectOpts): string {
   if (o.local) return `${o.pm === 'pnpm' ? 'link' : 'file'}:${PKG_DIR}`   // absolute: a temp dir far from the clone stays readable
   const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')) as { name: string; version: string }
-  return `npm:${pkg.name}@^${pkg.version}`
+  const [major, minor] = pkg.version.split('.')
+  return `npm:${pkg.name}@^${major}.${minor}.0`
 }
 
 export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
