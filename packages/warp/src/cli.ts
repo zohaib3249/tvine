@@ -15,6 +15,9 @@ import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import { mcpEnabled } from './transport/mcp.js'
+import { backendTable } from './backends/index.js'
+import { redisUsers } from './settings.js'
+import { redis } from './redis/index.js'
 
 export interface Io {
   out(s: string): void; err(s: string): void; exit(code: number): void
@@ -176,7 +179,15 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       }
       case 'check': {
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
+        // which backend each subsystem runs on (one settings file drives them all), and every redis alias in use answers
+        for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
+        let down = false
+        for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
+          const p = await redis.ping(alias)
+          if (p.ok) io.out(`redis ${alias}: ok (${p.ms} ms)`); else { io.err(`tvine check: redis ${alias}: ${p.error}`); down = true }
+        }
         await srv.close()
+        if (down) return 1
         const bad = await boundaryCheck(dirname(apps))
         const level = srv.ctx.settings.frontend.boundary   // 'warn': report, don't fail
         if (bad.length) {
@@ -204,7 +215,15 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       }
       case 'routes': {
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
+        // which backend each subsystem runs on (one settings file drives them all), and every redis alias in use answers
+        for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
+        let down = false
+        for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
+          const p = await redis.ping(alias)
+          if (p.ok) io.out(`redis ${alias}: ok (${p.ms} ms)`); else { io.err(`tvine check: redis ${alias}: ${p.error}`); down = true }
+        }
         await srv.close()
+        if (down) return 1
         const { actions, settings } = srv.ctx
         io.out(table([['action', 'app', 'params', 'permissions', 'mcp'], ...actions.all().map((d) => [
           d.id, d.id.slice(0, d.id.indexOf('.')),
