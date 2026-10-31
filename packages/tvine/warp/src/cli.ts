@@ -303,7 +303,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'inspect': {
         const port = o.port === undefined ? 7357 : Number(o.port)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
-        const { startInspector } = await import('tvine/inspect')
+        const { startInspector } = await import('../../inspect/dist/index.js')
         const target = args[0] ?? `http://localhost:${env.int('PORT', 3000)}`
         const ins = await startInspector({ target, port })
         io.out(`inspector on ${ins.url} -> ${target}`)

@@ -2,8 +2,8 @@
 // THE ONE SEAM to `tvine/forms` (admin.md §4, part C). The admin only imports forms through this file.
 // Agent ids (forms.md): `admin:form > form:<model> > field:<f>`, inline rows `… > inline:<n> > row:<pk|newN> > field:<f>`.
 import type { ReactNode } from 'react'
-import { ApiError, type ApiResult } from 'tvine/api'
-import { ModelForm as WeftModelForm, registerFieldWidget, type FieldWidgetProps, type ModelFormState } from 'tvine/forms'
+import { ApiError, type ApiResult } from '../../weft/dist/api/client.js'
+import { ModelForm as WeftModelForm, registerFieldWidget, type FieldWidgetProps, type ModelFormState } from '../../weft/dist/forms/index.js'
 import type { Call } from './data.js'
 import type { FormMeta, ObjectData } from './types.js'
 

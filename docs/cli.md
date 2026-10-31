@@ -17,7 +17,7 @@ All examples below were run in `examples/notes`.
 A bare `tvine` in a shell says "command not found" until you pick one:
 
 1. Inside a project: `pnpm exec tvine <cmd>` / `npx tvine <cmd>`, or a script like `"dev": "tvine dev"` then `pnpm dev`.
-2. Global: `npm i -g tvine`. From a clone: `cd packages/tvine && npm link`; undo with `npm unlink -g tvine`.
+2. Global: `npm i -g tvinejs` (gives the `tvine` command). From a clone: `cd packages/tvine && npm link`; undo with `npm unlink -g tvinejs`.
 
 ## Scaffolding (new)
 
@@ -25,7 +25,7 @@ Not on this branch yet; marked (new) until the scaffolding release merges.
 
 | Command | What it does |
 |---|---|
-| `npx tvine startproject my-app` | new project with a welcome page |
+| `npx tvinejs startproject my-app` | new project with a welcome page |
 | `tvine startproject <name> [--db …] [--no-admin] [--local]` (new) | same, from the CLI |
 | `tvine startapp <name> [--model Name]` (new) | adds `apps/<name>/` (models, views, admin, urls) |
 | `tvine shell` (new) | REPL with settings and models loaded |

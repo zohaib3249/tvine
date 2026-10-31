@@ -4,7 +4,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "jsx": "react-jsx",
-    "jsxImportSource": "tvine/weft",
+    "jsxImportSource": "#weft",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["src"]

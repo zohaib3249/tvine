@@ -1,6 +1,6 @@
 // One loader for both sides: the server page calls it for the first paint, the client after each navigation.
 // Every read goes through api.* (admin.md §2); nothing here knows about models or the ORM.
-import type { ApiResult } from 'tvine/api'
+import type { ApiResult } from '../../weft/dist/api/client.js'
 import { listParams, type Query, type Route } from './routes.js'
 import type { DeletePreview, ListResult, LogEntry, ModelMeta, ObjectData, Site, User } from './types.js'
 

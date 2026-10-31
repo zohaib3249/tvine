@@ -1,5 +1,5 @@
 'use client'
-import { disclose, expand, toTree, UNTRUSTED, UNTRUSTED_TOOL, type WidgetFrag } from 'tvine/shape'
+import { disclose, expand, toTree, UNTRUSTED, UNTRUSTED_TOOL, type WidgetFrag } from '../../../warp/dist/shape/index.js'
 import type { ActionHandle, ActionOutcome } from '../widget/types.js'
 import { getOverlay } from '../presence/overlay.js'
 import { autoExcluded } from '../jsx/AutoEl.js'

@@ -1,5 +1,7 @@
 # Installation
 
+npm package name: `tvinejs` (you import it and run it as `tvine`).
+
 ## Requirements
 
 - Node.js 22.15 or newer
@@ -21,8 +23,8 @@ pnpm -r build          # warp, weft, admin, inspect + the example Next app
 
 1. **Inside a project** (what these docs use): `pnpm exec tvine <cmd>` or `npx tvine <cmd>`, or a package.json
    script such as `"dev": "tvine dev"`, then `pnpm dev`.
-2. **Global**: `npm i -g tvine` (from a clone: `cd packages/tvine && npm link`). Now `tvine` works in any folder.
-   Undo with `npm unlink -g tvine`.
+2. **Global**: `npm i -g tvinejs` (gives the `tvine` command) (from a clone: `cd packages/tvine && npm link`). Now `tvine` works in any folder.
+   Undo with `npm unlink -g tvinejs`.
 
 ## Run the example app
 
@@ -40,10 +42,10 @@ pnpm exec tvine dev --port 4400
 
 ## Create a project
 
-`npm install tvine` gives the backend, frontend, admin, inspector, forms and the `tvine` CLI in one package.
+`npm install tvine@npm:tvinejs` (npm name is tvinejs; you import it as tvine) gives the backend, frontend, admin, inspector, forms and the `tvine` CLI in one package.
 
 ```bash
-npx tvine startproject my-app [--db postgres] [--no-admin] [--local]
+npx tvinejs startproject my-app [--db postgres] [--no-admin] [--local]
 cd my-app && pnpm install
 pnpm exec tvine migrate
 pnpm exec tvine createsuperuser

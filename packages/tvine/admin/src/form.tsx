@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { toast } from 'tvine/widgets'
+import { toast } from '../../weft/dist/widgets/index.js'
 import { href, urlFor } from './routes.js'
 import type { ModelMeta, ObjectData } from './types.js'
 import { AdminModelForm, type ModelFormState } from './forms-adapter.js'
