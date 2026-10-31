@@ -19,6 +19,7 @@ export interface UiError { code: ErrCode; message: string; reason?: string; fiel
 
 export interface ExecOptions {
   via: CallOptions['via']
+  source?: CallOptions['source']   // 'gallery': the dev gallery's "try it as agent" (same executor, same hooks)
   agent?: CallOptions['agent']
   // ActionHandle → server dispatch, with the per-step cmdId `${cmdId}.${i}` (retries never re-run it).
   run?: (handle: ActionHandle, params: Record<string, unknown>, cmdId: string) => Promise<ActionOutcome>
@@ -49,6 +50,16 @@ const seen = new Map<string, Promise<Out>>()
 let tail: Promise<void> = Promise.resolve()
 export function resetExecutor(): void { seen.clear(); setStopped(false) }
 
+// Dev observers (the gallery's inspector feed): told after every command, with what ran. Empty in production
+// unless dev code subscribed, so the cost there is one size check.
+// `steps`: the command's steps with args already masked, decided per step inside execute() while the widget is
+// known (sensitive widget → every arg; secret param → that arg). A step never resolved → every arg masked.
+export type ExecSeen = { steps: UiStep[]; via: ExecOptions['via']; source?: ExecOptions['source']; out: Out; ms: number }
+const MASK = '[sensitive]'
+const maskAll = (a: Record<string, unknown> = {}) => Object.fromEntries(Object.keys(a).map((k) => [k, MASK]))
+const stepsOf = (cmd: UiCommand): UiStep[] => (Array.isArray(cmd.steps) ? cmd.steps : cmd.target ? [{ target: cmd.target, control: cmd.control ?? '', args: cmd.args }] : [])
+export const execWatchers = new Set<(e: ExecSeen) => void>()
+
 export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   const cmdId = typeof cmd.cmdId === 'string' && cmd.cmdId ? cmd.cmdId.slice(0, 128) : newCmdId()
   const hit = seen.get(cmdId)
@@ -56,7 +67,13 @@ export function runUi(cmd: UiCommand, o: ExecOptions): Promise<Out> {
   // One command at a time per tab: steps of two commands never interleave.
   // A timed-out/stopped step's control keeps running: the next command waits for it (bounded by drainMs).
   let running: Promise<unknown> = Promise.resolve()
-  const p = tail.then(() => execute(cmd, cmdId, o, (c) => { running = c }))
+  const t0 = Date.now()
+  const safe: Record<string, unknown>[] = []   // per step: args as a dev observer may see them (filled by execute)
+  const p = tail.then(() => execute(cmd, cmdId, o, (c) => { running = c }, safe))
+  if (execWatchers.size) void p.then((out) => {
+    const steps = stepsOf(cmd).slice(0, limits.maxSteps).map((s, i) => ({ target: String(s?.target), control: String(s?.control), args: safe[i] ?? maskAll(s?.args) }))
+    for (const f of execWatchers) try { f({ steps, via: o.via, source: o.source, out, ms: Date.now() - t0 }) } catch { /* a dev observer never breaks a command */ }
+  })
   tail = p.then(() => drain(running), () => drain(running))
   seen.set(cmdId, p)
   // Blocked before anything ran (Stop): not a result worth replaying after Resume.
@@ -77,7 +94,7 @@ function newCmdId(): string {
 
 const page = () => { const l = (globalThis as any).location; return l ? l.pathname + l.search : '' }
 
-async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (call: Promise<unknown>) => void): Promise<Out> {
+async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (call: Promise<unknown>) => void, safe: Record<string, unknown>[] = []): Promise<Out> {
   const reg = getRegistry()
   const steps: UiStepResult[] = [], touched = new Map<string, Entry>()
   const done = (error?: UiError): Out => ({
@@ -105,6 +122,8 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     const c = e && callable(e, control)
     // Missing, hidden, disabled, bound to an agent-off action, or behind an open modal ([inert], as tree()): the same answer.
     if (!e || !c || e.el?.closest('[inert]')) return fail({ code: 'unknown_action', message: `unknown control ${control} on ${target}` })
+    const ps = (c.params ?? {}) as Record<string, ParamSpec>
+    safe[i] = e.spec.sensitive ? maskAll(args) : Object.fromEntries(Object.entries(args).map(([k, v]) => [k, ps[k]?.secret ? MASK : v]))
     const bad = checkArgs(c.params, args)
     if (bad) return fail({ code: 'invalid_param', field: bad.field, message: bad.message })
 
@@ -119,7 +138,7 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     try {
       if (POINTED.has(c.kind)) await presence.point(e.el)
       const call = callControl(target, control, args, {
-        via: o.via, cmdId, step: i, signal, presence, agent: o.agent,
+        via: o.via, source: o.source, cmdId, step: i, signal, presence, agent: o.agent,
         // In-tab navigate: same-site client transition, resolves after the new page settles (navigation-spa.md).
         navigate: o.navigate ?? (async (href) => { await agentNavigate(href, signal) }),
         ...(o.run && { run: (h, p) => o.run!(h, p ?? {}, `${cmdId}.${i}`) }),

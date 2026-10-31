@@ -1,6 +1,8 @@
 // core/dispatch — the single mutation path (docs/design/server/core-dispatch.md). Every command
 // (HTTP, MCP, channel, WebMCP, human <Form>) runs this pipeline; first failure → one `err` event.
 import type { ActionManifest } from './actions.js'
+import { redactSecrets } from './redact.js'
+import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
 import { siteRedirect } from './redirect.js'
@@ -81,7 +83,14 @@ function emitHooks(server: ServerCtx, cmd: Command, sid: Sid | undefined, events
   const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
   if (!hooks.has('command') && !(err && hooks.has('error'))) return
   let copy: { cmd: Command; events: Event[] }
-  try { copy = deepFreeze(structuredClone({ cmd, events })) }
+  // hooks never see credentials: secret-named params redacted; a secretResult action's result blanked (one-time secrets)
+  const secretResult = !!server.actions.get(cmd.action)?.rules?.secretResult
+  try {
+    const c = structuredClone({ cmd, events })
+    c.cmd.params = redactSecrets(c.cmd.params) as Command['params']
+    c.events = c.events.map((e) => (e.kind === 'ok' && secretResult && e.result !== undefined ? { ...e, result: '[redacted]' } : e))
+    copy = deepFreeze(c)
+  }
   catch (e) { server.log('error', 'hook payload not cloneable; hooks skipped', { action: cmd.action, error: errStr(e) }); return }
   setImmediate(() => {
     hooks.emit('command', { cmd: copy.cmd, action: cmd.action, status: err?.code ?? 'ok', sid, events: copy.events, ms })
@@ -101,7 +110,7 @@ export async function collect(events: AsyncIterable<Event>): Promise<Event[]> {
 
 // {sid, rev, page} for serialize render(): err events without a snapshot carry none themselves.
 export function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, request: Request): Ctx {
-  const s = server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
+  const s = rotatedSession(request) ?? server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
   return { sid: s?.sid ?? cmd.sid ?? '', rev: s?.rev ?? 0, page: pageOf(request) }
 }
 
@@ -203,7 +212,10 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     return { sid: fresh.sid, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })] }
   }
   const { sid } = session
+  await authenticate(settings, request, session)   // request.user from this session (core/auth.ts; no-op without an auth app)
+  const original = request
   request = asAgent(cmd, server, request, sid)
+  if (request !== original) aliasRequest(request, original)   // a rotation in the pipeline reaches the transport's request too
   const hold: Hold = {}
   if (!cmd.cmdId) return { sid, events: await serial(sid, () => pipeline(cmd, server, request, session, '', hold)) }
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
@@ -228,7 +240,9 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
 function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Request {
   const forced = server.tabs?.forcedAgent(sid) === true
   if (!forced && cmd.agentCmd === undefined) return request
-  const via = forced ? 'channel' : cmd.agentCmd?.via === 'webmcp' ? 'webmcp' : 'channel'
+  const claim = cmd.agentCmd?.via
+  // 'inspector' = the dev gallery's try-it (weft dev/Gallery.tsx); meaningless in production (no gallery there)
+  const via = forced ? 'channel' : claim === 'webmcp' ? 'webmcp' : claim === 'inspector' && process.env.NODE_ENV !== 'production' ? 'inspector' : 'channel'
   const out: Request = { ...request, agent: { ...request.agent, is: true, via } }
   if (quiet.has(request)) quiet.add(out)
   return out
@@ -249,6 +263,10 @@ type Hold = { settled?: Promise<unknown> }   // the handler's own promise, which
 
 async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string, hold: Hold): Promise<Event[]> {
   const { settings } = server, { sid } = session
+  // C1: resolved before the queue; while it waited, a login/logout may have rotated this session away (or it
+  // expired). Refuse without any sid or snapshot: the new sid belongs to whoever ran the rotating command.
+  if (!server.sessions.isLive(session)) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
+  let live = session   // the session after this command (a rotation replaces it)
   // 2b. idempotency replay
   if (cmd.cmdId) {
     const r = server.idempotency.replay(sid, cmd.cmdId, hash)
@@ -270,7 +288,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     const staged: Session = { ...session, data: structuredClone(session.data) }
     const ctx: ActionCtx = { request, session: staged, sid, settings, channels: staging(server.channels, outbox) }
     // 4.5 permissions (agent identity from request.agent; a throwing permission denies)
-    await runPermissions(def.rules?.permissions ?? [], permissionCtx(ctx, def.id))
+    await runPermissions(def.rules?.permissions ?? [], { ...permissionCtx(ctx, def.id), readOnly: !!def.rules?.readOnly })
     // 5. bind: valid MAC, issued for THIS action; $action never reaches the handler
     const bindKeys = def.rules?.bind ?? []
     if (bindKeys.length && cmd.bind === undefined) return [ev.err('stale_bind', 'this action needs the bind from its action ref; re-read the page')]
@@ -304,11 +322,13 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
         session.data = staged.data
         if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
+        // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
+        if (wantsCycle(staged)) { live = server.sessions.rotate(session); markRotated(request, live) }
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
       if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
-      const s = await snap(server, request, sid)
+      const s = await snap(server, request, live.sid)   // the new sid when the session was rotated
       return (committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))])
     }
     const inner = async function* (): AsyncIterable<Event> {

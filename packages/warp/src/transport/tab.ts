@@ -67,14 +67,24 @@ export class TabHub {
   readonly tabRate = new RateLimiter({ limit: 30, windowMs: 10_000 })    // request/approve/result per tab (release is exempt)
   private timer: ReturnType<typeof setInterval>
   private unwatch: () => void
+  private unrotate: () => void
 
   constructor(private server: ServerCtx) {
     this.unwatch = server.sessions.watch((sid, kind) => { if (kind === 'expired') this.expired(sid) })
+    // login/logout rotated a session: its agent marking (running forwarded commands, tail) follows it, so the
+    // new sid is never treated as human while the agent's command is still settling. Tabs on the old sid are
+    // dropped (expired), never re-keyed: whoever held the old sid's stream must not reach the new session.
+    this.unrotate = server.sessions.onRotate((from, to) => {
+      const b = this.busy.get(from), t = this.tail.get(from)
+      if (b) this.busy.set(to, (this.busy.get(to) ?? 0) + b)
+      if (t !== undefined) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, t))
+      if (b) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, Date.now() + TAB_LIMITS.driftMs))   // its in-flight count stays on the old key
+    })
     this.timer = setInterval(() => this.sweep(), 15_000)
     this.timer.unref?.()
   }
 
-  close(): void { clearInterval(this.timer); this.unwatch(); for (const t of [...this.tabs.values()]) this.drop(t) }
+  close(): void { clearInterval(this.timer); this.unwatch(); this.unrotate(); for (const t of [...this.tabs.values()]) this.drop(t) }
 
   get on(): boolean { return this.server.settings.agent?.inTab !== 'off' }
 

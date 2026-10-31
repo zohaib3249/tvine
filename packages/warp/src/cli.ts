@@ -1,22 +1,34 @@
 #!/usr/bin/env node
 // tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
-import { existsSync, readdirSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createInterface } from 'node:readline/promises'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
+import { installedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
-import { discoverModels, makeMigrations, migrate, migrateCheck, showMigrations, sqlMigrate } from './data/migrate.js'
+import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import { mcpEnabled } from './transport/mcp.js'
 
-export interface Io { out(s: string): void; err(s: string): void; exit(code: number): void }
-const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c) }
+export interface Io {
+  out(s: string): void; err(s: string): void; exit(code: number): void
+  prompt?(question: string, o?: { hidden?: boolean }): Promise<string>   // interactive commands (createsuperuser)
+}
+const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c), prompt: process.stdin.isTTY ? ttyPrompt : undefined }
+
+// one line from the terminal; hidden: nothing typed is echoed (passwords)
+async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+  if (o.hidden) (rl as unknown as { _writeToOutput(s: string): void })._writeToOutput = (s) => { if (s.startsWith(question)) process.stdout.write(question) }
+  try { return await rl.question(question) } finally { if (o.hidden) process.stdout.write('\n'); rl.close() }
+}
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
   start [--port 3000] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
@@ -32,7 +44,9 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   sqlmigrate <app> <migration> [--backwards]
   dumpdata [app[.model] …] [--output f.json]   fixtures as JSON (fk order)
   loaddata <f.json> …           load fixtures in one transaction (upsert by pk)
-  showmigrations`
+  showmigrations
+  createsuperuser [--username u] [--email e] [--noinput]   (tvine.auth; --noinput reads TVINE_SUPERUSER_USERNAME/_EMAIL/_PASSWORD)
+  changepassword <username>                                 (tvine.auth)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -50,6 +64,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   showmigrations: { options: {}, args: [0, 0] },
   dumpdata: { options: { output: str }, args: [0, Infinity] },
   loaddata: { options: {}, args: [1, Infinity] },
+  createsuperuser: { options: { username: str, email: str, noinput: bool }, args: [0, 0] },
+  changepassword: { options: {}, args: [1, 1] },
 }
 
 class Usage extends Error {}
@@ -62,8 +78,8 @@ function loadEnv() {
 // a built Next app in cwd is served; otherwise API-only
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
-const hasModels = (apps: string) =>
-  readdirSync(apps, { withFileTypes: true }).some((d) => d.isDirectory() && appModule(join(apps, d.name), 'models') !== undefined)
+const hasModels = (apps: string, installed: readonly string[]) =>
+  installedApps(apps, installed).some((a) => appModule(a.dir, 'models') !== undefined)
 
 function table(rows: string[][]): string {
   const w = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)))
@@ -71,8 +87,8 @@ function table(rows: string[][]): string {
 }
 
 // what migrate --check / check report when the database is not clean
-async function pending(url: string, apps: string): Promise<string> {
-  const open = (await showMigrations(url, apps)).filter((m) => !m.applied).map((m) => `${m.app}.${m.name}`)
+async function pending(url: string, apps: string, installed: readonly string[]): Promise<string> {
+  const open = (await showMigrations(url, apps, { installed })).filter((m) => !m.applied).map((m) => `${m.app}.${m.name}`)
   return open.length ? `pending: ${open.join(', ')} (run tvine migrate)` : 'models.ts changed since the last migration (run tvine makemigrations)'
 }
 
@@ -106,7 +122,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
-    if (args.length < spec.args[0]) throw new Usage(cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
+    if (args.length < spec.args[0]) throw new Usage(cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
@@ -161,14 +177,14 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM${level === 'warn' ? ' (settings.frontend.boundary = warn)' : ''}`)
           if (level === 'error') return 1
         }
-        const url = srv.ctx.settings.db.url
-        if (hasModels(apps) && !(await migrateCheck(url, apps))) { io.err(`tvine check: ${await pending(url, apps)}`); return 1 }
+        const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
+        if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
         return 0
       }
       case 'generate': {
         const root = dirname(apps), file = join(root, API_DTS)
-        const text = await generateApiTypes(root, apps)
+        const text = await generateApiTypes(root, apps, (await loadSettings()).installedApps)
         const old = existsSync(file) ? readFileSync(file, 'utf8') : undefined
         if (o.check) {
           if (old === text) return 0
@@ -197,7 +213,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (o.empty && app === undefined) throw new Usage('--empty needs an app: tvine makemigrations <app> --empty')
         // Django: --check implies --dry-run and exits 1 when a migration is missing
         const dryRun = !!(o.check || o['dry-run'])
-        const r = await makeMigrations(apps, { name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
+        const { installedApps: installed } = await loadSettings()
+        const r = await makeMigrations(apps, { installed, name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
           .catch((e: Error) => { throw new Error(e.message.replace('pass allowDrop to confirm', 'pass --allow-drop to confirm')) })
         io.out(r.message)
         return o.check && r.files.length ? 1 : 0
@@ -206,16 +223,21 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const [app, target] = args as [string | undefined, string | undefined]
         if ([o.check, o.plan, o.fake].filter(Boolean).length > 1) throw new Usage('--check, --plan and --fake are exclusive')
         if (o.check && app !== undefined) throw new Usage('--check takes no app / target')
-        const url = (await loadSettings()).db.url
+        const settings = await loadSettings()
+        const { url } = settings.db, installed = settings.installedApps
         if (o.check) {
-          if (await migrateCheck(url, apps)) return 0
-          io.err(`tvine migrate --check: ${await pending(url, apps)}`)
+          if (await migrateCheck(url, apps, { installed })) return 0
+          io.err(`tvine migrate --check: ${await pending(url, apps, installed)}`)
           return 1
         }
-        const { applied, unapplied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, app, target })
+        const { applied, unapplied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, installed, app, target })
         if (unapplied?.length) {
           io.out(o.plan ? ['planned rollback:', ...unapplied.map((k) => `  ${k}`)].join('\n') : unapplied.map((k) => `${o.fake ? 'faked unapply' : 'unapplied'} ${k}`).join('\n'))
           return 0
+        }
+        if (!o.plan) {   // post_migrate: apps' hooks.ts postMigrate (tvine.auth: permission rows) through the ORM
+          connections.configure(settings)
+          try { await postMigrate(apps, applied, { installed }) } finally { await connections.closeAll() }
         }
         if (!applied.length) io.out('no migrations to apply')
         else if (o.plan) io.out(['planned:', ...applied.map((k) => `  ${k}`)].join('\n'))
@@ -224,14 +246,16 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       }
       case 'sqlmigrate': {
         const [app, name] = args as [string, string]
-        const conn = openConn((await loadSettings()).db.url)   // the connected dialect, as Django does
-        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { backwards: !!o.backwards })) } finally { await conn.driver.close() }
+        const settings = await loadSettings()
+        const conn = openConn(settings.db.url)   // the connected dialect, as Django does
+        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps, backwards: !!o.backwards })) } finally { await conn.driver.close() }
         return 0
       }
       case 'dumpdata': case 'loaddata': {
-        connections.configure({ db: (await loadSettings()).db })
+        const settings = await loadSettings()
+        connections.configure(settings)
         try {
-          const models = await discoverModels(apps)
+          const models = await discoverModels(apps, { installed: settings.installedApps })
           if (cmd === 'dumpdata') {
             const json = JSON.stringify(await dumpData(models, args), null, 2)
             if (o.output) { writeFileSync(o.output as string, json + '\n'); io.out(`wrote ${o.output}`) } else io.out(json)
@@ -243,8 +267,21 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         } finally { await connections.closeAll() }
         return 0
       }
+      case 'createsuperuser':
+      case 'changepassword': {
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.auth')) throw new Error("tvine.auth is not installed: add 'tvine.auth' to settings.installedApps")
+        const m = await import('./contrib/auth/management.js')
+        connections.configure(settings)
+        try {
+          return cmd === 'createsuperuser'
+            ? await m.createsuperuser({ username: o.username as string | undefined, email: o.email as string | undefined, noinput: !!o.noinput, settings, prompt: io.prompt }, io)
+            : await m.changepassword({ username: args[0]!, settings, prompt: io.prompt }, io)
+        } finally { await connections.closeAll() }
+      }
       default: {   // showmigrations
-        const rows = await showMigrations((await loadSettings()).db.url, apps)
+        const settings = await loadSettings()
+        const rows = await showMigrations(settings.db.url, apps, { installed: settings.installedApps })
         const lines: string[] = []
         for (const [i, r] of rows.entries()) {
           if (rows[i - 1]?.app !== r.app) lines.push(r.app)

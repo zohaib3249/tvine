@@ -83,6 +83,12 @@ export interface TvineUser {
   id?: string
   name?: string
   claims?: Record<string, unknown>      // whatever the dev's resolver returns
+  // Filled by tvine.auth (docs/design/contrib/auth.md §4); a BYO resolver may set them too.
+  isActive?: boolean
+  isStaff?: boolean
+  isSuperuser?: boolean
+  scopes?: readonly string[]            // token-authenticated: what the token may run ('*', 'read', 'app.*', 'app.x')
+  hasPerm?(perm: string, obj?: unknown): Promise<boolean>
 }
 export const ANONYMOUS: TvineUser = Object.freeze({ isAuthenticated: false })
 
@@ -99,7 +105,7 @@ export interface Request {
   id: string                            // request id (x-request-id / traceparent trace-id)
   agent: {
     is: boolean
-    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'human'
+    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'inspector' | 'human'   // inspector: dev gallery try-it (dev only)
     client?: string                     // UA string or MCP clientInfo.name
     verified?: { directory: string; keyid: string }   // v1.1: Web Bot Auth
   }
@@ -134,6 +140,7 @@ export interface PermissionCtx {
   agent?: Request['agent']           // request.agent; denyAgents reads agent.is
   auth?: unknown                     // RESERVED v2 (claims from Command.auth)
   ip: string
+  readOnly?: boolean                 // the action is rules.readOnly (token scope 'read')
 }
 export type Permission = (ctx: PermissionCtx) => boolean | Promise<boolean>
 export type Middleware = (cmd: Command, ctx: ActionCtx,
@@ -158,6 +165,7 @@ export interface ActionRules {
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
+  secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 
@@ -192,6 +200,29 @@ export interface Settings {
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
+  installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
-  auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS
+  auth?: AuthSettings
 }
+
+// settings.auth: `user` is the BYO resolver (overrides everything); the rest configures tvine.auth
+// (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.
+export interface AuthSettings {
+  user?: (req: Request) => Promise<TvineUser | null>   // null/absent → tvine.auth (if installed) or ANONYMOUS
+  hashers?: PasswordHasher[]           // first = preferred; others verify (and get upgraded on login)
+  validators?: PasswordValidator[]
+  login?: { maxFailures?: number; accountMaxFailures?: number; ipMaxFailures?: number; windowMs?: number; lockoutMs?: number }
+  resetTimeoutMs?: number
+  sendPasswordReset?: (e: { user: { id: string; username: string; email: string }; email: string; uid: string; token: string; request: Request }) => unknown
+  objectPermission?: (user: TvineUser, perm: string, obj: unknown) => boolean | Promise<boolean>
+  tokens?: { defaultDays?: number; maxDays?: number }
+  totp?: { issuer?: string }
+}
+export interface PasswordHasher {
+  algorithm: string
+  encode(password: string): Promise<string>
+  verify(password: string, encoded: string): Promise<boolean>
+  mustUpdate(encoded: string): boolean   // weaker parameters than this hasher's: rehash on next login
+}
+// Returns the problems (empty = ok). user: the attributes similarity checks look at.
+export type PasswordValidator = (password: string, user?: Record<string, unknown>) => string[]

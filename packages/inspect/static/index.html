@@ -30,6 +30,10 @@
   #try { overflow:auto; padding:8px 12px; border-left:1px solid var(--line); }
   #try h3 { margin:4px 0; font-size:12px; } #try pre { background:var(--card); padding:6px; border-radius:6px; margin-bottom:4px; }
   .mute { color:var(--mute); }
+  #widgets { overflow:auto; padding:10px 12px; }
+  .w { padding:2px 0 2px 0; } .w .k { color:var(--acc); } .w .ctl { padding-left:14px; font:12px ui-monospace, monospace; }
+  .w button { padding:0 6px; font-size:11px; margin-left:4px; }
+  #acts li { font:12px/1.5 ui-monospace, monospace; } #acts li.err { color:var(--err); }
   @media (max-width: 800px) { main, footer { grid-template-columns:1fr; } iframe { height:40vh; } body { height:auto; grid-template-rows:auto auto auto; } }
 </style>
 </head>
@@ -41,11 +45,15 @@
   <button id="go">Go</button>
   <select id="format" aria-label="snapshot format"><option>json</option><option>notation</option></select>
   <label><input type="checkbox" id="raw"> raw</label>
+  <select id="pane" aria-label="right pane"><option value="agent">Snapshot</option><option value="widgets">Widgets</option></select>
   <span id="target" class="mute"></span>
 </header>
 <main>
   <iframe id="human" title="human page"></iframe>
   <section id="agent" aria-label="agent snapshot"></section>
+  <section id="widgets" aria-label="widgets of the page pane" hidden>
+    <div class="mute">Live widget tree of the page in the left pane (dev only; sensitive values masked). Waiting for the page…</div>
+  </section>
 </main>
 <footer>
   <ul id="log" aria-label="traffic log"><li class="note">waiting for agent traffic…</li></ul>
@@ -118,11 +126,66 @@ function logLi(li) {
 const es = new EventSource('/api/log')
 es.onmessage = (m) => {
   const r = JSON.parse(m.data)
+  if (widgetRow(r)) return
   logLi(row(r))
   if (r.kind === 'read') return   // a read changes nothing; refetching on it would only feed the log
   lastHit = r.action; loadSnapshot(); $('human').src = $('human').src
 }
 es.addEventListener('note', (m) => logLi(el('li', 'note', JSON.parse(m.data).message)))
+
+// ---- Widgets tab: rows from the framed dev page (weft dev/Gallery.tsx → /tvine/dev/widgets → this stream).
+// Read-only. "Try it" never runs from here: it shows the exact ui command and where to run it (the page's own
+// gallery, Alt+Shift+W), so an inspector can't drive a tab without a human in that tab.
+// One tab at a time: the first tab seen is pinned (two framed tabs never overwrite each other); a picker switches.
+const trees = new Map()
+let pinned = null, wrow = null
+const acts = []
+const help = el('pre', 'mute')   // kept across re-renders
+function renderWidgets() {
+  const box = $('widgets'); box.replaceChildren()
+  if (!wrow) { box.append(el('div', 'mute', 'Live widget tree of the page in the left pane (dev only; sensitive values masked). Waiting for the page…')); return }
+  if (trees.size > 1) {
+    const pick = el('select'); pick.setAttribute('aria-label', 'tab')
+    for (const [id, r] of trees) { const o = el('option', '', 'tab ' + id + ' · ' + r.page); o.value = id; o.selected = id === pinned; pick.append(o) }
+    pick.onchange = () => { pinned = pick.value; wrow = trees.get(pinned); renderWidgets() }
+    box.append(pick)
+  }
+  box.append(el('div', 'mute', 'tab ' + wrow.tab + ' · ' + wrow.page + ' · ' + new Date(wrow.t).toTimeString().slice(0, 8)))
+  box.append(help)
+  const ul = el('ul'); ul.id = 'acts'; ul.style.paddingLeft = '1em'
+  for (const a of acts.filter((x) => x.tab === pinned)) {
+    const li = el('li', a.ok ? '' : 'err', new Date(a.t).toTimeString().slice(0, 8) + ' agent@' + a.via + (a.source ? '/' + a.source : '') + ' ')
+    li.append((a.steps || []).map((s) => s.target + '.' + s.control + '(' + JSON.stringify(s.args || {}) + ')').join(' → ') + ' → ' + (a.ok ? 'ok' : a.code + ': ' + a.message) + ' ' + a.ms + 'ms')
+    ul.append(li)
+  }
+  if (ul.children.length) box.append(el('div', '', 'Agent actions'), ul)
+  const walk = (nodes, depth) => {
+    for (const n of nodes || []) {
+      const d = el('div', 'w'); d.style.paddingLeft = depth * 14 + 'px'
+      d.append(el('span', 'k', n.kind), ' ' + n.id + ' ', el('span', 'mute', '“' + n.label + '”' + (n.auto ? ' auto' : '') + (n.hooks ? ' hooks' : '') + (n.sensitive ? ' sensitive' : '') + (n.agentHidden ? ' hidden-from-agents' : '')))
+      if (n.state !== undefined) d.append(el('div', 'ctl mute', 'state ' + JSON.stringify(n.state)))
+      for (const c of n.controls || []) {
+        const line = el('div', 'ctl', c.sig + ' ')
+        line.append(el('span', 'mute', '· ' + c.headless + (c.agentOff ? ' · not for agents' : '')))
+        if (!c.agentOff) {
+          const b = el('button', '', 'try it')
+          b.onclick = () => { help.textContent = 'Runs only in the page itself: focus the page pane, press Alt+Shift+W, select ' + n.id + ', pick ' + c.name + ', Run.\nSame call for an agent (ui tool):\n' + JSON.stringify({ target: n.id, control: c.name, args: {} }) }
+          line.append(b)
+        }
+        d.append(line)
+      }
+      box.append(d)
+      walk(n.children, depth + 1)
+    }
+  }
+  walk(wrow.tree, 0)
+}
+function widgetRow(r) {
+  if (r.kind === 'widgets') { trees.delete(r.tab); trees.set(r.tab, r); if (trees.size > 20) trees.delete(trees.keys().next().value); pinned ??= r.tab; wrow = trees.get(pinned); renderWidgets(); return true }
+  if (r.kind === 'agent') { acts.unshift(r); acts.length = Math.min(acts.length, 50); renderWidgets(); return true }
+  return false
+}
+$('pane').onchange = () => { const w = $('pane').value === 'widgets'; $('widgets').hidden = !w; $('agent').hidden = w }
 
 $('go').onclick = () => go($('path').value)
 $('path').onkeydown = (e) => { if (e.key === 'Enter') go($('path').value) }
