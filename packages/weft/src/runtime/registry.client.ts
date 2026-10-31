@@ -1,4 +1,5 @@
 import type { AgentState, Json, WidgetHooks, WidgetSpec } from '../widget/types.js'
+import { SEP } from '../widget/ids.js'
 
 // registry-client.md: the in-tab control tree. Plain mutable maps, no React state: writes
 // happen only in layout effects, nothing re-renders because of them.
@@ -41,6 +42,13 @@ export class Registry {
       // Same entity in two places (grid + "recently viewed") is normal dedupe, not a clash. An entity
       // widget's id IS its (cleaned) entity, so equal ids + both entities = same entity.
       if (e.spec.entity && cur.spec.entity) return this.mounted(e)
+      // A child of a deduped entity (`product:12 > button:add` in the grid AND in "recently viewed"):
+      // also dedupe, when the two mounts sit under different hosts of that entity. Twice in ONE card still logs.
+      const root = e.id.split(SEP)[0]!
+      if (root !== e.id && this.live.get(root)?.spec.entity && e.chain?.includes(root)) {
+        const host = (x: Entry) => x.el?.closest(`[data-tvine-id="${CSS.escape(root)}"]`)
+        if (!host(e) || host(cur) !== host(e)) return this.mounted(e)
+      }
       const msg = `tvine: duplicate widget id "${e.id}": ${cur.kind} "${cur.spec.label}" (mount #${cur.order}) and ${e.kind} "${e.spec.label}" (mount #${e.order}). The first stays addressable; give one a distinct name.`
       if (dev()) console.error(msg)
       else if (!this.warned.has(e.id)) { this.warned.add(e.id); console.warn(msg) }
