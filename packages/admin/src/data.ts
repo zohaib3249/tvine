@@ -10,7 +10,7 @@ export type Call = (id: string, params?: unknown) => Promise<ApiResult<any>>
 // between users). Any call that is not a read may change perms or filter choices, so it drops the cache; a schema change
 // means a server restart, which the next page load picks up.
 const READS = new Set(['admin.site', 'admin.list', 'admin.get', 'admin.deletePreview', 'admin.history', 'admin.autocomplete', 'admin.search', 'admin.recent', 'auth.me', 'admin.dashboard', 'admin.chart', 'admin.charts', 'admin.widget', 'admin.prefs',
-  'admin.system.health', 'admin.system.logs', 'admin.system.agents', 'admin.system.metrics', 'admin.system.jobs', 'admin.system.security'])
+  'admin.system.health', 'admin.system.logs', 'admin.system.agents', 'admin.system.metrics', 'admin.system.jobs', 'admin.system.security', 'admin.system.traffic', 'admin.system.queries'])
 export const caller = (api: unknown): Call => {
   const metas = new Map<string, Promise<ApiResult<any>>>()
   return (id, params) => {
@@ -78,7 +78,7 @@ export type DashWidget = {
 }
 export type Layout = { order: string[]; hidden: string[]; sizes: Record<string, Size> }
 export type DashboardData = { widgets: DashWidget[]; layout: Layout | null; autoRefreshMs: number }
-export type Range = '24h' | '7d' | '30d' | '90d' | { from: string; to: string }
+export type Range = '1h' | '24h' | '7d' | '30d' | '90d' | { from: string; to: string }
 export const DEFAULT_RANGE: Range = '30d'
 
 // only the chart actions take a range; anything else gets its own params untouched

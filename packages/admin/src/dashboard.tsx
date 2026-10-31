@@ -12,7 +12,7 @@ import type { LogEntry } from './types.js'
 import { AppCard, WidgetData, changeText } from './pages.js'
 import { Empty, Icon, Region, Slotted, cx, slotClass, useAdmin } from './ui.js'
 
-const RANGES = ['24h', '7d', '30d', '90d'] as const
+const RANGES = ['1h', '24h', '7d', '30d', '90d'] as const
 const SIZES: Size[] = ['sm', 'md', 'lg', 'xl']
 
 function arrange(ws: DashWidget[], l: Layout | null) {

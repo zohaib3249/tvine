@@ -10,11 +10,13 @@ import { Empty, ErrorBox, Icon, Region, Skeleton, cx, useAdmin } from './ui.js'
 
 export const SYSTEM_PAGES = [
   { page: 'health', title: 'Health', icon: 'heart', superuser: false },
+  { page: 'traffic', title: 'Traffic', icon: 'chart', superuser: false },
   { page: 'metrics', title: 'Metrics', icon: 'gauge', superuser: false },
   { page: 'agents', title: 'Agents', icon: 'bot', superuser: false },
+  { page: 'queries', title: 'Queries', icon: 'table', superuser: false },
   { page: 'jobs', title: 'Jobs', icon: 'layers', superuser: false },
   { page: 'logs', title: 'Logs', icon: 'logs', superuser: true },
-  { page: 'security', title: 'Security', icon: 'shield', superuser: true },
+  { page: 'security', title: 'Logins & security', icon: 'shield', superuser: true },
 ] as const
 export type SystemPage = (typeof SYSTEM_PAGES)[number]['page']
 export const systemPagesFor = (u: User | null) => (u?.isStaff || u?.isSuperuser ? SYSTEM_PAGES.filter((p) => !p.superuser || u.isSuperuser) : [])
@@ -49,12 +51,45 @@ export function SystemView({ page }: { page: SystemPage }) {
   if (!systemPagesFor(user).some((p) => p.page === page)) return <ErrorBox error={{ code: 'domain', reason: 'forbidden', message: `${meta.title} needs a ${meta.superuser ? 'superuser' : 'staff'} account.` }} />
   return (
     <Region id={`admin:system:${page}`} label={meta.title}>
-      {page === 'health' ? <Health /> : page === 'logs' ? <Logs /> : page === 'agents' ? <Agents /> : page === 'metrics' ? <Metrics /> : page === 'jobs' ? <Jobs /> : <Security />}
+      {page === 'health' ? <Health /> : page === 'logs' ? <Logs /> : page === 'agents' ? <Agents /> : page === 'metrics' ? <Metrics />
+        : page === 'jobs' ? <Jobs /> : page === 'traffic' ? <Traffic /> : page === 'queries' ? <Queries /> : <Security />}
     </Region>
   )
 }
 
 const Loading = ({ error }: { error?: { code: string; message: string; reason?: string } }) => (error ? <ErrorBox error={error} /> : <div className="tva-card"><Skeleton rows={6} /></div>)
+
+// one range for every system page that takes one (remembered per user)
+const SYS_RANGES = ['1h', '24h', '7d', '30d', '90d'] as const
+type SysRange = (typeof SYS_RANGES)[number]
+function useRange(): [SysRange, (r: SysRange) => void] {
+  const { prefs } = useAdmin()
+  const [r, setR] = useState<SysRange>(() => prefs.get<SysRange>('system.range', '24h'))
+  return [r, (x) => { setR(x); prefs.set('system.range', x) }]
+}
+function RangePicker({ value, onChange }: { value: SysRange; onChange(r: SysRange): void }) {
+  return <div className="tva-seg" role="group" aria-label="Time range">{SYS_RANGES.map((r) => <button key={r} type="button" agentId={`range-${r}`} aria-pressed={value === r} onClick={() => onChange(r)}>{r}</button>)}</div>
+}
+type Table = { columns: string[]; rows: (string | number | null)[][] }
+// a titled table card; `mono` columns (by name) render monospace, long cells truncate with the full text on hover
+function TablePanel({ id, title, t, mono = [], empty = 'Nothing yet' }: { id: string; title: string; t?: Table; mono?: string[]; empty?: string }) {
+  return (
+    <Region id={`table:${id}`} label={title} state={{ rows: t?.rows.length ?? 0 }} className="tva-card min-w-0 overflow-hidden" as="section">
+      <h2 className="border-b border-line px-4 py-3 font-semibold">{title}</h2>
+      {!t?.rows.length ? <p className="px-4 py-8 text-center text-sm text-muted">{empty}</p> : (
+        <div className="max-h-96 overflow-auto"><table className="w-full text-[13px]">
+          <thead><tr>{t.columns.map((c) => <th key={c} className="tva-th">{c}</th>)}</tr></thead>
+          <tbody>{t.rows.map((r, i) => (
+            <tr key={i} className="tva-row">{r.map((c, j) => {
+              const isMono = mono.includes(t.columns[j]!), text = c === null ? '—' : typeof c === 'number' ? c.toLocaleString(undefined, { maximumFractionDigits: 2 }) : c
+              return <td key={j} title={typeof c === 'string' && c.length > 40 ? c : undefined} className={cx('tva-td', typeof c === 'number' && 'text-right', isMono && 'max-w-[28rem] truncate font-mono text-xs')}>{text}</td>
+            })}</tr>
+          ))}</tbody>
+        </table></div>
+      )}
+    </Region>
+  )
+}
 
 // ---- Health -----------------------------------------------------------------------------------------------------
 type Health = { status: Status; at: string; sections: { name: string; title: string; status: Status; summary: string; details: Record<string, string | number | boolean | null> }[]; warnings: string[] }
@@ -175,6 +210,7 @@ function Logs() {
 
 // ---- Agents -----------------------------------------------------------------------------------------------------
 type Agents = {
+  activity?: ChartData; topAgents?: Table; topTokens?: Table; topActions?: Table; refusals?: Record<string, number>
   sessions: { id: string; agent: string; verified: boolean; via: string; lastAction: string | null; lastAt: string; actions: number; perMin: number }[]
   tabs: { id: string; page: string; since: string; agent: string; verified: boolean }[]
   recent: { t: string; agent: string; via: string; action: string; outcome: string; session: string }[]
@@ -182,16 +218,33 @@ type Agents = {
 const Unverified = () => <span className="tva-chip h-5 bg-sunken text-[10.5px] text-muted" title="The agent's name is self-declared">unverified</span>
 function Agents() {
   const { call } = useAdmin()
-  const { data, error, live, reload } = useLiveData<Agents>(call, 'admin.system.agents', {}, { group: 'admin:live', types: ['agent', 'tick'] })
+  const [range, setRange] = useRange()
+  const { data, error, live, reload, loading } = useLiveData<Agents>(call, 'admin.system.agents', { range }, { group: 'admin:live', types: ['agent', 'tick'] })
   const stop = async (id: string) => {
     const r = await call('admin.system.revokeTab', { id })
     toast(r.ok ? { kind: 'success', title: 'Control revoked', description: 'The agent no longer controls that tab.' } : { kind: 'error', title: 'Not revoked', description: r.message })
     void reload()
   }
-  if (!data) return <><Header title="Agents" live={live} /><Loading error={error} /></>
+  const picker = <RangePicker value={range} onChange={setRange} />
+  if (!data) return <><Header title="Agents" live={live}>{picker}</Header><Loading error={error} /></>
   return (
     <>
-      <Header title="Agents" sub="AI agents using this site: MCP sessions, controlled tabs and their recent actions" live={live} />
+      <Header title="Agents" sub="AI agents using this site: MCP sessions, controlled tabs and their recent actions" live={live}>{picker}</Header>
+      {data.activity && (
+        <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <ChartCard id="agents-activity" title="Actions: human vs agent" type="stacked" loading={loading} data={data.activity} className="xl:col-span-2" />
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-1">
+            {Object.entries(data.refusals ?? {}).map(([k, v]) => <Kpi key={k} id={`refusal-${k}`} label={k === 'human_only' ? 'Human-only refusals' : k === 'confirm' ? 'Confirmations asked' : k} s={{ value: v, upIsGood: false }} />)}
+          </div>
+        </div>
+      )}
+      {(data.topAgents || data.topTokens || data.topActions) && (
+        <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <TablePanel id="top-agents" title="Top agents" t={data.topAgents} />
+          <TablePanel id="top-tokens" title="Top API tokens" t={data.topTokens} />
+          <TablePanel id="top-actions" title="Top agent actions" t={data.topActions} mono={['Action', 'action']} />
+        </div>
+      )}
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[['Active sessions', data.sessions.length], ['Controlled tabs', data.tabs.length], ['Actions / min', data.sessions.reduce((a, s) => a + s.perMin, 0)], ['Recent actions', data.recent.length]].map(([l, v], i) => (
           <Region key={String(l)} id={`kpi:${String(l).toLowerCase().replace(/\W+/g, '-')}`} label={String(l)} state={{ value: Number(v) }} className="tva-card tva-enter p-4" style={{ animationDelay: `${i * 40}ms` }}>
@@ -283,7 +336,9 @@ function Kpi({ id, label, s }: { id: string; label: string; s: Parameters<typeof
 type Jobs = { available: boolean; broker: string | null; counts: Record<string, number>; queues: { name: string; queued: number; running: number; scheduled: number; dead: number }[]; series?: ChartData; failed: { pk: string; task: string; queue: string; error: string; at: string; attempts: number }[]; canRetry: boolean }
 function Jobs() {
   const { call } = useAdmin()
-  const { data, error, live, loading, reload } = useLiveData<Jobs>(call, 'admin.system.jobs', {}, { group: 'admin:live', types: ['job', 'tick'], every: 15_000 })
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live, loading, reload } = useLiveData<Jobs>(call, 'admin.system.jobs', { range }, { group: 'admin:live', types: ['job', 'tick'], every: 15_000 })
   const [busy, setBusy] = useState<string | null>(null)
   const retry = async (pk: string) => {
     setBusy(pk)
@@ -292,12 +347,12 @@ function Jobs() {
     toast(r.ok ? { kind: 'success', title: 'Queued for retry', description: (r.data as { message?: string })?.message } : { kind: 'error', title: 'Retry failed', description: r.message })
     void reload()
   }
-  if (!data) return <><Header title="Jobs" live={live} /><Loading error={error} /></>
+  if (!data) return <><Header title="Jobs" live={live}>{picker}</Header><Loading error={error} /></>
   if (!data.available) return <><Header title="Jobs" live={live} /><Empty title="Background tasks are not installed" icon="layers">Add <code className="tva-kbd">tvine.tasks</code> to <code className="tva-kbd">settings.installedApps</code>.</Empty></>
   const queues: ChartData = { groupBy: 'category', series: [['queued', 'Queued'], ['running', 'Running'], ['scheduled', 'Scheduled'], ['dead', 'Failed']].map(([name, label]) => ({ name: name!, label: label! })), points: data.queues.map((q) => ({ x: q.name, values: [q.queued, q.running, q.scheduled, q.dead] })) }
   return (
     <>
-      <Header title="Jobs" sub={`Broker: ${data.broker ?? '—'}`} live={live} />
+      <Header title="Jobs" sub={`Broker: ${data.broker ?? '—'}`} live={live}>{picker}</Header>
       <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {(['queued', 'running', 'scheduled', 'dead'] as const).map((k) => <Kpi key={k} id={`jobs-${k}`} label={k === 'dead' ? 'Failed' : k[0]!.toUpperCase() + k.slice(1)} s={{ value: data.counts[k] ?? 0, upIsGood: k !== 'dead' }} />)}
       </div>
@@ -323,17 +378,20 @@ function Jobs() {
 }
 
 // ---- Security (superuser) ---------------------------------------------------------------------------------------
-type Security = { counts: Record<string, number>; series: ChartData; events: { t: string; event: string; level: string; ip?: string; userId?: string | null; via?: string; path?: string; action?: string }[] }
+type Security = { logins?: ChartData; counts: Record<string, number>; series: ChartData; events: { t: string; event: string; level: string; ip?: string; userId?: string | null; via?: string; path?: string; action?: string }[] }
 const EVENT_LABEL: Record<string, string> = { login_ok: 'Logins', login_failed: 'Failed logins', lockout: 'Lockouts', permission_denied: 'Permission denied', human_only: 'Human-only refusals', confirm_required: 'Confirmations', host_refused: 'Host refused', ip_refused: 'IP refused', origin_refused: 'Origin refused', rate_limited: 'Rate limited' }
 function Security() {
   const { call } = useAdmin()
-  const { data, error, live, loading } = useLiveData<Security>(call, 'admin.system.security', {}, { group: 'admin:live', types: ['security', 'tick'] })
-  if (!data) return <><Header title="Security" live={live} /><Loading error={error} /></>
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live, loading } = useLiveData<Security>(call, 'admin.system.security', { range }, { group: 'admin:live', types: ['security', 'tick'] })
+  if (!data) return <><Header title="Logins & security" live={live}>{picker}</Header><Loading error={error} /></>
   const idx = (e: string) => data.series.series.findIndex((s) => s.name === e)
   const counts = Object.entries(data.counts).sort((a, b) => b[1] - a[1])
   return (
     <>
-      <Header title="Security" sub="Events from the tvine.security channel (last 24 hours)" live={live} />
+      <Header title="Logins & security" sub="Sign-ins and events from the tvine.security channel" live={live}>{picker}</Header>
+      {data.logins && <ChartCard id="logins" title="Sign-ins" type="stacked" loading={loading} data={data.logins} className="mb-4" />}
       {counts.length === 0 ? <Empty title="No security events" icon="shield" /> : (
         <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
           {counts.map(([e, n], i) => (
@@ -363,3 +421,51 @@ function Security() {
   )
 }
 
+// ---- Traffic ----------------------------------------------------------------------------------------------------
+type Traffic = { requests: ChartData; status: ChartData; latency: ChartData; errorRate: ChartData; routes?: Table; actions?: { top?: Table; slowest?: Table; failing?: Table } }
+function Traffic() {
+  const { call } = useAdmin()
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live, loading } = useLiveData<Traffic>(call, 'admin.system.traffic', { range }, { group: 'admin:live', types: ['tick'] })
+  if (!data) return <><Header title="Traffic" live={live}>{picker}</Header><Loading error={error} /></>
+  return (
+    <>
+      <Header title="Traffic" sub="Requests by transport, status, latency and errors" live={live}>{picker}</Header>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <ChartCard id="traffic-requests" title="Requests by transport" type="area" loading={loading} data={data.requests} />
+        <ChartCard id="traffic-status" title="Responses by status" type="stacked" loading={loading} data={data.status} />
+        <ChartCard id="traffic-latency" title="Latency" subtitle="p50 and p95, milliseconds" type="line" loading={loading} data={data.latency} />
+        <ChartCard id="traffic-errors" title="Error rate" type="line" loading={loading} data={data.errorRate} />
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <TablePanel id="routes" title="Busiest routes" t={data.routes} mono={['Route', 'route', 'Path', 'path']} />
+        <TablePanel id="actions-top" title="Top actions" t={data.actions?.top} mono={['Action', 'action']} />
+        <TablePanel id="actions-slowest" title="Slowest actions" t={data.actions?.slowest} mono={['Action', 'action']} />
+        <TablePanel id="actions-failing" title="Failing actions" t={data.actions?.failing} mono={['Action', 'action']} empty="No failures" />
+      </div>
+    </>
+  )
+}
+
+// ---- Queries ----------------------------------------------------------------------------------------------------
+type Queries = { enabled: boolean; top?: Table; slow?: Table }
+function Queries() {
+  const { call } = useAdmin()
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live } = useLiveData<Queries>(call, 'admin.system.queries', { range }, { group: 'admin:live', types: ['tick'] })
+  if (!data) return <><Header title="Queries" live={live}>{picker}</Header><Loading error={error} /></>
+  const mono = ['fingerprint', 'Fingerprint', 'query', 'Query', 'SQL']
+  return (
+    <>
+      <Header title="Queries" sub="Database statements grouped by shape (values never shown)" live={live}>{picker}</Header>
+      {!data.enabled ? <Empty title="Query stats are off" icon="table">Turn on query statistics in settings to record statement timings.</Empty> : (
+        <div className="grid grid-cols-1 gap-4">
+          <TablePanel id="queries-top" title="Most time spent" t={data.top} mono={mono} />
+          <TablePanel id="queries-slow" title="Slow queries" t={data.slow} mono={mono} empty="No slow queries" />
+        </div>
+      )}
+    </>
+  )
+}

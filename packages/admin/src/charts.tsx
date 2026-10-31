@@ -106,7 +106,10 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
   const [hi, setHi] = useState<number | null>(null)
   const n = d.points.length
   const compact = W < 420
-  const tops = d.points.map((p) => (stacked ? p.values.reduce((a, b) => a + Math.max(0, b), 0) : Math.max(0, ...p.values)))
+  // a multi-series area stacks (parts of a whole over time); lines never stack
+  const stackArea = kind === 'area' && d.series.length > 1
+  const cum = (i: number, k: number) => (stackArea ? d.points[i]!.values.slice(0, k + 1).reduce((a, b) => a + Math.max(0, b), 0) : d.points[i]!.values[k] ?? 0)
+  const tops = d.points.map((p) => (stacked || stackArea ? p.values.reduce((a, b) => a + Math.max(0, b), 0) : Math.max(0, ...p.values)))
   const ticks = niceTicks(Math.max(0, ...tops), height < 160 ? 2 : 4)
   const tickUnit = d.unit === 'ms' ? 'number' : d.unit
   const tickText = (t: number) => fmtValue(t, tickUnit, d.currency, true)
@@ -127,7 +130,8 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
     if (e.key === 'Escape') setHi(null)
   }
   if (!n) return <div ref={ref}><Empty title="No data in this range" icon="grid" /></div>
-  const line = (k: number) => d.points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.values[k] ?? 0).toFixed(1)}`).join('')
+  const line = (k: number) => d.points.map((_, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(cum(i, k)).toFixed(1)}`).join('')
+  const under = (k: number) => (stackArea && k > 0 ? d.points.map((_, j) => n - 1 - j).map((i) => `L${x(i).toFixed(1)},${y(cum(i, k - 1)).toFixed(1)}`).join('') : `L${x(n - 1)},${y(0)}L${x(0)},${y(0)}`)
   const sub = d.series.length
   const gap = band > 10 ? 4 : 1   // dense series: keep a hairline of air, never a negative width
   const gw = Math.max(1, stacked ? Math.min(24, band - gap) : Math.min(24, (band - gap) / sub - (band > 10 ? 2 : 0)))
@@ -162,15 +166,15 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
           )
         }) : d.series.map((s, k) => (
           <g key={s.name}>
-            {kind === 'area' && <path d={`${line(k)}L${x(n - 1)},${y(0)}L${x(0)},${y(0)}Z`} fill={color(k)} className="tva-area" />}
+            {kind === 'area' && <path d={`${line(k)}${under(k)}Z`} fill={color(k)} className={stackArea ? 'tva-area tva-area-stack' : 'tva-area'} />}
             <path d={line(k)} fill="none" stroke={color(k)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="tva-line" />
-            {n === 1 && <circle cx={x(0)} cy={y(d.points[0]!.values[k] ?? 0)} r={4} fill={color(k)} />}
+            {n === 1 && <circle cx={x(0)} cy={y(cum(0, k))} r={4} fill={color(k)} />}
           </g>
         ))}
         {kind !== 'bar' && hi !== null && (
           <g>
             <line x1={x(hi)} x2={x(hi)} y1={padT} y2={padT + ih} className="tva-cross" />
-            {d.series.map((s, k) => <circle key={s.name} cx={x(hi)} cy={y(d.points[hi]!.values[k] ?? 0)} r={4} fill={color(k)} className="tva-dot" />)}
+            {d.series.map((s, k) => <circle key={s.name} cx={x(hi)} cy={y(cum(hi, k))} r={4} fill={color(k)} className="tva-dot" />)}
           </g>
         )}
       </svg>

@@ -161,6 +161,7 @@ body.tva-page { margin: 0; }
   .tva-plot:focus-visible { outline: 2px solid var(--tva-brand); outline-offset: 4px; }
   .tva-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: tva-draw .8s cubic-bezier(.2,.7,.2,1) both; }
   .tva-area { opacity: .1; animation: tva-fade .6s ease-out both; }
+  .tva-area-stack { opacity: .28; }
   .tva-cross { stroke: var(--tva-muted); stroke-width: 1; opacity: .6; }
   .tva-dot { stroke: var(--tva-surface); stroke-width: 2; }
   .tva-band { fill: var(--tva-sunken); }
