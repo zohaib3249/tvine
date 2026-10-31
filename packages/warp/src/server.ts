@@ -16,6 +16,7 @@ import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.
 import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
 import { cookieOpts } from './core/session.js'
+import { metrics, since } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
@@ -218,6 +219,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
   const tabs = new TabHub(ctx)
   ctx.tabs = tabs
+  metrics.enabled = settings.metrics.enabled
+  if (metrics.enabled) {
+    metrics.gauge('tvine_sse_connections', () => [[{}, sse.size]])
+    metrics.gauge('tvine_tab_connections', () => [[{}, tabs.size]])
+    metrics.gauge('tvine_sessions', () => [[{}, ctx.sessions.size]])
+  }
   const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs })
   const mcp = mcpHandler(ctx, { route, tabs })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
@@ -230,7 +237,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const cors = corsLayer(settings)
   const chain: Handler[] = [
     ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
+    ...(settings.metrics.enabled ? [metricsHandler(settings)] : []),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now(), robots: robotsOf(routes, fe?.nextDir, adminBase) }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
@@ -261,6 +269,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const mediaRoot = settings.media.route.replace(/\/$/, '')
   const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
     p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!(urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })()) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
+  // metrics label: which transport answered (a fixed set, never the raw path)
+  const transportOf = (p: string) => p === '/mcp' ? 'mcp' : p === '/tvine/channel' ? 'channel'
+    : p.startsWith('/tvine/tab/') || p.startsWith('/tvine/agent/') ? 'tab' : p.startsWith('/tvine/api/') ? 'api'
+    : urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })() ? 'urls'
+    : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}
@@ -283,6 +296,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       const corsPlan = ours ? cors.request(req) : undefined
       const plan = sec.begin(req, httpsOf(req, settings))
       weakIfNoneMatch(req)
+      if (metrics.enabled) {
+        const t0 = performance.now(), p = pathOf(req)
+        res.once('close', () => metrics.observe('tvine_http_request_duration_seconds', { transport: transportOf(p), status: res.headersSent ? `${Math.floor(res.statusCode / 100)}xx` : 'aborted' }, since(t0)))
+      }
       // a real node response only (a test double without header methods is passed through untouched)
       if (typeof res.getHeader === 'function') {
         unhook = hookResponse(req, res, {
@@ -385,6 +402,37 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
     if (own !== undefined && (own === base || own.startsWith(`${base}/`))) return next()
     serve(req, res, next)
   }
+}
+
+// BACKLOG #9: GET settings.metrics.path → Prometheus text. Allowed: the bearer token, or the client ip in allowIps;
+// neither configured = loopback only. Anything else gets a plain 404 (the endpoint's existence is not disclosed).
+function metricsHandler(settings: Settings): Handler {
+  const { path, token, allowIps } = settings.metrics
+  // production: a same-host proxy (or a proxy that strips X-Forwarded-For) makes every request look local, so
+  // "loopback only" is never a production guard
+  if (process.env.NODE_ENV === 'production' && !token && !allowIps.length) throw new Error('settings.metrics.enabled in production needs metrics.token or metrics.allowIps (loopback-only is dev only)')
+  const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+  // loopback = the socket itself is local, nothing claims to be forwarded, and no proxy is trusted
+  const forwarded = (req: IncomingMessage) => Object.keys(req.headers).some((h) => h.startsWith('x-forwarded-') || h === 'forwarded' || h === 'x-real-ip')
+  const local = (req: IncomingMessage) => settings.trustProxy === 0 && loopback.has(req.socket.remoteAddress ?? '') && !forwarded(req)
+  const allowed = (req: IncomingMessage) => {
+    const given = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
+    if (token && given) { const a = Buffer.from(given), b = Buffer.from(token); if (a.length === b.length && timingSafeEqual(a, b)) return true }
+    if (allowIps.length) return allowIps.includes(clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
+    return !token && local(req)
+  }
+  return (req, res, next) => {
+    if (pathOf(req) !== path) return next()
+    if (!allowed(req)) return void res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
+    res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8', 'cache-control': 'no-store' }).end(metrics.render())
+  }
+}
+
+// BACKLOG #11: the app's own robots.txt (public/robots.txt, or an app/robots route) wins over the default
+function robotsOf(routes: RouteInfo[], nextDir: string | undefined, admin: string | undefined) {
+  const pub = join(nextDir ? dirname(resolve(nextDir)) : process.cwd(), 'public')
+  const has = (f: string) => routes.some((r) => r.path === `/${f}`) || existsSync(join(pub, f))
+  return { own: has('robots.txt'), sitemap: has('sitemap.xml'), admin }
 }
 
 // apps' /tvine/health sections (ServerCtx.health); a failing one reports itself, never fails health

@@ -1,7 +1,7 @@
 // tvine.auth in tvine.admin (Django UserAdmin / GroupAdmin). Loaded by the admin's autodiscover only when
 // 'tvine.admin' is installed. The password is hashed by the admin's save (any model's password field goes through
 // tvine.auth's hasher) and never read back
-// (a hidden field: never in admin values); the change form sets a new one, or the set-password view.
+// (a hidden field: never in admin values); the add form sets the first one, the set-password view every later one.
 import { DomainError } from '../../core/errors.js'
 import { path } from '../../urls.js'
 import { ModelAdmin, type Ctx } from '../admin/options.js'
@@ -42,7 +42,8 @@ export class UserAdmin extends ModelAdmin<UserRow> {
 
   async saveModel(ctx: Ctx, obj: UserRow | undefined, values: Record<string, unknown>): Promise<UserRow> {
     if (!obj && typeof values.password !== 'string') throw new DomainError('invalid_param', 'password: This field is required.', 'password')
-    // Django ReadOnlyPasswordHashField: an existing user's password changes only through the password view (setPassword)
+    // Django ReadOnlyPasswordHashField: an existing user's password changes only through the password view, so every
+    // admin password change runs setPassword once (validators + passwordChanged: tokens revoked, own session kept)
     if (obj && 'password' in values) throw new DomainError('invalid_param', 'password: use the Change password form', 'password')
     if (SENSITIVE.some((k) => k in values && (!obj || values[k] !== (obj as Record<string, unknown>)[k]))) sudo(ctx)
     return super.saveModel(ctx, obj, values)
@@ -58,7 +59,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
     sudo(ctx)
     const u = await this.getObject(ctx, id)
     if (!u) throw new DomainError('not_found', 'user not found')
-    await setPassword(id, pw, { settings: ctx.settings })
+    await setPassword(id, pw, { ctx })
     await logAction(ctx, this.key(), id, this.str(u as never), CHANGE, [{ changed: { fields: ['Password'] } }])
     return { ok: true }
   }

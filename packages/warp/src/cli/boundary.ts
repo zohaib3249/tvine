@@ -3,7 +3,8 @@
 // the ORM in them) or Warp's data API, directly or through any helper. `import type` is erased, so allowed.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { build, type Metafile } from 'esbuild'
+import type { Metafile } from 'esbuild'
+import { loadEsbuild } from '../core/actions.js'
 
 const DATA_API = new Set(['defineModel', 'field', 'QuerySet', 'Paginator', 'connections', 'atomic', 'configureDb'])
 const FE_DIRS = ['app', 'src/app', 'components', 'src/components']
@@ -49,7 +50,7 @@ export async function boundaryCheck(root: string): Promise<Violation[]> {
   if (!fe.size) return []
   let meta: Metafile
   try {
-    meta = (await build({
+    meta = (await (await loadEsbuild('the FE/DB boundary check')).build({
       entryPoints: [...fe], absWorkingDir: root, bundle: true, write: false, metafile: true, outdir: join(root, '.tvine-check'),
       platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', logLevel: 'silent',
       loader: Object.fromEntries(ASSETS.map((e) => [e, 'empty' as const])),

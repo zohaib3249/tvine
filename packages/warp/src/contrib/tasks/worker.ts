@@ -3,7 +3,8 @@
 // down gracefully (finish or release within the grace period). Every job access goes through the Broker.
 import { hostname } from 'node:os'
 import { randomBytes } from 'node:crypto'
-import { broker as current, bus, type Broker, type Final } from './broker.js'
+import { broker as current, brokerKind, bus, type Broker, type Final } from './broker.js'
+import { metrics } from '../../core/metrics.js'
 import type { JobRow } from './models.js'
 import { config, followUp, parseRate, Retry, taskById, type SigJSON, type Task, type TaskCtx } from './task.js'
 import { auditSinkSet, sidHash, writeAudit, type AuditRow } from '../../core/audit.js'
@@ -128,6 +129,7 @@ export class Worker {
         if (free <= 0) break
         const n = Math.min(free, this.claimBatch), skipTasks = this.overLimit()
         const { token, jobs, nextAt } = await this.broker.claim({ worker: this.name, queues: this.queues, n, leaseMs: this.leaseMs, skipTasks })
+        if (jobs.length) metrics.inc('tvine_tasks_claims_total', { broker: brokerKind() ?? 'file' }, jobs.length)
         if (nextAt !== undefined) this.due(nextAt)
         if (skipTasks.length) this.due(this.limitFrees())
         if (this.stopping) {   // stop() began during the claim: hand these straight back
@@ -263,6 +265,7 @@ export class Worker {
     const { job } = r
     const retry = e instanceof Retry || (task ? retryable(task, e) : true)
     const base = { worker: this.name, jobId: job.id, task: job.task, attempt: job.attempts, error: errText(e) }
+    metrics.inc('tvine_tasks_failures_total', { broker: brokerKind() ?? 'file' })
     if (retry && job.attempts <= job.maxRetries) {
       const inMs = e instanceof Retry && e.inMs !== undefined ? e.inMs : fixedMs ?? backoff(task?.opts.retryBackoff, job.attempts)
       if (await this.broker.requeue(job.id, r.token, { runAt: Date.now() + inMs, error: errText(e) })) this.log('warn', 'job.retry', { ...base, inMs })

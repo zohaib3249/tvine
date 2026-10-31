@@ -11,6 +11,7 @@
     "@tvine/admin": "workspace:*",
     "@tvine/warp": "workspace:*",
     "@tvine/weft": "workspace:*",
+    "esbuild": "0.28.2",
     "next": "16.4.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",

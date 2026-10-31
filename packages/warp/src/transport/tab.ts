@@ -16,6 +16,7 @@ import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
 import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
 import { limiterFor } from '../backends/index.js'
+import { metrics } from '../core/metrics.js'
 
 // a hub limiter from settings.limits.backend, its keys namespaced so two hub limiters never share a bucket
 type TabLimiter = { check(k: { sid: string }): ReturnType<Limiter['check']> }
@@ -102,6 +103,7 @@ export class TabHub {
 
   close(): void { clearInterval(this.timer); this.unwatch(); this.unrotate(); for (const t of [...this.tabs.values()]) this.drop(t) }
 
+  get size(): number { return this.tabs.size }   // metrics: connected tabs
   get on(): boolean { return this.server.settings.agent?.inTab !== 'off' }
 
   // ---- tab lifecycle (channel.ts) -----------------------------------------------------------
@@ -393,7 +395,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     try { return new URL(o).host === h } catch { return false }
   }
   const ipOf = (req: IncomingMessage) => clientIp(hdr(req, 'x-forwarded-for') ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-  const tooMany = (res: ServerResponse) => send(res, 429, { error: 'rate limited' })
+  const tooMany = (res: ServerResponse) => { metrics.inc('tvine_ratelimit_hits_total', { scope: 'tab' }); send(res, 429, { error: 'rate limited' }) }
 
   async function body(req: IncomingMessage, cap: number): Promise<Record<string, unknown> | undefined> {
     if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return undefined
