@@ -118,7 +118,7 @@ export interface Request {
   }
   files: UploadedFile[]                 // media uploads (empty unless multipart)
   user: TvineUser                      // ALWAYS present; anonymous = ANONYMOUS
-  raw?: IncomingMessage                 // escape hatch, http transport only
+  raw?: IncomingMessage                 // escape hatch: http + api (browser) transports
 }
 
 export interface Session {
@@ -177,6 +177,33 @@ export interface ActionRules {
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
+// server/security-headers.md
+export interface SecurityHeaders {
+  enabled: boolean
+  hsts: false | { maxAge: number; includeSubDomains: boolean; preload: boolean }   // https only
+  csp: false | {
+    reportOnly: boolean
+    directives: Record<string, string[] | false>   // over the built-in defaults; false drops one
+    reportUri: string | false                      // '/tvine/csp-report' = ours (mounted); another URL = external
+    staticPages: 'relaxed' | 'strict'              // prerendered (nonce-less) HTML: 'self' 'unsafe-inline' scripts, or keep the nonce policy
+  }
+  referrerPolicy: string
+  coop: false | 'same-origin' | 'same-origin-allow-popups' | 'unsafe-none'
+  corp: false | 'same-origin' | 'same-site' | 'cross-origin'
+  permissionsPolicy: Record<string, string[] | false>   // feature → allowlist ([] = nobody, ['self'], origins)
+}
+export type CorsOrigin = string | RegExp   // exact origin, '*' (never with credentials), or an anchored RegExp
+export interface CorsPolicy {
+  origins: CorsOrigin[]
+  methods: string[]
+  allowHeaders: string[]
+  exposeHeaders: string[]
+  credentials: boolean
+  maxAge: number
+}
+export interface CorsSettings extends CorsPolicy { routes: ({ path: string } & Partial<CorsPolicy>)[] }
+export interface CompressionSettings { enabled: boolean; threshold: number; brotli: boolean; gzipLevel: number; brotliQuality: number }
+
 export interface Settings {
   site: { name: string; description: string }
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
@@ -213,6 +240,9 @@ export interface Settings {
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
+  security: { headers: SecurityHeaders }
+  cors: CorsSettings                // default closed: no routes
+  compression: CompressionSettings
   // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
   // SIGTERM grace, how long final job rows are kept
   // broker: the job store (tvine.tasks picks the default); redis: the settings.redis alias a 'redis' broker uses

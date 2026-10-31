@@ -10,7 +10,8 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
 import { installedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
-import { makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
+import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
+import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
@@ -41,8 +42,11 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   routes                        print the action manifest
   generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
-  migrate [--check] [--plan] [--fake]
-  sqlmigrate <app> <migration>
+  migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
+                                <app>: forward to its latest; <target>: forward or ROLL BACK to it
+  sqlmigrate <app> <migration> [--backwards]
+  dumpdata [app[.model] …] [--output f.json]   fixtures as JSON (fk order)
+  loaddata <f.json> …           load fixtures in one transaction (upsert by pk)
   showmigrations
   createsuperuser [--username u] [--email e] [--noinput]   (tvine.auth; --noinput reads TVINE_SUPERUSER_USERNAME/_EMAIL/_PASSWORD)
   changepassword <username>                                 (tvine.auth)
@@ -61,9 +65,11 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   routes: { options: {}, args: [0, 0] },
   generate: { options: { check: bool }, args: [0, 0] },
   makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
-  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
-  sqlmigrate: { options: {}, args: [2, 2] },
+  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, 2] },
+  sqlmigrate: { options: { backwards: bool }, args: [2, 2] },
   showmigrations: { options: {}, args: [0, 0] },
+  dumpdata: { options: { output: str }, args: [0, Infinity] },
+  loaddata: { options: {}, args: [1, Infinity] },
   createsuperuser: { options: { username: str, email: str, noinput: bool }, args: [0, 0] },
   changepassword: { options: {}, args: [1, 1] },
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
@@ -124,7 +130,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
-    if (args.length < spec.args[0]) throw new Usage(cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : `usage: tvine ${cmd} <app> <migration>`)
+    if (args.length < spec.args[0]) throw new Usage(cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
@@ -246,8 +252,9 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         return o.check && r.files.length ? 1 : 0
       }
       case 'migrate': {
-        if (args.length) throw new Error('rollback targets not supported — forward-only; see backlog (migrate <app> <target>)')
+        const [app, target] = args as [string | undefined, string | undefined]
         if ([o.check, o.plan, o.fake].filter(Boolean).length > 1) throw new Usage('--check, --plan and --fake are exclusive')
+        if (o.check && app !== undefined) throw new Usage('--check takes no app / target')
         const settings = await loadSettings()
         const { url } = settings.db, installed = settings.installedApps
         if (o.check) {
@@ -255,7 +262,11 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           io.err(`tvine migrate --check: ${await pending(url, apps, installed)}`)
           return 1
         }
-        const { applied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, installed })
+        const { applied, unapplied } = await migrate(url, apps, { plan: !!o.plan, fake: !!o.fake, installed, app, target })
+        if (unapplied?.length) {
+          io.out(o.plan ? ['planned rollback:', ...unapplied.map((k) => `  ${k}`)].join('\n') : unapplied.map((k) => `${o.fake ? 'faked unapply' : 'unapplied'} ${k}`).join('\n'))
+          return 0
+        }
         if (!o.plan) {   // post_migrate: apps' hooks.ts postMigrate (tvine.auth: permission rows) through the ORM
           connections.configure(settings)
           try { await postMigrate(apps, applied, { installed }) } finally { await connections.closeAll() }
@@ -269,7 +280,23 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const [app, name] = args as [string, string]
         const settings = await loadSettings()
         const conn = openConn(settings.db.url)   // the connected dialect, as Django does
-        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps })) } finally { await conn.driver.close() }
+        try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps, backwards: !!o.backwards })) } finally { await conn.driver.close() }
+        return 0
+      }
+      case 'dumpdata': case 'loaddata': {
+        const settings = await loadSettings()
+        connections.configure(settings)
+        try {
+          const models = await discoverModels(apps, { installed: settings.installedApps })
+          if (cmd === 'dumpdata') {
+            const json = JSON.stringify(await dumpData(models, args), null, 2)
+            if (o.output) { writeFileSync(o.output as string, json + '\n'); io.out(`wrote ${o.output}`) } else io.out(json)
+          } else {
+            const rows = args.flatMap(f => JSON.parse(readFileSync(f, 'utf8')) as FixtureRow[])
+            const n = await loadData(models, rows)   // every file in ONE transaction
+            io.out(`installed ${n} object(s) from ${args.length} fixture(s)`)
+          }
+        } finally { await connections.closeAll() }
         return 0
       }
       case 'createsuperuser':

@@ -6,7 +6,8 @@ import { and, bin, castText, fn, FALSE, inList, isNotNull, isNull, like, or, par
 import type { Dialect } from '../sql/dialect.js'
 import type { Op } from '../queryset.js'
 
-export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk'
+export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk' | 'm2m'
+export type OnDelete = 'CASCADE' | 'PROTECT' | 'SET_NULL' | 'SET_DEFAULT' | 'RESTRICT' | 'DO_NOTHING'
 export type DbName = Dialect['name']
 
 export interface Opts {
@@ -19,10 +20,20 @@ export interface Opts {
   readOnly?: boolean                    // generic views: never accepted as create/update input
   writeOnly?: boolean                   // generic views: accepted as input, never output (overrides hidden's write-protect)
   auto?: boolean                        // datetime only: default now
+  onDelete?: OnDelete                   // fk only (default RESTRICT); orm-advanced.md §4
+  relatedName?: string                  // fk / m2m: the reverse accessor name (default `<model>_set`); no DDL
 }
 
 export interface Money { value: number; currency: string }
-export interface ModelDef { name: string; fields: Fields }
+export interface ModelDef { name: string; fields: Fields; meta?: ModelMeta }
+// Model Meta (orm-advanced.md §4). Constraint specs are plain data (expressions.ts builds them).
+export interface IndexDecl { fields: string[]; name?: string; unique?: boolean }
+export interface ModelMeta {
+  indexes?: (string[] | IndexDecl)[]
+  unique?: string[][]
+  constraints?: import('../expressions.js').ConstraintSpec[]
+  ordering?: string[]
+}
 export type Fields = Record<string, Field<any, boolean, Kind, boolean>>
 
 // V = row value type, O = optional (nullable), K = kind, D = has a default. V/O/D are type-only.
@@ -32,7 +43,8 @@ export abstract class Field<V = unknown, O extends boolean = boolean, K extends 
   declare readonly _o?: O
   declare readonly _d?: D
   readonly values?: readonly string[]                       // enum
-  readonly target?: () => ModelDef                          // fk
+  readonly target?: () => ModelDef                          // fk, m2m
+  readonly through?: () => ModelDef                         // m2m with a custom through model
   constructor(readonly opts: Opts = {}) {}
 
   key(name: string): string { return name }                 // property name on the row object
@@ -97,6 +109,9 @@ export function ddlLiteral(v: unknown): string {
 export const byDb = (d: Dialect, t: Record<DbName, string>) => t[d.name]
 
 export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => f.key(name)
+// fields that own column(s) — everything but m2m
+export const concrete = (fields: Fields): [string, Field<any, boolean, Kind, boolean>][] =>
+  Object.entries(fields).filter(([, f]) => f.kind !== 'm2m')
 
 export function pkField(def: ModelDef): [string, Field<any, boolean, Kind, boolean>] {
   const e = Object.entries(def.fields).find(([n, f]) => n === 'id' && (f.kind === 'id' || f.kind === 'uuid'))

@@ -1,5 +1,9 @@
 export { defineModel, modelRegistry, type Model } from './data/model.js'
 export { field, inc, dec, type Infer } from './data/fields.js'
+export {
+  F, Q, Value, Case, When, Coalesce, Lower, Upper, Length, Abs, Cast, TruncDay, TruncMonth, TruncYear,
+  Sum, Count, Avg, Min, Max, Exists, OuterRef, Subquery, Prefetch, CheckConstraint, UniqueConstraint,
+} from './data/expressions.js'
 export { atomic, onCommit, setOnCommitErrorHandler } from './data/engine.js'
 export { configureDb, closeDb } from './data/db.js'
 export { makeMigrations, migrate, migrateCheck } from './data/migrate.js'

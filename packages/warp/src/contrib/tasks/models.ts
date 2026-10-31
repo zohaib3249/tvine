@@ -39,7 +39,7 @@ export const Job = defineModel('tasks_job', {
   finishedAt: field.int({ optional: true }),
   purgeAt: field.int({ optional: true, index: true }),
   updatedAt: field.int({ index: true }),
-})
+}, { indexes: [{ fields: ['status', 'queue', 'priority', 'runAt'], name: 'tasks_job_claim_idx' }] })   // the worker's claim scan
 
 // chord state: members decrement `remaining` in their success transaction; 0 fires the callback (CAS on status)
 export const Group = defineModel('tasks_group', {

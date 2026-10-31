@@ -27,6 +27,7 @@ export function sqliteDriver(path: string): Driver & { db: Database.Database } {
   db.pragma('foreign_keys = ON')
   // sqlite lower() is ASCII-only; contains/search need full Unicode case folding
   db.function('tv_lower', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toLowerCase()))
+  db.function('tv_upper', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toUpperCase()))
   const d: Driver & { db: Database.Database } = {
     db,
     query: async (sql, params) => db.prepare(sql).all(...params) as DbRow[],

@@ -178,6 +178,7 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       const shown = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !k.startsWith('x-tvine-')).map(([k, v]) => [k, String(v)]))
       const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
       const request = await buildRequest({ url: page, route: o.route(page) ?? page, headers: shown, ip, via: 'human' }, settings)
+      request.raw = req   // the endpoint (/tvine/api/<id>) + method for settings.cors (core/cors-match)
       who = {
         request, cookie: cookieOf(req), mode: 'action',
         mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure(req) ? '; Secure' : ''}`) },

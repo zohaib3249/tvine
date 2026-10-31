@@ -4,7 +4,7 @@
 // `field` is the models.ts DSL, except fk names its target model: field.fk('vendor') — a migration
 // never imports models (they describe NOW; a migration describes a point in history).
 import { field as modelField } from './fields.js'
-import { FkField, type Opts } from './fields/index.js'
+import { FkField, M2MField, type Opts } from './fields/index.js'
 import { checkIdent } from './sql/dialect.js'
 import { ops, type Migration, type Operation } from './schema/operations.js'
 
@@ -14,6 +14,10 @@ export const field = {
   ...modelField,
   // name-only target: ops keep the name; the replayed state resolves it when DDL is rendered
   fk: (to: string, opts?: Opts) => new FkField(() => ({ name: checkIdent(to), fields: {} }), opts ?? {}),
+  m2m: (to: string, opts: Opts & { through?: string } = {}) => {
+    const { through, ...rest } = opts
+    return new M2MField(() => ({ name: checkIdent(to), fields: {} }), { ...rest, ...(through ? { through: () => ({ name: checkIdent(through), fields: {} }) } : {}) })
+  },
 }
 
 export function migration(m: { dependencies: readonly (readonly [string, string])[]; operations: readonly Operation[] }): Migration {
