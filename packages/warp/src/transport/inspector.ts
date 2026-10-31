@@ -8,6 +8,8 @@ import type { HookEvents } from '../core/middleware.js'
 import type { Event } from '../core/types.js'
 import { localOnly } from './channel.js'
 import { sidHash } from './http.js'
+import { secretName } from '../core/redact.js'
+export { secretName }
 
 export interface InspectorRow {
   kind: 'command' | 'read'
@@ -16,12 +18,6 @@ export interface InspectorRow {
   rev?: number; ms: number; via?: 'http' | 'mcp'; message?: string; field?: string
 }
 
-// Secret-looking names: long stems anywhere in the key, short ones only as a whole word
-// (cardNumber / credit_card yes, shipping / discard no).
-const SECRET_STEM = /pass|secret|token|credential|cookie|authorization|creditcard/i
-const SECRET_WORD = new Set(['sid', 'bind', 'cmdid', 'auth', 'key', 'ssn', 'card', 'cvv', 'cvc', 'otp', 'pin'])
-export const secretName = (k: string) =>
-  SECRET_STEM.test(k) || k.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).some((w) => SECRET_WORD.has(w))
 const BIND = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\.\d{13}/g   // security/sign: b64url(json).b64url(hmac-sha256).expiry
 const JWT = /eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g
 const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi

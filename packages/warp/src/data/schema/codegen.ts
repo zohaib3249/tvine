@@ -21,8 +21,8 @@ export function lit(v: unknown): string {
 
 export function fieldCode(s: FieldSpec): string {
   const args = [
-    ...(s.kind === 'enum' ? [lit(s.values)] : s.kind === 'fk' ? [lit(s.to)] : []),
-    ...(Object.keys(s.opts).length ? [lit(s.opts)] : []),
+    ...(s.kind === 'enum' ? [lit(s.values)] : s.kind === 'fk' || s.kind === 'm2m' ? [lit(s.to)] : []),
+    ...(Object.keys(s.opts).length || s.through ? [lit({ ...s.opts, ...(s.through ? { through: s.through } : {}) })] : []),
   ]
   return `field.${s.kind}(${args.join(', ')})`
 }
@@ -30,8 +30,10 @@ export function fieldCode(s: FieldSpec): string {
 function opCode(o: OpData): string {
   const a = (...xs: unknown[]) => xs.map(lit).join(', ')
   switch (o.kind) {
-    case 'createModel':
-      return `ops.createModel(${lit(o.model)}, {\n${Object.entries(o.fields).map(([n, f]) => `      ${key(n)}: ${fieldCode(f)},\n`).join('')}    })`
+    case 'createModel': {
+      const meta = { ...(o.indexes && Object.keys(o.indexes).length ? { indexes: o.indexes } : {}), ...(o.unique?.length ? { unique: o.unique } : {}), ...(o.constraints && Object.keys(o.constraints).length ? { constraints: o.constraints } : {}) }
+      return `ops.createModel(${lit(o.model)}, {\n${Object.entries(o.fields).map(([n, f]) => `      ${key(n)}: ${fieldCode(f)},\n`).join('')}    }${Object.keys(meta).length ? `, ${lit(meta)}` : ''})`
+    }
     case 'addField': case 'alterField': return `ops.${o.kind}(${a(o.model, o.name)}, ${fieldCode(o.field)})`
     case 'deleteModel': return `ops.deleteModel(${a(o.model)})`
     case 'removeField': return `ops.removeField(${a(o.model, o.name)})`
@@ -39,7 +41,10 @@ function opCode(o: OpData): string {
     case 'renameModel': return `ops.renameModel(${a(o.from, o.to)})`
     case 'addIndex': return `ops.addIndex(${a(o.model, o.name, o.fields)}${o.unique ? ', { unique: true }' : ''})`
     case 'removeIndex': return `ops.removeIndex(${a(o.model, o.name)})`
-    case 'runSQL': return `ops.runSQL(${lit(o.sql)})`
+    case 'addConstraint': return `ops.addConstraint(${a(o.model, o.constraint)})`
+    case 'removeConstraint': return `ops.removeConstraint(${a(o.model, o.name)})`
+    case 'alterUniqueTogether': return `ops.alterUniqueTogether(${a(o.model, o.unique)})`
+    case 'runSQL': return `ops.runSQL(${lit(o.sql)}${o.reverse !== undefined ? `, { reverse: ${lit(o.reverse)} }` : ''})`
   }
 }
 

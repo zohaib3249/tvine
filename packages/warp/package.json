@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./auth": {
+      "types": "./dist/contrib/auth/index.d.ts",
+      "import": "./dist/contrib/auth/index.js"
+    },
     "./migrations": {
       "types": "./dist/data/migrations.d.ts",
       "import": "./dist/data/migrations.js"
@@ -30,6 +34,14 @@
     "./types": {
       "types": "./dist/types/api.d.ts",
       "import": "./dist/types/api.js"
+    },
+    "./tasks": {
+      "types": "./dist/contrib/tasks/index.d.ts",
+      "import": "./dist/contrib/tasks/index.js"
+    },
+    "./contrib/*": {
+      "types": "./dist/contrib/*.d.ts",
+      "import": "./dist/contrib/*.js"
     }
   },
   "scripts": {

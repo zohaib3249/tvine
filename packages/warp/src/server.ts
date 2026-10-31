@@ -10,8 +10,9 @@ import { pathToFileURL } from 'node:url'
 import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
-import { discoverHooks, discoverMiddleware } from './core/middleware.js'
+import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter, SnapshotCache } from './core/registry.js'
+import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
@@ -118,9 +119,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 2. discover: duplicate/invalid actions fail here, naming the file, never at request time
   const appsDir = resolve(opts.appsDir ?? 'apps')
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
-  const actions = await discover(appsDir, { rate: settings.limits.rate })
-  const appMiddleware = await discoverMiddleware(appsDir)
-  const appHooks = await discoverHooks(appsDir)
+  const installed = settings.installedApps
+  const actions = await discover(appsDir, { rate: settings.limits.rate, installed })
+  const appMiddleware = await discoverMiddleware(appsDir, installed)
+  const appHooks = await discoverHooks(appsDir, installed)
+  const signals = await appSignals(appsDir, installed)
   const fe = opts.frontend
   const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
@@ -133,8 +136,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
-  const ctx = serverCtx({ actions, settings, appMiddleware, snapshot: (route, sid) => snapshot(route, sid) })
+  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (route, sid) => snapshot(route, sid) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
+  // AppConfig.ready(): each app's hooks.ts ready(server), awaited, in installed-app order (contrib auth installs its backend here)
+  for (const { app, fn } of signals.ready) {
+    try { await (fn as (s: ServerCtx) => unknown)(ctx) } catch (e) { ctx.close(); throw new Error(`app ${app}: ready() failed: ${(e as Error).message}`, { cause: e }) }
+  }
   const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
   const nonce = randomBytes(16).toString('hex')
   // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
@@ -171,7 +178,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
   }
   const chain: Handler[] = [
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size }), startedAt: Date.now() }),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
@@ -281,6 +288,15 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
 }
 
+// apps' /tvine/health sections (ServerCtx.health); a failing one reports itself, never fails health
+function healthSections(ctx: ServerCtx): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [name, fn] of ctx.health) {
+    try { out[name] = fn() } catch (e) { out[name] = { error: (e as Error).message } }
+  }
+  return out
+}
+
 // https per the same trusted hops as request.ip (transport/http.ts): socket TLS, or rightmost-trustProxy X-Forwarded-Proto.
 function httpsOf(req: IncomingMessage, settings: Settings): boolean {
   if ((req.socket as { encrypted?: boolean }).encrypted) return true
@@ -347,7 +363,10 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
       const base = request.headers
       request.headers = { get: (n) => (n.toLowerCase() === 'cookie' ? header : base.get(n)) }
     }
-    return formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
+    const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
+    const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
+    if (rotated) jar.set(name, sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    return out
   }
 }
 
@@ -406,6 +425,8 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       const request = await buildRequest({ url, route: route(path) ?? path, headers: shown, ip: st.ip || 'unknown', via: 'human' }, settings)
       // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
+      const cookie = sid === undefined ? (await src.cookies()).get(settings.session.cookieName)?.value : undefined
+      await authenticate(settings, request, sessions.peek({ sid, cookie }))   // request.user of the page's session
       return request
     },
   }

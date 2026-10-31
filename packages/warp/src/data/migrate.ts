@@ -5,10 +5,13 @@
 // __tvine_migrations(app, name, checksum, applied_at). Migration modules are TypeScript: the CLI
 // runs under a TS-capable loader (tsx); pass `load` to import them some other way.
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { appModule } from '../core/actions.js'
+import { contribLabels, installedApps } from '../core/apps.js'
+import { appSignals } from '../core/middleware.js'
 import { openConn, type Connection } from './db.js'
+import { checkRelations } from './registry.js'
 import { IntField, TextField } from './fields/index.js'
 import type { Model } from './model.js'
 import { and, bin, col, inList, param } from './sql/ast.js'
@@ -20,7 +23,8 @@ import { importLoader, MigrationGraph, type Loader, type MigrationNode } from '.
 import { destroyed, type Migration, type Operation } from './schema/operations.js'
 import { canon, emptyState, findModel, replay, stateFromModels, type ProjectState } from './schema/state.js'
 
-export interface LoadOpts { load?: Loader }
+// installed: settings.installedApps (the enabled contrib apps take part like project apps)
+export interface LoadOpts { load?: Loader; installed?: readonly string[] }
 const isModel = (v: any): v is Model<any, any> => !!v && typeof v === 'object' && 'fields' in v && 'objects' in v && 'name' in v
 
 // apps/*/models.(ts|js) → models per app. A model belongs to the app whose models.ts exports it.
@@ -28,8 +32,8 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
   const out: Record<string, Model<any, any>[]> = {}
   const owner = new Map<string, string>()
-  for (const app of readdirSync(appsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
-    const file = appModule(join(appsDir, app), 'models')
+  for (const { label: app, dir } of installedApps(appsDir, opts.installed)) {
+    const file = appModule(dir, 'models')
     if (!file) continue                     // an app without models is fine; the empty-result check below guards the rest
     const mod = await (opts.load ?? importLoader)(file)
     for (const v of new Set(Object.values(mod))) {
@@ -40,6 +44,7 @@ export async function discoverModels(appsDir: string, opts: LoadOpts = {}): Prom
       ;(out[app] ??= []).push(v)
     }
   }
+  checkRelations()
   if (!owner.size) throw new Error(`no models found under ${appsDir} (expected apps/<app>/models.ts); refusing to treat this as "all models removed"`)
   return out
 }
@@ -114,8 +119,9 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
   const created = (files: string[]) => `${opts.dryRun ? 'would create' : 'created'} ${files.join(', ')}`
 
+  const builtIn = contribLabels(opts.installed)   // their migrations ship with Tvine: never written here
   if (opts.merge) {
-    const conflicts = Object.entries(graph.conflicts())
+    const conflicts = Object.entries(graph.conflicts()).filter(([app]) => !builtIn.has(app))
     if (!conflicts.length) return { files: [], message: 'no conflicts to merge' }
     const files = conflicts.map(([app, leaves]) =>
       write(app, `${graph.nextNumber(app)}_${opts.name ?? 'merge'}`, { dependencies: leaves.map(l => [app, l]), operations: [] }))
@@ -125,6 +131,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
 
   if (opts.empty) {
     const app = opts.empty
+    if (builtIn.has(app)) throw new Error(`${app} is the built-in app tvine.${app}: its migrations ship with Tvine`)
     if (!existsSync(join(appsDir, app))) throw new Error(`no app "${app}" under ${appsDir}`)
     const leaf = graph.leaf(app)
     const file = write(app, `${graph.nextNumber(app)}_${opts.name ?? 'auto'}`, { dependencies: leaf ? [[app, leaf]] : [], operations: [] })
@@ -132,7 +139,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
 
   const to = stateFromModels(await discoverModels(appsDir, opts))
-  const changes = diff(replay(graph.order()), to)
+  const changes = withoutContrib(diff(replay(graph.order()), to), builtIn)
   const apps = Object.keys(changes)
   if (!apps.length) return { files: [], message: 'no changes detected' }
 
@@ -142,7 +149,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
   // Django --noinput: existing rows would have no value (auto datetimes are backfilled at migrate time)
   for (const o of Object.values(changes).flat()) {
-    if (o.kind === 'addField' && !o.field.opts.optional && o.field.opts.default === undefined && !o.field.opts.auto) {
+    if (o.kind === 'addField' && o.field.kind !== 'm2m' && !o.field.opts.optional && o.field.opts.default === undefined && !o.field.opts.auto) {
       throw new Error(`field ${o.model}.${o.name} is required and has no default: add default:, make it optional, or add it in two steps`)
     }
   }
@@ -157,7 +164,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
     for (const o of changes[app]) {
       const specs = o.kind === 'createModel' ? Object.values(o.fields) : o.kind === 'addField' || o.kind === 'alterField' ? [o.field] : []
       for (const s of specs) {
-        const target = s.kind === 'fk' ? findModel(to, s.to!)?.app : undefined
+        const target = s.kind === 'fk' || s.kind === 'm2m' ? findModel(to, s.to!)?.app : undefined
         if (!target || target === app) continue
         const dep: [string, string] = [target, names.get(target) ?? graph.leaf(target)!]
         if (!deps.some(([a, n]) => a === dep[0] && n === dep[1])) deps.push(dep)
@@ -286,27 +293,72 @@ async function withConn<R>(db: string | Connection, fn: (c: Connection) => Promi
 }
 
 // plan: list what would apply, touch nothing. fake: journal as applied without running SQL (Django --fake).
-export interface MigrateOpts extends LoadOpts { plan?: boolean; fake?: boolean }
+// app / target (Django `migrate <app> [<target>|zero]`): forward to the app's leaf, or to / back to
+// `target` — rolling back every applied migration of the app after it plus everything that depends on them.
+export interface MigrateOpts extends LoadOpts { plan?: boolean; fake?: boolean; app?: string; target?: string }
 
-export async function migrate(db: string | Connection, appsDir: string, opts: MigrateOpts = {}): Promise<{ applied: string[] }> {
+// migrations of `keys` and everything they (transitively) depend on
+function ancestors(graph: MigrationGraph, keys: string[]): Set<string> {
+  const out = new Set<string>()
+  const visit = (k: string) => {
+    if (out.has(k)) return
+    out.add(k)
+    for (const [a, n] of graph.nodes.get(k)!.migration.dependencies) if (graph.get(a, n)) visit(`${a}.${n}`)
+  }
+  keys.forEach(visit)
+  return out
+}
+
+function resolveTarget(graph: MigrationGraph, app: string, target: string): MigrationNode | undefined {
+  if (target === 'zero') return undefined
+  const hits = [...graph.nodes.values()].filter(n => n.app === app && (n.name === target || n.name.startsWith(target)))
+  const t = hits.find(n => n.name === target) ?? (hits.length === 1 ? hits[0] : undefined)
+  if (!t) throw new Error(hits.length ? `${app}.${target} is ambiguous: ${hits.map(n => n.name).join(', ')}` : `no migration ${app}.${target} (use a migration name, its number, or zero)`)
+  return t
+}
+
+export async function migrate(db: string | Connection, appsDir: string, opts: MigrateOpts = {}): Promise<{ applied: string[]; unapplied?: string[] }> {
   const graph = await MigrationGraph.load(appsDir, opts)
   graph.assertNoConflicts()
   const plan = graph.order()
+  if (opts.app !== undefined && ![...graph.nodes.values()].some(n => n.app === opts.app)) throw new Error(`app "${opts.app}" has no migrations`)
+  if (opts.target !== undefined && opts.app === undefined) throw new Error('a migration target needs its app: migrate <app> <target>')
   return withConn(db, conn => conn.dialect.name === 'mysql' ? mysqlLocked(conn, c => run(c)) : run(conn))
-  async function run(conn: Connection): Promise<{ applied: string[] }> {
+  async function run(conn: Connection): Promise<{ applied: string[]; unapplied?: string[] }> {
     const done = await readJournal(conn, !opts.plan)
+    const partlyBack = (n: MigrationNode) => [...done.keys()].some(k => k.startsWith(`${n.key}#r`))
+    const partlyForward = (n: MigrationNode) => !done.has(n.key) && [...done.keys()].some(k => k.startsWith(`${n.key}#`) && !k.startsWith(`${n.key}#r`))
     for (const n of plan) {
       if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(`migration ${n.key} was edited after it was applied`)
       if (!done.has(n.key) && [...done].some(([k, sum]) => k.startsWith(`${n.key}#`) && sum !== checksum(n.migration))) {
         throw new Error(`migration ${n.key} was edited after it was partly applied: restore it and run migrate to finish it, or undo what it applied by hand and delete its '${n.name}#…' rows from ${JOURNAL}`)
       }
     }
+    // which migrations this run may touch
+    let wanted: Set<string> | undefined
+    let back: MigrationNode[] = []
+    if (opts.app !== undefined) {
+      const t = opts.target === undefined ? graph.get(opts.app, graph.leaf(opts.app)!) : resolveTarget(graph, opts.app, opts.target)
+      wanted = t ? ancestors(graph, [t.key]) : new Set()
+      if (opts.target !== undefined) {
+        // the app's migrations past the target, plus every migration that depends on one of them
+        const doomed = new Set(plan.filter(n => n.app === opts.app && !wanted!.has(n.key)).map(n => n.key))
+        for (const n of plan) if (n.migration.dependencies.some(([a, nm]) => doomed.has(`${a}.${nm}`))) doomed.add(n.key)
+        back = plan.filter(n => doomed.has(n.key) && (done.has(n.key) || partlyBack(n))).reverse()
+      }
+    }
+    for (const n of plan) if ((!wanted || wanted.has(n.key)) && !back.includes(n) && partlyBack(n)) {
+      throw new Error(`migration ${n.key} is partly rolled back (${conn.dialect.name} cannot roll back schema changes in one step): finish with migrate ${n.app} <target> again`)
+    }
+    if (back.length) return { applied: [], unapplied: await rollback(conn, back, done, partlyForward) }
+
     let state = emptyState()
     const applied: string[] = []
     for (const n of plan) {
-      const run = !done.has(n.key) && !opts.plan && !opts.fake
+      const skip = wanted && !wanted.has(n.key)
+      const run = !skip && !done.has(n.key) && !opts.plan && !opts.fake
       const r = step(n, state, run ? conn.dialect : undefined)
-      if (!done.has(n.key)) {
+      if (!skip && !done.has(n.key)) {
         const sum = checksum(n.migration)
         let ran = true   // false: a concurrent run applied it first (postgres lock)
         if (opts.plan) { /* listed only */ }
@@ -319,6 +371,75 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Mi
     }
     return { applied }
   }
+
+  // newest first. Every reverse statement is computed BEFORE any runs, so an irreversible operation
+  // (runSQL without reverse, a lossy alter) refuses with nothing touched.
+  async function rollback(conn: Connection, nodes: MigrationNode[], done: Map<string, string>, partlyForward: (n: MigrationNode) => boolean): Promise<string[]> {
+    for (const n of nodes) if (partlyForward(n)) throw new Error(`migration ${n.key} is only partly applied: finish it with migrate first, then roll back`)
+    // the state before each migration, replaying the full plan (Django: states come from the graph)
+    const before = new Map<string, ProjectState>()
+    let state = emptyState()
+    for (const n of plan) { before.set(n.key, state); state = step(n, state).state }
+    const d = conn.dialect
+    const work = nodes.map(n => {
+      const states = [before.get(n.key)!]
+      for (const op of n.migration.operations) { const next = structuredClone(states[states.length - 1]); op.stateForwards(next, n.app); states.push(next) }
+      const ops = n.migration.operations.map((op, i) => ({ op, i })).reverse()
+        .map(({ op, i }) => {
+          try { return op.databaseBackwards(d, states[i + 1], states[i], n.app) } catch (e) { throw new Error(`cannot roll back ${n.key}: ${(e as Error).message}`, { cause: e }) }
+        })
+      return { n, ops }
+    })
+    if (opts.plan) return nodes.map(n => n.key)
+    const out: string[] = []
+    for (const { n, ops } of work) {
+      if (opts.fake) await unapply(conn, n, [])
+      else if (d.transactionalDDL) await unapply(conn, n, ops.flat())
+      else await unapplyStepwise(conn, n, ops, done)
+      out.push(n.key)
+    }
+    return out
+  }
+}
+
+// sqlite / postgres: the reverse SQL + the journal delete in ONE transaction
+async function unapply({ driver, dialect: d }: Connection, n: MigrationNode, stmts: Statement[]): Promise<void> {
+  const lite = d.name === 'sqlite'
+  if (lite) await driver.exec('PRAGMA foreign_keys = OFF', [])
+  try {
+    await driver.transaction(async tx => {
+      if (d.name === 'postgres') await tx.query(PG_LOCK, [])
+      for (const s of stmts) await tx.exec(s.sql, s.params)
+      if (lite && (await tx.query('PRAGMA foreign_key_check', [])).length) throw new Error(`rolling back ${n.key} would leave rows pointing at missing records`)
+      const del = d.render({ t: 'delete', from: JOURNAL, where: and(bin('=', col('app'), param(n.app)), bin('=', col('name'), param(n.name))) })
+      await tx.exec(del.sql, del.params)
+    })
+  } finally {
+    if (lite) await driver.exec('PRAGMA foreign_keys = ON', [])
+  }
+}
+
+// mysql: each reverse statement applied and journaled as `<name>#r<op>.<stmt>`; a re-run resumes; done =
+// the migration's row and all its #r rows deleted together
+async function unapplyStepwise({ driver, dialect: d }: Connection, n: MigrationNode, ops: Statement[][], done: Map<string, string>): Promise<void> {
+  const sum = checksum(n.migration)
+  const rev = (i: number, j: number) => `${n.name}#r${i + 1}.${j + 1}`
+  for (const [i, stmts] of ops.entries()) {
+    for (const [j, s] of stmts.entries()) {
+      if (done.has(`${n.app}.${rev(i, j)}`)) continue
+      try { await driver.exec(s.sql, s.params) } catch (e) {
+        throw new Error(`rolling back ${n.key} failed at reverse step ${i + 1}.${j + 1}: ${(e as Error).message}. Steps before it are applied and recorded in ${JOURNAL} — ` +
+          `${d.name} cannot roll back schema changes; fix the cause and run the same migrate again to resume.`, { cause: e })
+      }
+      const row = journalRow(d, n.app, rev(i, j), sum)
+      await driver.exec(row.sql, row.params)
+    }
+  }
+  const names = [n.name, ...ops.flatMap((stmts, i) => stmts.map((_, j) => rev(i, j)))].map(param)
+  await driver.transaction(async tx => {
+    const del = d.render({ t: 'delete', from: JOURNAL, where: and(bin('=', col('app'), param(n.app)), inList(col('name'), names)) })
+    await tx.exec(del.sql, del.params)
+  })
 }
 
 // #21: mysql DDL is not transactional, so the whole run holds a session lock on ONE pooled connection;
@@ -353,18 +474,29 @@ export async function migrateCheck(db: string | Connection, appsDir: string, opt
   const plan = graph.order()
   const done = await withConn(db, c => readJournal(c, false))
   if (plan.some(n => done.get(n.key) !== checksum(n.migration))) return false
-  return !Object.keys(diff(replay(plan), stateFromModels(models))).length
+  return !Object.keys(withoutContrib(diff(replay(plan), stateFromModels(models)), contribLabels(opts.installed))).length
+}
+
+// a contrib app's models always match its shipped migrations; a drift there is Tvine's to fix, not the project's
+function withoutContrib<T>(changes: Record<string, T>, builtIn: Set<string>): Record<string, T> {
+  return Object.fromEntries(Object.entries(changes).filter(([app]) => !builtIn.has(app)))
 }
 
 // Django's sqlmigrate: the SQL one migration runs on `dialect` (name may be a prefix: '0002')
-export async function sqlMigrate(appsDir: string, app: string, name: string, dialect: Dialect = sqlite, opts: LoadOpts = {}): Promise<string> {
+export async function sqlMigrate(appsDir: string, app: string, name: string, dialect: Dialect = sqlite, opts: LoadOpts & { backwards?: boolean } = {}): Promise<string> {
   const plan = (await MigrationGraph.load(appsDir, opts)).order()
   const hits = plan.filter(n => n.app === app && (n.name === name || n.name.startsWith(name)))
   const target = hits.find(n => n.name === name) ?? (hits.length === 1 ? hits[0] : undefined)
   if (!target) throw new Error(hits.length ? `${app}.${name} is ambiguous: ${hits.map(n => n.name).join(', ')}` : `no migration ${app}.${name}`)
   let state = emptyState()
   for (const n of plan) {
-    if (n === target) return step(n, state, dialect).ops.flat().map(s => `${s.sql};${s.params.length ? ` -- params: ${JSON.stringify(s.params)}` : ''}`).join('\n')
+    if (n === target) {
+      const fmt = (st: Statement[]) => st.map(s => `${s.sql};${s.params.length ? ` -- params: ${JSON.stringify(s.params)}` : ''}`).join('\n')
+      if (!opts.backwards) return fmt(step(n, state, dialect).ops.flat())
+      const states = [state]
+      for (const op of n.migration.operations) { const next = structuredClone(states[states.length - 1]); op.stateForwards(next, n.app); states.push(next) }
+      return fmt(n.migration.operations.map((op, i) => op.databaseBackwards(dialect, states[i + 1], states[i], n.app)).reverse().flat())
+    }
     state = step(n, state).state
   }
   throw new Error('unreachable')
@@ -376,4 +508,15 @@ export async function showMigrations(db: string | Connection, appsDir: string, o
   const done = await withConn(db, c => readJournal(c, false))
   return plan.map(n => ({ app: n.app, name: n.name, applied: done.has(n.key) }))
     .sort((a, b) => (a.app < b.app ? -1 : a.app > b.app ? 1 : 0))
+}
+
+// Django's post_migrate signal: every installed app's hooks.ts `postMigrate({ app, models, applied })`, in
+// installed-app order, after a migrate run (tvine.auth creates its permission rows here). Receivers use the
+// ORM, so the caller configures `connections` for the migrated database first.
+export interface PostMigrate { app: string; models: Record<string, Model<any, any>[]>; applied: string[] }
+export async function postMigrate(appsDir: string, applied: string[], opts: LoadOpts = {}): Promise<void> {
+  const { postMigrate: fns } = await appSignals(appsDir, opts.installed)
+  if (!fns.length) return
+  const models = await discoverModels(appsDir, opts)
+  for (const { app, fn } of fns) await (fn as (e: PostMigrate) => unknown)({ app, models, applied })
 }

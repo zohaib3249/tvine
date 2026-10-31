@@ -48,7 +48,7 @@ export function status(e: Event): string {
     case 'ok': return `ok ${cell(e.action)}` + (isEmpty(clean(e.result)) ? '' : ` ${cell(clean(e.result))}`)
     case 'err': return `err ${e.code}${e.field ? ` ${cell(e.field)}` : ''} ${quote(errText(e))}`
     case 'goto': return `goto ${cell(e.url)}`
-    case 'update': return `update ${e.source}`
+    case 'update': return `update ${e.source}` + (e.job ? ` ${cell(clean(e.job))}` : '')
     case 'patch': return `patch ${cell(clean(e.changes))}`
     default: throw new Error('status: not a status event')
   }

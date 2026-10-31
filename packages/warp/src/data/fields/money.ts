@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { and, bin, FALSE, inList, isNull, not, or, param, type Expr, col as colNode } from '../sql/ast.js'
+import { and, bin, FALSE, inList, isNull, not, or, param, type Expr } from '../sql/ast.js'
 import { byDb, Field, type Money } from './base.js'
 import { DomainError } from '../../core/errors.js'
 import type { Dialect } from '../sql/dialect.js'
@@ -41,7 +41,8 @@ export class MoneyField extends Field<Money, boolean, 'money', boolean> {
     if ((op === 'eq' || op === 'ne') && both) {
       const [cents, cur] = this.toDb(value)
       if (typeof cur !== 'string') throw new DomainError('invalid_param', 'a money filter object needs a currency (or pass a bare amount)')
-      const eq = and(bin('=', col, param(cents)), bin('=', colNode(`${(col as { name: string }).name}Currency`), param(cur)))
+      if (col.t !== 'col') throw new DomainError('invalid_param', 'compare a money expression to a bare amount (no currency object)')
+      const eq = and(bin('=', col, param(cents)), bin('=', { ...col, name: `${col.name}Currency` }, param(cur)))
       return op === 'eq' ? eq : or(isNull(col), not(eq))
     }
     if (op === 'in') {

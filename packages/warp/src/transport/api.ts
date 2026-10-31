@@ -4,6 +4,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
+import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
 import type { ErrCode, Event, Request, Session, Settings } from '../core/types.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
@@ -110,7 +111,10 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
-    return toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false })))
+    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false })))
+    const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
+    if (rotated) who.mint?.(rotated)
+    return r
   } finally {
     if (ephemeral) sessions.dropEphemeral(session.sid)
   }

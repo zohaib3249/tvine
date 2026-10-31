@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import { nanoid } from 'nanoid'
+import { userOfRequest } from './auth.js'
 import { ANONYMOUS, type ReadonlyHeaders, type Request, type Settings } from './types.js'
 
 export interface HttpSource { req: IncomingMessage; route: string; isAgent: boolean }
@@ -87,7 +88,7 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
     user: ANONYMOUS,
     ...(isHttp ? { raw: src.req } : {}),
   }
-  request.user = (await settings.auth?.user?.(request)) ?? ANONYMOUS
+  await userOfRequest(request, settings)   // BYO resolver, else a bearer token (tvine.auth); the session user comes later (core/auth.ts)
   return request
 }
 

@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import { renderNode, checkIdent, type Dialect, type Statement } from '../dialect.js'
 import { ddlLiteral } from '../../fields/base.js'
 import { fkName } from '../../fields/fk.js'
-import { addAutoDatetime, alterGuard, defaultRender, indexDiff, type Operation } from '../../schema/operations.js'
+import { addAutoDatetime, alterGuard, defaultRender, indexDiff, indexesOf, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, type FieldSpec, type ProjectState } from '../../schema/state.js'
 
 const q = (n: string) => `\`${checkIdent(n)}\``
@@ -53,6 +53,12 @@ function alterField(op: Op<'alterField'>, from: ProjectState, to: ProjectState):
   if (!was.opts.unique && now.opts.unique) after.push(alter(op.model, `ADD UNIQUE KEY ${q(col)} (${q(col)})`))
   const ix = indexDiff(mysql, from, op.model, to, op.model)
   const losesIndex = (was.opts.index && !now.opts.index) || (was.opts.unique && !now.opts.unique)
+  // onDelete changed: drop + re-add the named fk (unless liftFk below already re-adds it)
+  const odChanged = now.kind === 'fk' && (was.opts.onDelete ?? 'RESTRICT') !== (now.opts.onDelete ?? 'RESTRICT')
+  if (odChanged && !losesIndex) {
+    const fk = fks(to, op.model, op.model, op.name)[0]
+    return [alter(op.model, `DROP FOREIGN KEY ${q(fkName(op.model, fk.col))}`), ...before, ...ix.drop, ...modify, ...after, ...ix.create, alter(op.model, `ADD ${fk.ddl}`)]
+  }
   return liftFk(losesIndex ? op.name : undefined, op.model, from, to, [...before, ...ix.drop, ...modify, ...after, ...ix.create])
 }
 
@@ -90,15 +96,18 @@ export const mysql: Dialect = {
   name: 'mysql',
   quoteIdent: q,
   param: () => '?',
-  render(node) {
+  render(node, o) {
     if (node.t === 'createTable') {
-      const s = renderNode(node, mysql)
+      const s = renderNode(node, mysql, o)
       return { ...s, sql: `${s.sql} DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin` }
     }
     if (node.t === 'insert' && !node.cols.length) return raw(`INSERT INTO ${q(node.into)} () VALUES ()`)
     if (node.t === 'dropIndex') return raw(`DROP INDEX ${q(fit(node.name))}${node.table ? ` ON ${q(node.table)}` : ''}`)
-    if (node.t === 'createIndex') return renderNode({ ...node, name: fit(node.name) }, mysql)
-    return renderNode(node, mysql)
+    if (node.t === 'createIndex') {
+      if (node.where) throw new Error(`index ${node.name}: mysql has no partial (conditional) indexes; drop the condition or use postgres / sqlite`)
+      return renderNode({ ...node, name: fit(node.name) }, mysql, o)
+    }
+    return renderNode(node, mysql, o)
   },
   lowerFn: 'lower',
   transactionalDDL: false,
@@ -121,9 +130,13 @@ export const mysql: Dialect = {
         const drop = spec.kind === 'fk' ? [alter(op.model, `DROP FOREIGN KEY ${q(fkName(op.model, fieldOf(spec, from).columns(op.name)[0]))}`)] : []
         return [...drop, ...defaultRender(op, mysql, from, to)]
       }
-      case 'removeIndex': {   // an explicit index led by an fk column may be the fk's index
-        const lead = findModel(from, op.model)!.model.indexes[op.name]?.fields[0]
-        return liftFk(lead, op.model, from, to, defaultRender(op, mysql, from, to))
+      case 'removeIndex': case 'alterUniqueTogether': case 'removeConstraint': case 'addConstraint': {
+        // a dropped index led by an fk column may be the fk's own index (mysql drops its implicit one
+        // once another usable index exists): lift the fk around the drop
+        const gone = new Set(indexesOf(to, op.model).map(i => i.name))
+        const lead = indexesOf(from, op.model).filter(i => !gone.has(i.name)).map(i => i.cols[0])
+        const fk = Object.entries(findModel(from, op.model)!.model.fields).find(([n, f]) => f.kind === 'fk' && lead.includes(fieldOf(f, from).columns(n)[0]))
+        return liftFk(fk?.[0], op.model, from, to, defaultRender(op, mysql, from, to))
       }
       default: return defaultRender(op, mysql, from, to)
     }
