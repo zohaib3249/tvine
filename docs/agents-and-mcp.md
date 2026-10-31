@@ -11,13 +11,13 @@ The same actions also answer over plain HTTP, and in-browser agents get them thr
 
 ## Setup: connect Claude Code
 
-Start an app (the demo serves on port 3000), then put this `.mcp.json` in the folder where you run `claude`:
+The examples below are from an example store app on port 3000 (tools like `catalog_addToCart`). With `examples/notes` use port 4400 and its `notes_*` tools. Start your app, then put this `.mcp.json` in the folder where you run `claude`:
 
 ```json
 { "mcpServers": { "tvine-shop": { "type": "http", "url": "http://localhost:3000/mcp" } } }
 ```
 
-Claude Code then lists the shop's tools. Try: *"browse the shop, add two hats to the cart and check out"*.
+Claude Code then lists the app's tools.
 
 **Claude Desktop and other clients:** add a remote MCP server (streamable HTTP) pointing at
 `https://<your-site>/mcp`. `/mcp` needs no auth: agents act as an anonymous visitor until they log in
@@ -166,7 +166,6 @@ Until the user clicks Allow, tools on that sid answer `awaiting_approval` with t
 Allow, `read_page`, `expand`, `ui`, `do` and typed tools on that sid run **in the tab**. `release` (or the user's
 **Stop**) ends it.
 
-![An agent driving a tab: cursor, outline and the connected pill](images/agent-presence.png)
 
 Rules that always hold:
 
@@ -201,7 +200,6 @@ pnpm exec tvine inspect http://127.0.0.1:4400 --port 7400
 # inspector on http://127.0.0.1:7400 -> http://127.0.0.1:4400
 ```
 
-![The inspector: page, agent view and command feed](images/inspector.png)
 
 - The target must run in dev (`tvine dev`, or `NODE_ENV=development`); production serves no feed.
 - It binds to 127.0.0.1 only; secrets, sids and tokens are redacted in the feed.
