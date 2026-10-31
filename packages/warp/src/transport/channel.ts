@@ -67,11 +67,15 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const lookup = (f: SessionStore['resolve']) => (cookie !== undefined && f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
     const resolve = () => lookup(sessions.resolve)
     const session = inspector ? undefined : resolve()
+    const byCookieSession = () => session !== undefined && cookie !== undefined && sessions.peek({ cookie }) === session
     // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
-    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && cookie !== undefined && session !== undefined && sessions.peek({ cookie }) === session
+    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && byCookieSession()
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
     const sid = session?.sid ?? ''
-    const ctx = () => ({ sid, rev: session?.rev ?? 0, page: '' })
+    // I3: a stream authenticated by the httpOnly cookie never carries the sid (page script, XSS included, must
+    // not learn it); an agent's sid-keyed stream already knows its own sid.
+    const byCookie = byCookieSession()
+    const ctx = () => ({ sid: byCookie ? '' : sid, rev: session?.rev ?? 0, page: '' })
 
     if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), sid)
 
@@ -81,7 +85,13 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
 
     let closed = false
-    const frame = (e: Event, id?: number) => {
+    // events name their sid themselves (update, snapshot): blanked too on a cookie stream
+    const hide = (e: Event): Event => !byCookie ? e
+      : e.kind === 'update' ? { ...e, sid: '' }
+      : e.kind === 'snapshot' ? { ...e, snapshot: { ...e.snapshot, sid: '' } }
+      : e.kind === 'err' && e.snapshot ? { ...e, snapshot: { ...e.snapshot, sid: '' } } : e
+    const frame = (ev0: Event, id?: number) => {
+      const e = hide(ev0)
       res.write(`${id !== undefined ? `id: ${id}\n` : ''}event: ${e.kind}\ndata: ${render([e], 'json', settings, { ctx: ctx() }).replace(/\n/g, '')}\n\n`)
       if (res.writableLength > MAX_BUF) close()
     }
@@ -109,7 +119,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
       // tab frames (hello/request/control/release/cmd) go to this stream only, never to the session group;
       // JSON.stringify keeps every value on one data line (no frame injection from an agent's name)
       const tf: Frame = (event, data) => { if (!closed) safe(() => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`) }) }
-      const tabId = deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined)
+      const tabId = deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined, (url.searchParams.get('doc') ?? '').slice(0, 64))
       untab = () => deps.tabs!.gone(tabId, tf)
     }
 

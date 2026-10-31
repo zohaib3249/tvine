@@ -17,7 +17,7 @@ import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot }
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
-import { CONTROL_HINT, type TabHub, type TabOp } from './tab.js'
+import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
 
 export interface McpOptions {
   // Next route pattern for a site path ('/product/42' → '/product/[id]'); undefined = not a page.
@@ -25,7 +25,8 @@ export interface McpOptions {
   route: (path: string) => string | undefined
   tabs?: TabHub   // transport/tab: request_control/release, and calls of a sid that controls a tab go to that tab
 }
-export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers'>>
+// base: the site's public origin as the MCP request reached it (approveUrl); mcpHandler derives it from its own request
+export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers'>> & { base?: string }
 export type McpTool = Tool & { action?: ActionId }
 
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
@@ -166,12 +167,11 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       }
       const p = controlIn.safeParse(args)
       if (!p.success) return bad(server, p.error)
-      const session = (p.data.sid ? server.sessions.resolve({ sid: p.data.sid }) : undefined) ?? server.sessions.create()
-      const host = headers.host ?? headers.Host
-      const base = host && /^[\w.:[\]-]+$/.test(host) ? `${/^(localhost|127\.|\[::1\])/.test(host) ? 'http' : 'https'}://${host}` : ''
-      const r = tabs.request(session.sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base })
+      // the session is created only after the ip rate check (a refused request creates none)
+      const sid = () => ((p.data.sid ? server.sessions.resolve({ sid: p.data.sid }) : undefined) ?? server.sessions.create()).sid
+      const r = tabs.request(sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base: caller.base ?? '' })
       if (!r.ok) return json({ kind: 'err', ...r, ok: undefined })
-      return json({ kind: 'ok', action: 'request_control', sid: session.sid, ...(r.data as object), message: CONTROL_HINT })
+      return json({ kind: 'ok', action: 'request_control', sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
     }
     // a sid that controls a tab (or waits for one) is answered by that tab, never headless
     const st = tabs?.state(typeof args.sid === 'string' ? args.sid : undefined)
@@ -208,18 +208,18 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const cmd: Command = tool.action
       ? { action: tool.action, params: rest, sid, cmdId, bind }
       : { action: p.data.action as string, params: p.data.params as Record<string, unknown>, sid, cmdId, bind }
-    // a remote controller's `do` runs server-side AS the tab's user, agent-marked; the tab's sid never leaves
-    const tabSid = st && sid ? tabs!.sessionOf(sid) : undefined
-    const request = await requestFor(server, opts, src, url, tabSid ?? sid)
+    const def = server.actions.get(cmd.action)
+    if (st) {
+      // A remote controller's `do` runs IN the tab, like ui: the tab POSTs it with its own cookie (its user, its
+      // auth) + agentCmd{via:'channel'}; the agent's own identity (headers, clientInfo) is never used for it.
+      // Presence, Stop and idle tracking apply. MCP-disabled actions stay uncallable over MCP.
+      if (!def || !mcpEnabled(def, server.settings)) return json({ kind: 'err', code: 'unknown_action', message: `unknown action ${String(cmd.action).slice(0, 100)}` })
+      const a = await tabs!.forward(sid!, 'do', { action: cmd.action, params: cmd.params, ...(bind !== undefined && { bind }), ...(cmdId !== undefined && { cmdId }) })
+      return json(a.ok ? { ...(a.data as object), sid, via: 'tab' } : { kind: 'err', code: a.code, reason: a.reason, message: a.message })
+    }
+    const request = await requestFor(server, opts, src, url, sid)
     if (!request) return notPage(server, url)
     if (request === FORBIDDEN) return forbidden(server)
-    const def = server.actions.get(cmd.action)
-    if (tabSid) {
-      if (!def || !mcpEnabled(def, server.settings)) return reply(server, [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`)], blank(pagePath(request)))
-      request.agent = { ...request.agent, is: true, via: 'channel' }
-      const events = await collect(dispatch({ ...cmd, sid: tabSid }, server, request, { snapshot: false }))
-      return reply(server, events, { sid: sid!, rev: 0, page: pagePath(request) })
-    }
     if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], renderCtx(server, cmd, request))
     return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
   }
@@ -362,7 +362,7 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : v
     const ip = clientIp(headers['x-forwarded-for'] ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    const srv = mcpServer(server, opts, { ip, headers }, tools)
+    const srv = mcpServer(server, opts, { ip, headers, base: originOf(req, settings) }, tools)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => { void transport.close(); void srv.close() })
     await srv.connect(transport)
