@@ -12,12 +12,13 @@ import { atomic } from '../../data/engine.js'
 import { modelRegistry, type Model } from '../../data/model.js'
 import type { Field, Fields } from '../../data/fields/index.js'
 import { DiskStorage, media } from '../../media/index.js'
-import { KnownDevice, RecoveryCode, Token, Totp, User, UserSession } from './models.js'
+import { getUserModel, KnownDevice, RecoveryCode, Token, Totp, USER_FIELDS, userMeta, UserSession } from './models.js'
+import { concrete } from '../../data/fields.js'
 
 type AnyModel = Model<any, any>
 const userFks = (m: AnyModel) => Object.entries(m.fields as Fields)
-  .filter(([, f]) => f.kind === 'fk' && f.target!().name === User.name).map(([n, f]) => f.key(n))
-const optedIn = () => modelRegistry().filter((m) => m.name !== User.name && (m.meta.personalData || m.meta.onErase) && userFks(m).length)
+  .filter(([, f]) => f.kind === 'fk' && f.target!().name === getUserModel().name).map(([n, f]) => f.key(n))
+const optedIn = () => modelRegistry().filter((m) => m.name !== getUserModel().name && (m.meta.personalData || m.meta.onErase) && userFks(m).length)
 const rowsOf = async (m: AnyModel, userId: number) => {
   const out: Record<string, unknown>[] = []
   for (const k of userFks(m)) out.push(...await m.objects.filter({ [k]: userId }).fetchAll())
@@ -25,11 +26,13 @@ const rowsOf = async (m: AnyModel, userId: number) => {
 }
 
 export async function exportData(userId: number): Promise<Record<string, unknown>> {
+  const User = getUserModel()
   const u = await User.get(userId)
   if (!u) throw new Error('privacy.export: no such user')
   const out: Record<string, unknown> = {
     exportedAt: new Date().toISOString(),
-    user: { id: u.id, username: u.username, email: u.email, dateJoined: u.dateJoined, lastLogin: u.lastLogin },
+    // every non-hidden column of the user model (a custom one's own fields too); never the hash
+    user: Object.fromEntries(concrete(User.fields as Fields).filter(([, f]) => !f.opts.hidden).map(([n, f]) => [f.key(n), (u as Record<string, unknown>)[f.key(n)]])),
     sessions: (await UserSession.objects.filter({ userId }).all(1000)).map((s) => ({ ip: s.ip, userAgent: s.userAgent, createdAt: s.createdAt, lastSeen: s.lastSeen })),
     tokens: (await Token.objects.filter({ userId }).all(1000)).map((t) => ({ name: t.name, createdAt: t.createdAt, lastUsed: t.lastUsed, revoked: t.revoked })),
   }
@@ -48,6 +51,7 @@ const blank = (f: Field) => (f.opts.optional ? null : ['text', 'email', 'slug', 
 export async function eraseData(userId: number, o: { settings?: Settings; request?: Request } = {}): Promise<Record<string, number>> {
   const counts: Record<string, number> = {}
   await atomic(async () => {
+    const User = getUserModel()
     if (!(await User.get(userId))) throw new Error('privacy.erase: no such user')
     for (const m of optedIn()) {
       const how = m.meta.onErase ?? 'anonymize'
@@ -62,7 +66,10 @@ export async function eraseData(userId: number, o: { settings?: Settings; reques
       counts[m.name] = n
     }
     for (const M of [UserSession, KnownDevice, Token, Totp, RecoveryCode] as AnyModel[]) await M.objects.filter({ userId }).delete()
-    await User.update(userId, { username: `deleted-${userId}`, email: null, password: '!', isActive: false, isStaff: false, isSuperuser: false })
+    // the usernameField becomes deleted-<id>; the email and a custom model's own fields are blanked where they can be
+    const { usernameField: uf } = userMeta(), fs = User.fields as Fields
+    const blanks = Object.fromEntries(concrete(fs).filter(([n, f]) => n !== uf && !f.opts.hidden && (n === 'email' || n === 'firstName' || n === 'lastName' || !(n in USER_FIELDS))).map(([n, f]) => [f.key(n), blank(f)]).filter(([, v]) => v !== undefined))
+    await User.update(userId, { ...blanks, [uf]: fs[uf]!.kind === 'email' ? `deleted-${userId}@invalid` : `deleted-${userId}`, password: '!', isActive: false, isStaff: false, isSuperuser: false })
   })
   if (o.settings) await removeExports(o.settings, { userId })   // earlier exports of this user are personal data too
   securityEvent('privacy_erase', { userId: String(userId), models: Object.keys(counts) }, { settings: o.settings, request: o.request, level: 'info' })

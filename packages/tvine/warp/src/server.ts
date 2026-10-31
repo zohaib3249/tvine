@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
+import { discoverModels } from './data/migrate.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
@@ -165,6 +166,11 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   for (const file of settingsFiles()) base = merge(base, ((await importApp(file)) as { default: Record<string, unknown> }).default ?? {})
   const settings = defineSettings(merge(base, over) as SettingsInput)
   settings.middleware = await Promise.all(settings.middleware.map(projectMiddleware))
+  {
+    const { configureAuth, resolveBackend } = await import('./contrib/auth/user.js')
+    if (settings.auth?.backends) settings.auth.backends = await Promise.all(settings.auth.backends.map((b, i) => resolveBackend(b, i)))
+    configureAuth(settings)   // AUTH_USER_MODEL: before any model / migration loads
+  }
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
   configureLogging(settings.logging)   // Django LOGGING: getLogger(name) everywhere from here on
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
@@ -197,6 +203,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const appsDir = resolve(opts.appsDir ?? 'apps')
   if (!existsSync(appsDir)) throw new Error(`no apps directory at ${appsDir}`)
   const installed = settings.installedApps
+  if (settings.auth?.userModel) await discoverModels(appsDir, { installed })   // get_user_model(): the custom one is loaded
   const actions = await discover(appsDir, { rate: settings.limits.rate, installed })
   const appMiddleware = await discoverMiddleware(appsDir, installed)
   const appHooks = await discoverHooks(appsDir, installed)

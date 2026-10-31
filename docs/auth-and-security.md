@@ -53,6 +53,110 @@ In a page: `currentUser()` from `tvine/api` (server), `useUser()` (client), or `
 `changePassword`, `totp*` and `createToken` refuse agents. `createToken` and `totpBegin` need "sudo": a sign-in in
 the last 10 minutes, or the password again.
 
+## Custom user model
+
+Like Django's `AUTH_USER_MODEL`. Pick it **before the first `tvine migrate`**: tvine.auth's tables point at it.
+Changing it later makes `tvine check` and `tvine migrate` fail with "settings.auth.userModel changed after
+tvine.auth was migrated"; start from a fresh database, or move the users with a hand-written data migration.
+
+```ts
+// apps/accounts/models.ts — AbstractUser: every built-in field (username, email, password, firstName, lastName,
+// isActive, isStaff, isSuperuser, lastLogin, dateJoined) plus yours
+import { field } from 'tvine'
+import { extendUser } from 'tvine/auth'
+export const User = extendUser({ phone: field.phone({ optional: true }) }, { requiredFields: ['email', 'phone'] })
+```
+
+```ts
+// config/settings/base.ts
+auth: { userModel: 'accounts.User' },   // 'app.Model'; the default is 'auth.User'
+```
+
+The table is `accounts_user` (Django's default name). `auth_user` is never created. Fully custom
+(AbstractBaseUser), e.g. sign-in by email with no username:
+
+```ts
+export const User = defineUserModel(
+  { email: field.email({ unique: true }), fullName: field.text({ default: '' }) },
+  { usernameField: 'email', requiredFields: ['fullName'] },   // id, password, isActive, isStaff, isSuperuser, lastLogin are added
+)
+```
+
+Everything that touches users reads `getUserModel()`: sessions, tokens, groups and permissions, TOTP, password reset
+(by the model's `email` field), privacy export/erase, the admin's history and `UserAdmin` (your extra fields go into
+an "Additional info" fieldset), `auth.me` (your non-hidden extra fields are included), and `createsuperuser`. That
+command asks for the `usernameField` and each `requiredFields` entry. With `--noinput` it reads
+`TVINE_SUPERUSER_USERNAME`, `TVINE_SUPERUSER_<FIELD>` (e.g. `TVINE_SUPERUSER_PHONE`) and `TVINE_SUPERUSER_PASSWORD`.
+To point your own models at the user, use `field.fk(getUserModel)`.
+
+## Authentication backends
+
+Like Django's `AUTHENTICATION_BACKENDS`. They're tried in order, and the first one that returns a user wins:
+
+```ts
+auth: { backends: ['tvine.auth.ModelBackend', 'tvine.auth.EmailBackend', 'accounts.backends.LdapBackend'] }
+```
+
+- `tvine.auth.ModelBackend` (the default): the `usernameField` (or `username`) plus the password.
+- `tvine.auth.EmailBackend`: `email` (any case) plus the password.
+- A dotted path is a named export of `apps/accounts/backends.ts` (or `<project>/accounts/backends.ts`), resolved at
+  boot like middleware. You can also pass the object or class itself.
+
+`authenticate(ctx, credentials)` returns the user row or `null`. It never throws for bad credentials. Unknown and
+inactive users cost the same hashing as a real check. Failures are throttled, and a locked account throws `locked`.
+`auth.login` takes `{ username | email, password, otp? }` and runs `authenticate()` and then `login()`.
+
+The shape of an OAuth or LDAP backend:
+
+```ts
+// apps/accounts/backends.ts
+import { getUserModel } from 'tvine/auth'
+export class LdapBackend {
+  async authenticate(ctx, { username, password }) {
+    if (!(await ldapBind(username, password))) return null      // your directory check
+    const User = getUserModel()
+    return (await User.objects.filter({ username }).first()) ?? null   // or create the row on first sign-in
+  }
+  async getUser(id) { return (await getUserModel().get(id)) ?? null }
+}
+```
+
+An OAuth backend is the same shape: `authenticate(ctx, { provider, code })` exchanges the code, then finds or creates
+the user.
+
+## User methods
+
+User-model rows from the ORM, and `ctx.request.user` for a signed-in user, have Django's methods:
+
+```ts
+const u = await getUserModel().objects.filter({ username: 'ann' }).first()
+await u.checkPassword('…')          // true / false (rehashes on an older hasher)
+await u.setPassword('…')            // hashes, saves, revokes the user's API tokens
+await u.setUnusablePassword(); u.hasUsablePassword()
+await u.hasPerm('notes.change_note'); await u.hasPerms(['a.x', 'a.y']); await u.hasModulePerms('notes')
+await u.getAllPermissions(); await u.getGroupPermissions()
+u.getFullName(); u.getUsername(); u.isAuthenticated; u.isAnonymous
+```
+
+The methods are not enumerable, so JSON, spreads and `Object.keys` still see a plain row. `ctx.request.user` is
+always set. Signed out, it's `ANONYMOUS` (`isAuthenticated: false`, `isAnonymous: true`). Signed in, it's an
+`AuthUser` with the same permission methods, `getFullName()`, your extra fields (`user.phone`), and
+`checkPassword()` / `row()` (these read the row; the hash is never kept on the request).
+
+## Protecting views
+
+```ts
+import { loginRequired, permissionRequired, staffMemberRequired, userPassesTest } from 'tvine'
+
+export const notes = defineAction('notes', z.object({}), handler, { permissions: [loginRequired] })
+export const edit = defineAction('edit', schema, handler, { permissions: [permissionRequired('notes.change_note')] })
+export const report = defineAction('report', z.object({}), handler, { permissions: [staffMemberRequired] })
+export const local = defineAction('local', z.object({}), handler, { permissions: [userPassesTest((u) => u.isAuthenticated && String(u.claims?.email).endsWith('@corp.com'))] })
+```
+
+These are permissions, so they also work in a view's `permissions` and on `@action`. They're built on
+`isAuthenticated` / `hasPerm` / `isStaff`.
+
 ## Tokens for agents
 
 A token lets an agent (Claude, a script) act as a user, limited by scopes: `*`, `read`, `<app>.*`, `<app>.<action>`.

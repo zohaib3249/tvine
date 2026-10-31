@@ -12,6 +12,7 @@ import { contribLabels, installedApps } from '../core/apps.js'
 import { appSignals } from '../core/middleware.js'
 import { openConn, type Connection } from './db.js'
 import { checkRelations } from './registry.js'
+import { userModelLabel } from './swappable.js'
 import { IntField, isAuto, TextField } from './fields/index.js'
 import type { Model } from './model.js'
 import { and, bin, col, inList, param } from './sql/ast.js'
@@ -329,7 +330,7 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Mi
     const partlyBack = (n: MigrationNode) => [...done.keys()].some(k => k.startsWith(`${n.key}#r`))
     const partlyForward = (n: MigrationNode) => !done.has(n.key) && [...done.keys()].some(k => k.startsWith(`${n.key}#`) && !k.startsWith(`${n.key}#r`))
     for (const n of plan) {
-      if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(`migration ${n.key} was edited after it was applied`)
+      if (done.has(n.key) && done.get(n.key) !== checksum(n.migration)) throw new Error(n.app === 'auth' ? userModelMsg() : `migration ${n.key} was edited after it was applied`)
       if (!done.has(n.key) && [...done].some(([k, sum]) => k.startsWith(`${n.key}#`) && sum !== checksum(n.migration))) {
         throw new Error(`migration ${n.key} was edited after it was partly applied: restore it and run migrate to finish it, or undo what it applied by hand and delete its '${n.name}#…' rows from ${JOURNAL}`)
       }
@@ -467,6 +468,16 @@ async function mysqlLocked<R>(conn: Connection, fn: (c: Connection) => Promise<R
 }
 
 // true = clean. false = migrations pending / edited / conflicting, or models.ts drifted from the files.
+// Django: AUTH_USER_MODEL is chosen before the first migrate. tvine.auth's applied migrations were rendered for one
+// user model; any other one now (changed either way) shows as their checksum changing.
+const userModelMsg = () => `settings.auth.userModel changed after tvine.auth was migrated (it is now '${userModelLabel()}'). Like Django's AUTH_USER_MODEL it must be chosen before the first migrate: put it back, or start from a fresh database (drop it, then tvine migrate). Moving existing users to a new model is a data migration you write by hand.`
+export async function userModelChanged(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<string | undefined> {
+  const graph = await MigrationGraph.load(appsDir, opts)
+  const done = await withConn(db, c => readJournal(c, false))
+  const bad = [...graph.nodes.values()].some(n => n.app === 'auth' && done.has(n.key) && done.get(n.key) !== checksum(n.migration))
+  return bad ? userModelMsg() : undefined
+}
+
 export async function migrateCheck(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<boolean> {
   const models = await discoverModels(appsDir, opts)
   const graph = await MigrationGraph.load(appsDir, opts)

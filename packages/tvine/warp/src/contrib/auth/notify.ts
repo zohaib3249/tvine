@@ -19,11 +19,11 @@ const TEXT: Record<NoticeKind, [string, string]> = {
 
 export const notifies = (s: Settings, kind: NoticeKind) => s.email?.backend !== 'dummy' && (s.auth?.notify?.[kind] ?? true)
 
-export function securityNotice(s: Settings, kind: NoticeKind, to: { username: string; email: string | null }, request?: Request, extra = ''): void {
+export function securityNotice(s: Settings, kind: NoticeKind, to: { username?: string; email?: string | null }, request?: Request, extra = ''): void {
   if (!to.email || !notifies(s, kind)) return
   const [subject, body] = TEXT[kind]
   const where = request ? `\n\nWhen: ${new Date().toUTCString()}\nDevice: ${uaSummary(request.headers.get('user-agent') ?? '')}\nIP address: ${request.ip}` : ''
-  const message = `Hi ${to.username},\n\n${body}${extra ? `\n${extra}` : ''}${where}\n\nIf this was not you, change your password now and review your signed-in sessions.\n`
+  const message = `Hi ${to.username ?? to.email},\n\n${body}${extra ? `\n${extra}` : ''}${where}\n\nIf this was not you, change your password now and review your signed-in sessions.\n`
   void sendMail({ subject, to: to.email, message }, { background: true }).catch(() => console.error('tvine.auth: a security notice failed to send'))
 }
 

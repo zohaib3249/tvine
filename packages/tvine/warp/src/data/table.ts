@@ -9,6 +9,10 @@ import type { QuerySpec, Where } from './queryset.js'
 import { Expression, type QNode } from './expressions.js'
 
 const cache = new WeakMap<Fields, Table>()
+// instance methods for a model's rows (the user model: user.checkPassword(), user.hasPerm()): non-enumerable, so
+// spread / JSON / Object.keys see the same plain row
+const protos = new WeakMap<Fields, object>()
+export const setRowProto = (fields: Fields, proto: object): void => { protos.set(fields, proto) }
 
 export class Table {
   private constructor(readonly name: string, readonly fields: Fields) {}
@@ -21,7 +25,9 @@ export class Table {
   private get entries() { return concrete(this.fields) }
 
   hydrate(row: Record<string, unknown>, d: Dialect): Record<string, unknown> {
-    return Object.fromEntries(this.entries.map(([n, f]) => [f.key(n), f.fromDb(row, n, d)]))
+    const out = Object.fromEntries(this.entries.map(([n, f]) => [f.key(n), f.fromDb(row, n, d)]))
+    const proto = protos.get(this.fields)
+    return proto ? Object.setPrototypeOf(out, proto) : out
   }
 
   // only the keys present in `data` (by property name); absent keys fall to column defaults

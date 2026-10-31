@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { APP_RE } from '../core/actions.js'
+import { builtInLabels } from '../core/apps.js'
 
 const PKG_DIR = fileURLToPath(new URL('../../../', import.meta.url))   // the tvine package root (from warp/src/cli or warp/dist/cli)
 const DOCS = 'https://github.com/zohaib3249/tvine'
@@ -293,6 +294,7 @@ export interface Edit { file?: string; status: 'added' | 'present' | 'manual'; l
 
 export function startApp(appsDir: string, name: string): StartAppResult {
   if (!APP_RE.test(name)) throw new Error(`app name "${name}" must match ${APP_RE} (it becomes the action id prefix)`)
+  if (builtInLabels().includes(name)) throw new Error(`'${name}' is a built-in app (tvine.${name}); pick another name, e.g. 'accounts'`)
   const dir = join(appsDir, name)
   if (existsSync(dir)) throw new Error(`${dir} already exists`)
   const files: Record<string, string> = {
