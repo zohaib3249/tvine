@@ -227,6 +227,7 @@ export interface CompressionSettings { enabled: boolean; threshold: number; brot
 
 export interface Settings {
   site: { name: string; description: string }
+  health?: { token?: string }      // /tvine/health details for `Authorization: Bearer <token>`; anonymous gets { ok } only
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust

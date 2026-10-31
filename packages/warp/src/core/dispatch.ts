@@ -192,7 +192,7 @@ export function formResult(events: Event[]): FormResult {
 // ---- helpers -------------------------------------------------------------------------------
 const pageOf = (r: Request) => { const q = r.query.toString(); return q ? `${r.path}?${q}` : r.path }
 
-function cookieOf(r: Request, s: Settings): string | undefined {
+export function cookieOf(r: Request, s: Settings): string | undefined {
   for (const part of (r.headers.get('cookie') ?? '').split(';')) {
     const i = part.indexOf('=')
     if (i > 0 && part.slice(0, i).trim() === s.session.cookieName) return part.slice(i + 1).trim()

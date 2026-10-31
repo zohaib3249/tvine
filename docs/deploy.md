@@ -170,6 +170,10 @@ Not built yet: a `/tvine/metrics` endpoint is being added (task-prodpack). Until
  "backends":{"session":"memory","channels":"memory",…},"ok":true,"uptime":3,"actions":40,"sessions":0}
 ```
 
+Anyone else gets only `{"ok":true}`. The details above go to: `Authorization: Bearer <settings.health.token>`
+(16+ characters), a signed-in staff session, or a direct request from 127.0.0.1/::1 with no `Forwarded` /
+`X-Forwarded-*` / `X-Real-IP` header (a proxy on the same box does not count as local).
+
 It says the process is up and serving. It does not ping the database; alert on `tasks.dead` and
 `tasks.staleWorkers` growing.
 

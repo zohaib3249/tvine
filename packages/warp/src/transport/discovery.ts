@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -18,6 +19,21 @@ export interface DiscoveryDeps {
   routes: RouteInfo[]
   stats: () => HealthStats
   startedAt: number
+  isStaff?: (req: IncomingMessage) => Promise<boolean>   // the session user is active staff (server.ts wires it)
+}
+
+// /tvine/health details (secreview-3 L2): settings.health.token as a Bearer, a staff session, or a direct loopback
+// request (no forwarding headers: a same-host proxy would otherwise look local). Everyone else: { ok }.
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+const FORWARDED = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip']
+async function healthDetails(req: IncomingMessage, settings: Settings, isStaff?: DiscoveryDeps['isStaff']): Promise<boolean> {
+  const token = settings.health?.token, auth = req.headers.authorization
+  if (token && auth?.startsWith('Bearer ')) {
+    const a = Buffer.from(auth.slice(7)), b = Buffer.from(token)
+    if (a.length === b.length && timingSafeEqual(a, b)) return true
+  }
+  if (LOOPBACK.has(req.socket.remoteAddress ?? '') && !FORWARDED.some((h) => h in req.headers)) return true
+  return !!isStaff && (await isStaff(req).catch(() => false))
 }
 
 export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
@@ -44,7 +60,7 @@ const JSON_CT = 'application/json; charset=utf-8'
 const CACHED = 'public, max-age=3600'
 
 export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
-  const { settings, manifest, routes, stats, startedAt } = deps
+  const { settings, manifest, routes, stats, startedAt, isStaff } = deps
   const send = (res: ServerResponse, type: string, cache: string, body: string) => {
     res.writeHead(200, { 'content-type': type, 'cache-control': cache })
     res.end(body)
@@ -88,13 +104,15 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
       case '/tvine/manifest': return get(JSON_CT, CACHED, () => site)
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
       case '/tvine/health':
-        return get(JSON_CT, 'no-store', () => {
+        if (req.method !== 'GET') return get(JSON_CT, 'no-store', () => '')
+        return void healthDetails(req, settings, isStaff).then((full) => get(JSON_CT, 'no-store', () => {
+          if (!full) return '{"ok":true}'
           const { sessions, db = connections.stats(), extra } = stats()   // pool stats unless the caller supplies db
           return JSON.stringify({
             ...extra, ok: true, uptime: Math.floor((Date.now() - startedAt) / 1000),
             actions: manifest.all().length, sessions, ...(db !== undefined && { db }),
           })
-        })
+        }))
       default: return next()
     }
   }

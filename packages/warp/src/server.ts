@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
+import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
@@ -229,7 +229,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const cors = corsLayer(settings)
   const chain: Handler[] = [
     ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now(),
+      isStaff: async (req) => {   // /tvine/health details for a staff session
+        const request = await buildRequest({ req, route: '/tvine/health', isAgent: false }, settings)
+        await authenticate(settings, request, await ctx.sessions.peek({ cookie: cookieOf(request, settings) }))
+        return request.user.isStaff === true && request.user.isActive !== false
+      } }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
