@@ -53,3 +53,4 @@ export { getLogger, configureLogging, type Logger, type LogRecord, type LogHandl
 export { env, loadDotenv, FRAMEWORK_ENV } from './env.js'
 export { securityEvent } from './core/audit.js'
 export { signing, dumps, loads, Signer, TimestampSigner, BadSignature, SignatureExpired, configureSigning } from './security/signing.js'
+export { safeFetch, isPrivateAddress, SafeFetchError, type SafeFetchOpts } from './security/safe-fetch.js'
