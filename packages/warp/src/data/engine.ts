@@ -12,6 +12,8 @@ import { bin, inList, param, qcol, raw, type Expr, type Select } from './sql/ast
 import type { Dialect, Statement } from './sql/dialect.js'
 import type { Expression, QNode } from './expressions.js'
 import { referencesTo } from './registry.js'
+import { withPending } from './pending.js'
+import { getLogger } from '../log.js'
 
 // ---- error vocabulary ------------------------------------------------------------------------
 function wrapErr(def: ModelDef, e: unknown): never {
@@ -84,12 +86,13 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
 let onCommitError: (e: unknown) => void = e => console.error('onCommit hook failed:', e)
 export function setOnCommitErrorHandler(fn: (e: unknown) => void): void { onCommitError = fn }
 
-export function atomic<R>(fn: () => Promise<R>, opts: { signal?: AbortSignal; lazy?: boolean } = {}): Promise<R> {
+export function atomic<R>(body: () => Promise<R>, opts: { signal?: AbortSignal; lazy?: boolean } = {}): Promise<R> {
   const outer = bound.getStore()
   if (outer) {
     if (outer.closed) return Promise.reject(new TxError(`atomic() after the atomic block was ${outer.closed}`))
-    return fn()
+    return body()
   }
+  const fn = () => withPending(body)   // un-awaited ORM calls finish (or fail the block) before COMMIT
   if (opts.lazy) return lazyAtomic(fn, opts.signal)
   const { signal } = opts
   let tx!: Tx
@@ -178,6 +181,15 @@ export function onCommit(fn: () => unknown): void | Promise<void> {
   if (tx && !tx.closed) { tx.hooks.push(fn); return }
   if (tx && tx.closed !== 'committed') throw new TxError(`onCommit() after the atomic block was ${tx.closed}`)
   return Promise.resolve(fn()).then(() => undefined)
+}
+
+// Django transaction.on_commit for side work: fn runs after the commit (never on rollback), outside the
+// transaction, without holding up the response. Its errors go to the tvine.defer logger.
+export function defer(fn: () => unknown): void {
+  void onCommit(() => {
+    setImmediate(() => outsideAtomic(() => withPending(async () => { await fn() }))
+      .catch((e: unknown) => getLogger('tvine.defer').error('deferred function failed', { error: (e as Error)?.message ?? String(e) })))
+  })
 }
 
 // ---- data version ----------------------------------------------------------------------------

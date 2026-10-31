@@ -8,6 +8,11 @@ import { concrete, hasDefault, isAuto, keyOf, pkField, rowSchema, type Create, t
 import { defineChecked } from './registry.js'
 import { prefetch, related, type RelatedManager } from './related.js'
 import { checkIdent } from './sql/dialect.js'
+import { trackMethods } from './pending.js'
+
+// with or without await (pending.ts): every public call is tracked by the enclosing request / job / atomic()
+trackMethods(QuerySet.prototype as never, ['page', 'all', 'fetchAll', 'first', 'last', 'count', 'exists', 'aggregate', 'inBulk'], false)
+trackMethods(QuerySet.prototype as never, ['update', 'delete', 'getOrCreate', 'updateOrCreate', 'bulkCreate', 'bulkUpdate'], true)
 
 export interface Model<F extends Fields = Fields, T extends object = Row<F>> {
   readonly name: string
@@ -82,8 +87,10 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
       return row
     },
     async delete(id) { await objects.filter({ id }).delete() },
-    related: (rel, id) => related(def, rel, id, atomic),
+    related: (rel, id) => { const m = related(def, rel, id, atomic); trackMethods(m as never, ['add', 'remove', 'set', 'clear'], true); return m },
   }
+  trackMethods(model as never, ['get'], false)
+  trackMethods(model as never, ['create', 'update', 'delete'], true)
   defineChecked(def, model)   // reverse-name clashes are a definition error (Django's system check)
   registry.set(name, model)
   return model
