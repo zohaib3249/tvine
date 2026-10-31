@@ -78,6 +78,7 @@ abstract class BaseAdmin implements Labelled {
   rawIdFields: string[] = []
   ordering: string[] | null = null
   formfieldOverrides: Record<string, Partial<FieldMeta>> = {}   // by field name or ORM kind ('text': { kind: 'textarea' })
+  widgets: Record<string, FieldMeta['kind']> = {}                // by field name: { status: 'segmented' } (radios), { notes: 'markdown' }
   verboseName: string | null = null
   verboseNamePlural: string | null = null
   /** @internal set by the site */ _key = ''

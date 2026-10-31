@@ -16,6 +16,7 @@ export interface FieldMeta {
   max?: number; min?: number; maxLength?: number; decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes: number }
+  prefix?: string; suffix?: string   // text / number: adornments inside the box ('$', 'kg')
   step?: number                 // range / percent
   palette?: string[]            // color: preset swatches
   language?: string             // code: json | js | sql | html | css
