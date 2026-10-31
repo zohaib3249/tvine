@@ -15,6 +15,7 @@ import { modelNamed, referencesTo } from '../../data/registry.js'
 import { isStaff } from '../../security/permissions.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
+import { makePassword } from '../auth/passwords.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
 import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
 import {
@@ -133,6 +134,8 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
 // getQueryset, like autocomplete; the model's rows when it has no admin)
 async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clean>>): Promise<void> {
   for (const [n, f] of Object.entries(a.model.fields as Fields)) {
+    // a password field (any model): stored through the auth hasher (settings.auth.hashers[0]), never as typed
+    if (isPassword(n, f) && typeof c.data[f.key(n)] === 'string') c.data[f.key(n)] = await makePassword(c.data[f.key(n)], ctx.settings)
     if (f.kind !== 'fk' && f.kind !== 'm2m') continue
     const v = f.kind === 'm2m' ? c.m2m[n] : c.data[f.key(n)]
     if (v == null || c.errors[n]) continue
