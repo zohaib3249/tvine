@@ -7,7 +7,7 @@ import type { DeleteNode, DeletePreview, LogEntry, ModelMeta, ObjectData, SiteAp
 import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
 import { CustomComponent } from './app.js'
 
-function AppCard({ a }: { a: SiteApp }) {
+export function AppCard({ a }: { a: SiteApp }) {
   const { base, navigate } = useAdmin()
   const models = a.models.filter((m) => m.perms.view || m.perms.add)
   if (!models.length) return null
@@ -30,34 +30,7 @@ function AppCard({ a }: { a: SiteApp }) {
   )
 }
 
-export function Dashboard({ data }: { data?: RouteData }) {
-  const { site } = useAdmin()
-  const widgets = site.widgets ?? []
-  return (
-    <Slotted slot="dashboard">
-      <Region id="admin:dashboard" label={site.indexTitle} className={slotClass('dashboard')}>
-        <h1 className="mb-5 text-2xl font-semibold tracking-tight">{site.indexTitle}</h1>
-        {widgets.length > 0 && (
-          <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {widgets.map((w) => (
-              <Region key={w.id} id={`widget:${w.id}`} label={w.title} className={cx('tva-card p-4', w.size === 'lg' ? 'sm:col-span-2 xl:col-span-4' : w.size === 'md' && 'sm:col-span-2')}>
-                <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">{w.title}</h2>
-                {w.component ? <CustomComponent name={w.component} data={data?.widgets?.[w.id]} />
-                  : !data ? <div className="tva-skel h-8 w-24" /> : <WidgetData v={data.widgets?.[w.id]} />}
-              </Region>
-            ))}
-          </div>
-        )}
-        {site.apps.length === 0
-          ? <Empty title="Nothing to manage yet">You don’t have permission to view any models, or none are registered.</Empty>
-          : <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{site.apps.map((a) => <AppCard key={a.label} a={a} />)}</div>}
-      </Region>
-    </Slotted>
-  )
-}
-
-// Generic widget data: a number → stat; rows → mini table; object → key/value.
-function WidgetData({ v }: { v: unknown }) {
+export function WidgetData({ v }: { v: unknown }) {
   if (v && typeof v === 'object' && 'error' in v) return <p className="text-sm text-danger">{String((v as { error: unknown }).error)}</p>
   if (typeof v === 'number' || typeof v === 'string') return <p className="text-3xl font-semibold tabular-nums">{typeof v === 'number' ? v.toLocaleString() : v}</p>
   const rows = Array.isArray(v) ? v : v && typeof v === 'object' && Array.isArray((v as { rows?: unknown }).rows) ? (v as { rows: unknown[] }).rows : null

@@ -9,16 +9,17 @@ export type Call = (id: string, params?: unknown) => Promise<ApiResult<any>>
 // admin.meta is cached per model for the life of this caller (one browser page, or one server render — never shared
 // between users). Any call that is not a read may change perms or filter choices, so it drops the cache; a schema change
 // means a server restart, which the next page load picks up.
-const READS = new Set(['admin.site', 'admin.list', 'admin.get', 'admin.deletePreview', 'admin.history', 'admin.autocomplete', 'admin.search', 'admin.recent', 'auth.me'])
+const READS = new Set(['admin.site', 'admin.list', 'admin.get', 'admin.deletePreview', 'admin.history', 'admin.autocomplete', 'admin.search', 'admin.recent', 'auth.me', 'admin.dashboard', 'admin.chart', 'admin.charts', 'admin.widget', 'admin.prefs',
+  'admin.system.health', 'admin.system.logs', 'admin.system.agents', 'admin.system.metrics', 'admin.system.jobs', 'admin.system.security'])
 export const caller = (api: unknown): Call => {
   const metas = new Map<string, Promise<ApiResult<any>>>()
   return (id, params) => {
     const i = id.indexOf('.')
     const go = () => (api as Record<string, Record<string, (p: unknown) => Promise<ApiResult>>>)[id.slice(0, i)][id.slice(i + 1)](params ?? {})
-    if (id === 'admin.meta') {
-      const k = JSON.stringify(params)
+    if (id === 'admin.meta' || id === 'admin.charts') {   // charts: the chart list per model is as static as meta
+      const k = id + JSON.stringify(params)
       let m = metas.get(k)
-      if (!m) metas.set(k, (m = go().then((r) => { if (!r.ok) metas.delete(k); return r })))
+      if (!m) metas.set(k, (m = go().then((r) => { if (!r.ok && id === 'admin.meta') metas.delete(k); return r })))
       return m
     }
     if (!READS.has(id)) metas.clear()
@@ -30,6 +31,7 @@ export type RouteData = {
   key: string
   meta?: ModelMeta; list?: ListResult; obj?: ObjectData; preview?: DeletePreview; history?: LogEntry[]
   widgets?: Record<string, unknown>
+  dashboard?: DashboardData   // admin.dashboard
   error?: { code: string; message: string; reason?: string }
 }
 export const keyOf = (r: Route, q: Query) => JSON.stringify([r, r.name === 'changelist' ? q : {}])
@@ -49,9 +51,9 @@ export async function loadRoute(call: Call, site: Site, r: Route, q: Query): Pro
     return undefined
   }
   if (r.name === 'index') {
-    const ws = (site.widgets ?? []).filter((w) => w.data)
-    const res = await Promise.all(ws.map((w) => typeof w.data === 'string' ? call(w.data) : call(w.data!.id, w.data!.params)))
-    out.widgets = Object.fromEntries(ws.map((w, i) => [w.id, res[i].ok ? res[i].data : { error: (res[i] as { message: string }).message }]))
+    const d = await loadDashboard(call, site)
+    out.dashboard = d
+    out.widgets = await loadWidgets(call, d.widgets.filter((w) => !d.layout?.hidden.includes(w.id)), DEFAULT_RANGE)
     return out
   }
   if (!('model' in r)) return out
@@ -67,3 +69,33 @@ export async function loadRoute(call: Call, site: Site, r: Route, q: Query): Pro
   if (b) r.name === 'delete' ? (out.preview = take<DeletePreview>(b)) : (out.history = take<LogEntry[]>(b))
   return out
 }
+
+// ---- dashboard (dashboard.tsx renders it) ----------------------------------------------------------------------
+export type Size = 'sm' | 'md' | 'lg' | 'xl'
+export type DashWidget = {
+  id: string; title: string; size: Size; type: 'line' | 'area' | 'bar' | 'stacked' | 'donut' | 'stat' | 'table' | 'activity' | 'custom' | 'value'
+  data?: { id: string; params?: Record<string, unknown> }; refreshMs?: number; component?: string; model?: string
+}
+export type Layout = { order: string[]; hidden: string[]; sizes: Record<string, Size> }
+export type DashboardData = { widgets: DashWidget[]; layout: Layout | null; autoRefreshMs: number }
+export type Range = '24h' | '7d' | '30d' | '90d' | { from: string; to: string }
+export const DEFAULT_RANGE: Range = '30d'
+
+// only the chart actions take a range; anything else gets its own params untouched
+const paramsOf = (w: DashWidget, range: Range) => ({ ...w.data!.params, ...(['admin.chart', 'admin.widget'].includes(w.data!.id) && { range }) })
+export async function loadWidgets(call: Call, ws: DashWidget[], range: Range): Promise<Record<string, unknown>> {
+  const live = ws.filter((w) => w.data)
+  const res = await Promise.all(live.map((w) => call(w.data!.id, paramsOf(w, range))))
+  return Object.fromEntries(live.map((w, i) => [w.id, res[i]!.ok ? res[i]!.data : { error: (res[i] as { message: string }).message }]))
+}
+// admin.dashboard, or (an older backend / a test) the site's registered widgets
+export async function loadDashboard(call: Call, site: { widgets?: { id: string; title: string; size?: string; data?: { id: string; params?: Record<string, unknown> } | string; component?: string }[] }): Promise<DashboardData> {
+  const r = await call('admin.dashboard')
+  if (r.ok) return r.data as DashboardData
+  return {
+    autoRefreshMs: 60_000, layout: null,
+    widgets: (site.widgets ?? []).map((w) => ({ id: w.id, title: w.title, size: (w.size ?? 'sm') as Size, type: w.component ? 'custom' : 'value', component: w.component,
+      data: typeof w.data === 'string' ? { id: w.data } : w.data })),
+  }
+}
+
