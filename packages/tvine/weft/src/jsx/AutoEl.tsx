@@ -263,9 +263,10 @@ export function AutoEl(props: AutoProps) {
   if (!live) return el
   const scoped = SCOPES.has(tag) ? <WidgetScopeCtx.Provider value={scopeValue}>{el}</WidgetScopeCtx.Provider> : el
   if (tag !== 'a' || !safeHref(rest.href)) return scoped
-  // Plain links are headless too: a v2 fragment with a url map (pure props → identical on SSR and hydration).
+  // Plain links are headless too: a v2 fragment with a url map. Its label skips children (RSC children
+  // are lazy wrappers in the browser, plain elements on the server) so SSR and hydration print the same.
   const frag = widgetFragment(describeWidget(base, parent, {
-    kind: role as WidgetSpec['kind'], label: labelOf(tag, p) || rest.href as string, humanOnly: ho,
+    kind: role as WidgetSpec['kind'], label: labelOf(tag, { ...p, children: undefined }), humanOnly: ho,
     controls: { navigate: { kind: 'navigate', headless: { url: rest.href as string }, run: () => {} } },
   }))
   return <>{frag}{scoped}</>

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
-import { existsSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -148,6 +148,23 @@ export async function listenFree(listen: (port: number) => Promise<void>, port: 
   }
 }
 
+// next dev's lock ({pid, port, …}) for this project. Live pid → the line to print (its real listening
+// port, since older locks recorded 3000 whatever port was bound); dead pid → stale, removed.
+export function devRunning(lock = '.next/dev/lock'): string | undefined {
+  let pid: number, port: number | undefined
+  try { ({ pid, port } = JSON.parse(readFileSync(lock, 'utf8')) as { pid: number; port?: number }) } catch { return undefined }
+  if (!Number.isInteger(pid) || pid <= 0) return undefined
+  try { process.kill(pid, 0) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EPERM') { rmSync(lock, { force: true }); return undefined }
+  }
+  try {
+    const out = execFileSync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    port = Number(/^n.*:(\d+)$/m.exec(out)?.[1]) || port
+  } catch { /* no lsof (Windows): the lock's port */ }
+  const kill = process.platform === 'win32' ? `taskkill /PID ${pid} /F` : `kill ${pid}`
+  return `tvine dev is already running for this project (pid ${pid})${port ? ` at http://localhost:${port}` : ''}; stop it with: ${kill}`
+}
+
 // a built Next app in cwd is served; otherwise API-only
 const frontend = (): AgentServerOptions['frontend'] =>
   existsSync('.next/app-path-routes-manifest.json') ? { nextDir: resolve('.next') } : undefined
@@ -255,6 +272,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (!dev) defaultNodeEnv('production')   // empty (NODE_ENV=) counts as unset
         if (dev && isProduction()) throw new Usage('tvine dev is for development; use tvine start in production')
         if (dev) defaultEnv('TVINE_DEBUG', '1')   // runserver = DEBUG on (dev CSP, inspector feed), unless TVINE_DEBUG says no
+        const running = dev ? devRunning() : undefined
+        if (running) { io.err(running); return 1 }
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
         // dev, port not forced (--port / PORT): a busy port moves to the next free one, like next dev
         const at = await listenFree((p) => srv.listen(p, host), port, dev && o.port === undefined && !env.has('PORT')).catch(async (e) => { await srv.close(); throw e })

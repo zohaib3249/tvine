@@ -62,11 +62,13 @@ const UNSAFE = /[^\p{L}\p{N}_.:@/+-]/gu
 const slug = (s: unknown) => typeof s === 'string' ? s.trim().toLowerCase().replace(/\s+/g, '-').replace(UNSAFE, '').replace(/^-+|-+$/g, '').slice(0, 32) : ''
 const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number') && v !== '' ? String(v) : undefined
 
-// Dev-chosen sources stay raw (W1's segmentOf cleans them); human text is slugged.
+// Dev-chosen sources stay raw (W1's segmentOf cleans them); human text is slugged. Links go by href
+// before any text: their id lands in the SSR fragment, and children from an RSC payload arrive in the
+// browser as lazy wrappers textOf cannot read, so a text-derived id would differ on hydration.
 export function nameOf(tag: string, p: Props, key: string | null | undefined): string | undefined {
   return str(p.agentId) ?? str(p.name) ?? str(key ?? undefined)
-    ?? (slug(p['aria-label']) || slug(textOf(p.children)) || slug(p.placeholder) || slug(p.title) || undefined)
     ?? (tag === 'a' && safeHref(p.href) ? p.href.replace(UNSAFE, '_') : undefined)
+    ?? (slug(p['aria-label']) || slug(textOf(p.children)) || slug(p.placeholder) || slug(p.title) || undefined)
 }
 
 const clean = (s: unknown) => typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, 40) : ''
