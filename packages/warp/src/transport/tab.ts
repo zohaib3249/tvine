@@ -9,7 +9,8 @@
 // without a CORS preflight we never answer), and its cookie session must own the tabId. tabId, requestId and
 // cmdId are 128-bit random. The agent's declared name is never verified and always shown as such.
 import { isProduction } from '../env.js'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { sidHash } from '../core/audit.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp, forwardedHostOf } from '../core/request.js'
@@ -53,7 +54,8 @@ interface Tab { id: string; sid: Sid; doc: string; send?: Frame; gone?: ReturnTy
 interface Ask { id: string; agentSid: Sid; name: string; exp: number; code: string; codeExp: number; approveUrl: string; tabId?: string }
 interface Held { tabId: string; name: string; since: number; used: number }
 
-const token = () => randomBytes(16).toString('base64url')   // 128 bit
+const token = () => randomBytes(16).toString('base64url')
+const hashId = (s: string) => createHash('sha256').update(`tab:${s}`).digest('hex').slice(0, 16)   // 128 bit
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 const newCode = () => [...randomBytes(8)].map((b) => CROCKFORD[b & 31]).join('')
 // what the human types: case-insensitive, dashes/spaces ignored, Crockford look-alikes folded
@@ -105,6 +107,20 @@ export class TabHub {
   close(): void { clearInterval(this.timer); this.unwatch(); this.unrotate(); for (const t of [...this.tabs.values()]) this.drop(t) }
 
   get size(): number { return this.tabs.size }   // metrics: connected tabs
+  // tvine.admin's Agents page: the tabs an agent controls now. ids are hashes (never a tab token or a sid).
+  controlled(): { id: string; session: string; since: number; agent: string; used: number }[] {
+    const out = []
+    for (const [agentSid, h] of this.held) {
+      const t = this.tabs.get(h.tabId)
+      if (t) out.push({ id: hashId(t.id), session: sidHash(agentSid)!, since: h.since, agent: h.name, used: h.used })
+    }
+    return out
+  }
+  // the admin's Stop: the same release as the human's Stop pill
+  revoke(id: string): boolean {
+    for (const t of this.tabs.values()) if (t.agent && hashId(t.id) === id) { this.release(t, 'human', 'not_connected'); return true }
+    return false
+  }
   get on(): boolean { return this.server.settings.agent?.inTab !== 'off' }
 
   // ---- tab lifecycle (channel.ts) -----------------------------------------------------------

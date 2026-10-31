@@ -94,6 +94,8 @@ export type Stat =
   | { k: 'http'; transport: string; status: string; route: string; ms: number }
   | { k: 'action'; action: string; outcome: string; via: string; agent?: string; token?: string; sid?: string; ms: number }
   | { k: 'db'; alias: string; sql: string; ms: number }
+  | { k: 'cache'; alias: string; hit: boolean }
+  | { k: 'mail'; ok: boolean; n: number }
 const TAP = Symbol.for('tvine.statsTap')
 export const stats: { tap?: (s: Stat) => void } = ((globalThis as { [TAP]?: { tap?: (s: Stat) => void } })[TAP] ??= {})
 export const statTap = (s: Stat): void => { try { stats.tap?.(s) } catch { /* a broken listener never breaks the caller */ } }

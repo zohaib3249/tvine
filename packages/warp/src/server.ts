@@ -234,7 +234,14 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     metrics.gauge('tvine_tab_connections', () => [[{}, tabs.size]])
     metrics.gauge('tvine_sessions', () => [[{}, ctx.sessions.size]])
   }
-  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs })
+  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs,
+    // tvine.admin live groups: admin:live = active staff, admin:logs = active superuser (the user from the cookie session)
+    groupAllowed: adminBase ? async (group, session) => {
+      const request = await buildRequest({ url: adminBase, route: adminBase, headers: {}, ip: '127.0.0.1', isAgent: false }, settings)
+      await authenticate(settings, request, session)
+      const u = request.user
+      return u.isActive !== false && u.isStaff === true && (group !== 'admin:logs' || u.isSuperuser === true)
+    } : undefined })
   const mcp = mcpHandler(ctx, { route, tabs })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
   const fail = (res: ServerResponse) => (e: unknown) => {
