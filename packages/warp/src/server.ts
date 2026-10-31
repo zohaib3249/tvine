@@ -22,7 +22,7 @@ import { DiskStorage, mediaHandler } from './media/index.js'
 import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
 import { checkBackends, checkHosts, defineSettings, merge, type SettingsInput } from './settings.js'
-import { configureLogging, getLogger } from './log.js'
+import { configureLogging, getLogger, loggingConfig } from './log.js'
 import { env, isProduction, loadDotenv } from './env.js'
 import { buildMiddleware, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
 import { closeRedis, configureRedis } from './redis/index.js'
@@ -128,8 +128,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (opts.dev && isProduction()) throw new Error('dev: true is not allowed when NODE_ENV=production (use the built app: frontend.nextDir without dev)')
   // 1. settings (zod; missing TVINE_SECRET in prod throws). Boot lines go to stderr (stdout stays CLI output).
   const settings = await loadSettings(opts.settings)
-  const boot = getLogger('tvine.server')
-  const say = (msg: string, level: 'info' | 'warn' = 'info') => boot[level](msg)
+  // boot lines: stderr (stdout stays CLI output), in the configured format; logging 'none' (no handlers) = silent
+  const lc = loggingConfig()
+  const say = (msg: string, level: 'info' | 'warn' = 'info') => {
+    if (lc.handlers.length) console.error(lc.format === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
+  }
   say('settings ok')
   if (settings.debug && isProduction()) say('WARNING: settings.debug is on with NODE_ENV=production (dev CSP, inspector feed): set TVINE_DEBUG=0', 'warn')
   if (isProduction() && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')

@@ -368,7 +368,7 @@ export function runMiddleware(list: readonly HttpMiddleware[], req: MwRequest, r
     fail(e)
   }
   const at = async (i: number): Promise<void> => {
-    if (i === list.length) { inner(); return done() }
+    if (i === list.length || !req.tvine.ours) { inner(); return done() }   // embedded: the host app's paths are its own
     const m = list[i]!
     try {
       if (m.processResponse) req.tvine.onHeaders(() => m.processResponse!.call(m, req, res))

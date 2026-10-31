@@ -219,7 +219,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       }
     } finally {
       await cleanup()
-      log({ t: new Date().toISOString(), id, sid: sidHash(sid), route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
+      log({ id, sidHash: sidHash(sid), route: request?.route ?? u.pathname, ...(action && { action }), status, ms: Math.round(performance.now() - t0) })
     }
   }
 

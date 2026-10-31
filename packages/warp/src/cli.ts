@@ -89,8 +89,11 @@ class Usage extends Error {}
 // .env files (env.md): real environment variables beat them all (loadEnvFile never overrides)
 const loadEnv = () => { loadDotenv() }
 // the address the server really listens on (not a guess): http://127.0.0.1:3000, http://[::]:3000, …
+// (every interface: a usable localhost url, then what it is really bound to)
 export function boundUrl(a: AddressInfo): string {
-  return `http://${a.family === 'IPv6' || a.family === (6 as never) ? `[${a.address}]` : a.address}:${a.port}`
+  const v6 = a.family === 'IPv6' || a.family === (6 as never)
+  const shown = v6 ? `[${a.address}]` : a.address
+  return a.address === '::' || a.address === '0.0.0.0' ? `http://localhost:${a.port} (bound to ${shown}, every interface)` : `http://${shown}:${a.port}`
 }
 
 // a built Next app in cwd is served; otherwise API-only

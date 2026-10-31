@@ -10,7 +10,7 @@ export type Level = 'debug' | 'info' | 'warn' | 'error'
 export type LogFormat = 'json' | 'pretty'
 export interface LogRecord { t: string; level: Level; logger: string; msg: string; [k: string]: unknown }
 export type LogHandler =
-  | { type: 'console'; level?: Level; format?: LogFormat; stream?: 'stdout' | 'stderr' }
+  | { type: 'console'; level?: Level; format?: LogFormat; stream?: 'stdout' | 'stderr' }   // default: console[level]
   // rotating file: past maxBytes (or at the first write of a new day with `daily`) the file moves to .1, .2 … keep
   | { type: 'file'; path: string; level?: Level; format?: LogFormat; maxBytes?: number; daily?: boolean; keep?: number }
   | { type: 'custom'; level?: Level; write: (r: LogRecord) => void }
@@ -107,7 +107,8 @@ function emit(name: string, level: Level, msg: string, fields: Record<string, un
       if (h.type === 'custom') h.write(r)
       else if (h.type === 'file') writeFile(h, render(r, h.format ?? cfg.format), s.files)
       else if (h.stream === 'stdout') console.log(render(r, h.format ?? cfg.format))
-      else console.error(render(r, h.format ?? cfg.format))
+      else if (h.stream === 'stderr') console.error(render(r, h.format ?? cfg.format))
+      else console[level](render(r, h.format ?? cfg.format))   // default: console.debug/info/warn/error
     } catch { /* a broken handler never breaks the caller */ }
   }
 }
