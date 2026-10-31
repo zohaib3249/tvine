@@ -48,7 +48,8 @@
     "build": "tsc -p .",
     "test": "vitest run --passWithNoTests",
     "test:pg": "./scripts/test-pg.sh",
-    "test:mysql": "./scripts/test-mysql.sh"
+    "test:mysql": "./scripts/test-mysql.sh",
+    "test:redis": "./scripts/test-redis.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -60,20 +61,25 @@
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/pg": "^8",
+    "ioredis": "5.4.1",
     "mysql2": "^3",
     "pg": "^8.13.0",
     "react": "^19",
     "react-dom": "^19"
   },
   "peerDependencies": {
+    "mysql2": "^3",
     "pg": "^8",
-    "mysql2": "^3"
+    "ioredis": "^5"
   },
   "peerDependenciesMeta": {
     "pg": {
       "optional": true
     },
     "mysql2": {
+      "optional": true
+    },
+    "ioredis": {
       "optional": true
     }
   }

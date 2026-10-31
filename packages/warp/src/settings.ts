@@ -46,7 +46,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
   audit: false,
-  tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000 },
+  tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, broker: 'file', file: './tasks.db', durable: false, claimBatch: 10 },
   installedApps: [],
 }
 
@@ -81,7 +81,10 @@ const schema: z.ZodType<Settings> = z.object({
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
-  tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt }),
+  tasks: z.object({
+    leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
+    broker: z.enum(['file', 'memory', 'redis', 'db']), file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100), redis: z.string().min(1).optional(),
+  }),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({

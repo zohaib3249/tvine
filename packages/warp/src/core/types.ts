@@ -206,8 +206,12 @@ export interface Settings {
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
   // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
-  // SIGTERM grace, how long final job rows are kept
-  tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number }
+  // SIGTERM grace, how long final job rows are kept; the job store (§Brokers): broker kind, the file broker's path and
+  // power-cut durability, how many jobs one claim takes, the named redis connection (settings.redis alias)
+  tasks: {
+    leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
+    broker: 'file' | 'memory' | 'redis' | 'db'; file: string; durable: boolean; claimBatch: number; redis?: string
+  }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
