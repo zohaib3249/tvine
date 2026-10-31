@@ -1,4 +1,4 @@
-import type { ActionRef, ErrCode, Event, Link, Node, Snapshot } from '../core/types.js'
+import type { ActionRef, ErrCode, Event, JobUpdate, Link, Node, Snapshot } from '../core/types.js'
 import { RECOVERIES } from '../core/errors.js'
 import { snapshotOf, status } from './envelope.js'
 import { NUM, MONEY, str, cell, quote, actionLine, notationBody } from '../shape/notation.js'
@@ -136,7 +136,7 @@ export function parseCommandResult(text: string): Event[] {
           events.push(e); break
         }
         case 'goto': events.push({ kind: 'goto', url: String(t[1]) }); break
-        case 'update': events.push({ kind: 'update', rev, sid, source: t[1] as 'human' | 'agent' }); break
+        case 'update': events.push({ kind: 'update', rev, sid, source: t[1] as 'human' | 'agent', ...(t[2] !== undefined ? { job: t[2] as JobUpdate } : {}) }); break
         default: events.push({ kind: 'patch', rev, changes: t[1] })
       }
       continue

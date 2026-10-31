@@ -10,7 +10,7 @@ export function toJson(events: Event[], head: string, v2?: Shaped): string {
     if (e.kind === 'ok') { o.status = 'ok'; o.action = e.action; const r = clean(e.result); if (!isEmpty(r)) o.result = r }
     else if (e.kind === 'err') { o.status = 'err'; o.code = e.code; if (e.field) o.field = e.field; o.message = errText(e) }
     else if (e.kind === 'goto') { o.status = 'goto'; o.url = e.url }
-    else if (e.kind === 'update') { o.status = 'update'; o.source = e.source }
+    else if (e.kind === 'update') { o.status = 'update'; o.source = e.source; if (e.job) o.job = clean(e.job) }
     else if (e.kind === 'patch') { o.status = 'patch'; o.changes = clean(e.changes) }
   }
   const s = events.map(snapshotOf).find(Boolean)

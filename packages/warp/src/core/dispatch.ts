@@ -1,5 +1,6 @@
 // core/dispatch — the single mutation path (docs/design/server/core-dispatch.md). Every command
 // (HTTP, MCP, channel, WebMCP, human <Form>) runs this pipeline; first failure → one `err` event.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
@@ -30,8 +31,18 @@ export interface ServerCtx {
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
   route?: (path: string) => string | undefined   // the site's route matcher (createAgentServer): redirect targets must match
-  close(): void                    // stops this ctx's session watcher
+  appsDir?: string                 // the project's apps/ (createAgentServer): contrib apps' ready() discover more modules from it
+  health: Map<string, () => unknown>   // extra /tvine/health sections (sync, cheap: e.g. tvine.tasks' cached queue stats)
+  onClose(fn: () => unknown): void // run fn on close() (an app's ready() timers, relays)
+  close(): void                    // stops this ctx's session watcher, then runs the onClose fns
 }
+
+// The action running right now (its ActionCtx), for code deep in a handler's call tree that needs the caller's
+// session / user without threading ctx through (tvine.tasks stamps the enqueuer on a job). On globalThis:
+// one store however many copies of warp a process loads.
+const SCOPE = Symbol.for('tvine.actionScope')
+const scope: AsyncLocalStorage<ActionCtx> = ((globalThis as { [SCOPE]?: AsyncLocalStorage<ActionCtx> })[SCOPE] ??= new AsyncLocalStorage())
+export const currentAction = (): ActionCtx | undefined => scope.getStore()
 
 const errStr = (e: unknown) => (e instanceof Error ? e.stack ?? e.message : String(e))
 
@@ -43,8 +54,9 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   const { settings } = o
   const channels = o.channels ?? new MemoryChannelLayer()
   const log: Log = o.log ?? (settings.logging === 'none' ? () => {} : (level, msg, data) => console[level](JSON.stringify({ level, msg, ...data })))
+  const closers: (() => unknown)[] = []
   const ctx: ServerCtx = {
-    ...o, channels, log, close: () => {},
+    ...o, channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
     hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
     appMiddleware: o.appMiddleware ?? new Map(),
     sessions: o.sessions ?? new SessionStore(settings.session, { channels }),
@@ -55,7 +67,10 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   watching.set(ctx.sessions, w)
   let unwatch = () => {}
   if (!w.has(ctx.hooks)) { w.add(ctx.hooks); unwatch = ctx.sessions.watch((sid, kind) => ctx.hooks.emit('session', { sid, kind })) }
-  ctx.close = () => { unwatch(); unwatch = () => {}; w.delete(ctx.hooks) }
+  ctx.close = () => {
+    unwatch(); unwatch = () => {}; w.delete(ctx.hooks)
+    for (const fn of closers.splice(0)) { try { void Promise.resolve(fn()).catch((e) => log('error', 'onClose failed', { error: errStr(e) })) } catch (e) { log('error', 'onClose failed', { error: errStr(e) }) } }
+  }
   setOnCommitErrorHandler((e) => log('error', 'onCommit hook failed', { error: errStr(e) }))
   return ctx
 }
@@ -357,7 +372,7 @@ type Outcome = { result: unknown } | { goto: string }
 async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
-    try { return { result: await def.run(params, ctx) } }
+    try { return { result: await scope.run(ctx, () => def.run(params, ctx)) } }
     catch (e) {
       const url = redirectUrl(e)
       if (url === undefined) throw e
