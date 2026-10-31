@@ -91,9 +91,13 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
 
 // Requests whose caller discards snapshots (the human <Form>: formResult only reads ok/err/goto).
 const quiet = new WeakSet<Request>()
+const renderRead = new WeakSet<Request>()
 
-export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: { snapshot?: boolean } = {}): AsyncIterable<Event> {
+// render: a page render's read (api.* inside a server component) — it spends no rate bucket (W11-FIX #6: a
+// rate-limited render is a 500 page with no Tvine root, which kills tab control). Read-only actions only.
+export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: { snapshot?: boolean; render?: boolean } = {}): AsyncIterable<Event> {
   if (opts.snapshot === false) quiet.add(request)
+  if (opts.render && server.actions.get(cmd.action)?.rules?.readOnly) renderRead.add(request)
   const t0 = performance.now()
   const { sid, events } = await run(cmd, server, request)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
@@ -232,7 +236,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     if (r.hit === true) return { sid: known.sid, events: r.events }
   }
   // 3a. ip + default sid bucket first: abusive traffic never creates sessions or queues (3b, an action's own rate, runs later)
-  const rl = await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  const rl = renderRead.has(request) ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
   if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
   const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
@@ -336,7 +340,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   }
   // 3b. an action's own rate: a bucket keyed by sid + action id
   const def = server.actions.get(cmd.action)
-  if (def?.rules?.rate) {
+  if (def?.rules?.rate && !renderRead.has(request)) {
     const rl = await server.limiter.check({ sid, action: def.id }, def.rules.rate)
     if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
   }

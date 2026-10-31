@@ -99,8 +99,10 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   } else if (!session) {
     if (who.sid !== undefined) return fail('expired_sid', 'session expired')   // an agent render whose session is gone
     if (crossOrigin(who.request, settings)) return FORBIDDEN
-    const rl = await server.limiter.check({ ip: who.request.ip })
-    if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
+    if (who.mode !== 'render') {   // a page render's reads spend no rate bucket (dispatch opts.render)
+      const rl = await server.limiter.check({ ip: who.request.ip })
+      if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
+    }
     if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
     else if (!who.mint) return fail('expired_sid', 'this action needs a session')
     else { session = await sessions.create(); await who.mint(session) }
@@ -111,7 +113,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
-    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false })))
+    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render' })))
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
     if (rotated) await who.mint?.(rotated)
     return r
