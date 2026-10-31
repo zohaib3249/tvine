@@ -4,6 +4,7 @@
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
+@import "@tvine/weft/forms/forms.css";
 @source "./";
 
 @theme inline {
@@ -42,6 +43,14 @@
     --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 22%, transparent);
     color-scheme: dark;
   }
+}
+
+/* @tvine/weft/forms (bundled above) themed from the admin tokens. Unlayered, like forms.css, so it wins. */
+.tva :is(.tf-form, .tf-field, .tf-inline) {
+  --tf-brand: var(--tva-brand); --tf-brand-fg: var(--tva-brand-fg); --tf-fg: var(--tva-fg); --tf-muted: var(--tva-muted);
+  --tf-bg: var(--tva-surface); --tf-subtle: var(--tva-sunken); --tf-border: var(--tva-line); --tf-danger: var(--tva-danger);
+  --tf-danger-bg: color-mix(in oklab, var(--tva-danger) 10%, transparent); --tf-radius: var(--tva-radius);
+  --tf-ring: var(--tva-brand-soft); --tf-label-w: 11rem;
 }
 
 @layer base {

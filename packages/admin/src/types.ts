@@ -11,20 +11,10 @@ export type Site = {
 }
 
 export type Choice = { value: string; label: string }
-export type FieldKind =
-  | 'text' | 'textarea' | 'email' | 'url' | 'slug' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'datetime' | 'time'
-  | 'duration' | 'uuid' | 'json' | 'choice' | 'fk' | 'm2m' | 'file' | 'image' | 'password' | 'rich'
-export type FieldMeta = {
-  name: string; label: string; help?: string; kind: FieldKind; required: boolean; readOnly: boolean; nullable: boolean
-  default?: unknown; choices?: Choice[]; max?: number; min?: number; maxLength?: number; decimals?: number; currency?: string
-  multiple?: boolean; relation?: { model: string; autocomplete: boolean; rawId: boolean }; upload?: { accept: string; maxBytes: number }
-}
-export type Fieldset = { title: string | null; classes?: string[]; fields: string[] }
-export type InlineMeta = {
-  name: string; kind: 'tabular' | 'stacked'; model: string; fk: string; fields: string[]; extra: number; max?: number; min?: number
-  canDelete: boolean; meta: { fields: Record<string, FieldMeta> } & Partial<FormMeta>
-}
-export type FormMeta = { fieldsets: Fieldset[]; fields: Record<string, FieldMeta>; inlines: InlineMeta[] }
+// Form shapes are shared with @tvine/weft/forms (part C) — one definition.
+import type { FieldKind, FieldMeta, FormMeta, InlineMeta } from '@tvine/weft/forms'
+export type { FieldKind, FieldMeta, FormMeta, InlineMeta }
+export type Fieldset = FormMeta['fieldsets'][number]
 export type Column = { name: string; label: string; sortable: boolean; kind?: string }
 export type FilterMeta = { name: string; label: string; kind: 'choice' | 'boolean' | 'date' | 'related' | 'custom'; choices?: Choice[] }
 export type ActionMeta = { name: string; description: string; confirm?: boolean | string }
