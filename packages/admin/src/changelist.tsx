@@ -165,11 +165,16 @@ function EditableTable({ meta, rows, cols, links, ordering, selected, setSelecte
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.pk))
   const save = async () => {
     setSaving(true)
-    const r = await call('admin.listEdit', { model: meta.key, rows: Object.entries(edits).map(([pk, values]) => ({ pk, values })) })
+    const sent = Object.entries(edits).map(([pk, values]) => ({ pk, values }))
+    const r = await call('admin.listEdit', { model: meta.key, rows: sent })
     setSaving(false)
+    const fe = !r.ok && r.code === 'invalid_param' ? ((r as { errors?: { field: string; message: string }[] }).errors ?? []) : []
+    if (fe.length) {   // `rows.<i>.<field>` → { pk: { field: message } }
+      const e: Record<string, Record<string, string>> = {}
+      for (const x of fe) { const [, i, f] = x.field.split('.'); const pk = sent[+i!]?.pk; if (pk && f) (e[pk] ??= {})[f] ??= x.message }
+      setErrs(e); toast({ kind: 'error', title: 'Some rows have errors', description: 'Fix the highlighted cells and save again.' }); return
+    }
     if (!r.ok) { toast({ kind: 'error', title: 'Not saved', description: r.message }); return }
-    const e = (r.data as { errors?: Record<string, Record<string, string>> } | null)?.errors ?? {}
-    if (Object.keys(e).length) { setErrs(e); toast({ kind: 'error', title: 'Some rows have errors', description: 'Fix the highlighted cells and save again.' }); return }
     toast({ kind: 'success', title: `Saved ${dirty} ${dirty === 1 ? meta.name : meta.namePlural}` })
     refresh()
   }

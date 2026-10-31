@@ -710,23 +710,23 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
   const a = await gate(ctx, p.model, 'change')
   const objs = await selected(a, ctx, p.rows.map((r) => r.pk))
   const work = []
-  const errors: Record<string, Record<string, string>> = {}
-  for (const r of p.rows) {
+  const errors: Record<string, string> = {}   // `rows.<i>.<field>`, like an inline row's errors in create/update
+  for (const [i, r] of p.rows.entries()) {
     const obj = objs.find((o) => String(o.id) === String(r.pk))
-    if (!obj) { errors[String(r.pk)] = { pk: 'Not found.' }; continue }
+    if (!obj) { errors[`rows.${i}.pk`] = 'Not found.'; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
     const c = clean(a, r.values, false, a.listEditable, obj)
     await cleanChoices(a, ctx, c)
-    if (Object.keys(c.errors).length) errors[String(r.pk)] = c.errors
-    else work.push({ obj, c })
+    for (const [f, m] of Object.entries(c.errors)) errors[`rows.${i}.${f}`] = m
+    if (!Object.keys(c.errors).length) work.push({ obj, c })
   }
-  if (Object.keys(errors).length) return { ok: false, updated: 0, errors }   // Django formset: one invalid row saves nothing
+  if (Object.keys(errors).length) throw fieldErrors(errors)   // Django formset: one invalid row saves nothing
   for (const { obj, c } of work) {
     if (!c.changed.length) continue
     const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
     await logAction(ctx, a._key, row.id, a.str(row), CHANGE, [{ changed: { fields: c.changed.map(labelOf) } }])
   }
-  return { ok: true, updated: work.filter((w) => w.c.changed.length).length, errors: {} }
+  return { ok: true, updated: work.filter((w) => w.c.changed.length).length }
 }, staff)
 
 
