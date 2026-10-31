@@ -687,14 +687,10 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
 
 export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
   const a = await gate(ctx, model, 'module')
-  const id = coercePk(a.model, pk)
-  const obj = id === undefined ? undefined : await a.getObject(ctx, id)
-  if (obj) { if (!(await a.hasViewPermission(ctx, obj))) throw forbidden() }
-  else {
-    // hidden by getQueryset (another tenant's row) → not found; only a deleted row falls back to the model perm
-    if (id !== undefined && (await a.model.objects.filter({ id }).count())) throw new DomainError('not_found', `${a._key} ${String(pk)} not found`)
-    if (!(await a.hasViewPermission(ctx))) throw forbidden()
-  }
+  // Django history_view: get_object None → not found (a deleted row too: no model-perm fallback that would show
+  // another tenant's LogEntry rows)
+  const obj = await objectOf(a, ctx, pk)
+  if (!(await a.hasViewPermission(ctx, obj))) throw forbidden()
   const rows = await LogEntry.objects.filter({ contentType: a._key, objectId: String(pk) }).order('actionTime', 'id').all(MAX_PKS)
   const User = modelNamed<AnyModel>('auth_user')
   const ids = [...new Set(rows.map((r) => r.userId).filter((x) => /^\d+$/.test(x)))].map(Number)
