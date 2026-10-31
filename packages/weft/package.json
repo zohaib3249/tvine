@@ -32,6 +32,12 @@
       "import": "./dist/widgets/index.js",
       "default": "./dist/widgets/index.js"
     },
+    "./forms": {
+      "types": "./dist/forms/index.d.ts",
+      "import": "./dist/forms/index.js",
+      "default": "./dist/forms/index.js"
+    },
+    "./forms/forms.css": "./dist/forms/forms.css",
     "./dev": {
       "types": "./dist/dev/Gallery.d.ts",
       "default": "./dist/dev/Gallery.js"
@@ -46,7 +52,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p .",
+    "build": "tsc -p . && cp src/forms/forms.css dist/forms/forms.css",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
