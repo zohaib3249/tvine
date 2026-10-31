@@ -105,8 +105,9 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
       case '/robots.txt': {
         if (!robots || robots.own) return next()
-        // an auto sitemap link is absolute from this request's Host (validated by originOf): Vary keeps caches per host
-        const auto = robots.sitemap && !settings.robots.sitemap ? originOf(req, settings) : ''
+        // an auto sitemap link is absolute from this request's Host (validated by originOf): Vary keeps caches per host.
+        // Production: only settings.robots.sitemap (a spoofed Host must not land in a cached robots.txt)
+        const auto = robots.sitemap && !settings.robots.sitemap && process.env.NODE_ENV !== 'production' ? originOf(req, settings) : ''
         if (auto) res.setHeader('vary', 'host')
         return get('text/plain; charset=utf-8', CACHED, () => robotsTxt(settings, { sitemap: settings.robots.sitemap ?? (auto ? `${auto}/sitemap.xml` : undefined), admin: robots.admin }))
       }

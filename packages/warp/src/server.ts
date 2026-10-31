@@ -407,12 +407,18 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
 // neither configured = loopback only. Anything else gets a plain 404 (the endpoint's existence is not disclosed).
 function metricsHandler(settings: Settings): Handler {
   const { path, token, allowIps } = settings.metrics
+  // production: a same-host proxy (or a proxy that strips X-Forwarded-For) makes every request look local, so
+  // "loopback only" is never a production guard
+  if (process.env.NODE_ENV === 'production' && !token && !allowIps.length) throw new Error('settings.metrics.enabled in production needs metrics.token or metrics.allowIps (loopback-only is dev only)')
   const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+  // loopback = the socket itself is local, nothing claims to be forwarded, and no proxy is trusted
+  const forwarded = (req: IncomingMessage) => Object.keys(req.headers).some((h) => h.startsWith('x-forwarded-') || h === 'forwarded' || h === 'x-real-ip')
+  const local = (req: IncomingMessage) => settings.trustProxy === 0 && loopback.has(req.socket.remoteAddress ?? '') && !forwarded(req)
   const allowed = (req: IncomingMessage) => {
     const given = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
     if (token && given) { const a = Buffer.from(given), b = Buffer.from(token); if (a.length === b.length && timingSafeEqual(a, b)) return true }
-    const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    return allowIps.length ? allowIps.includes(ip) : !token && loopback.has(ip)
+    if (allowIps.length) return allowIps.includes(clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
+    return !token && local(req)
   }
   return (req, res, next) => {
     if (pathOf(req) !== path) return next()
