@@ -3,7 +3,7 @@
 // broker 'memory' lives in this process only, so the web server runs its jobs itself (an embedded worker).
 import type { ServerCtx } from '../../core/dispatch.js'
 import { closeBroker } from './broker.js'
-import { healthSection, OutboxRelay, ProgressRelay } from './relay.js'
+import { healthSection, OutboxRelay, ProgressRelay, relayClaim } from './relay.js'
 import { configureTasks, discoverTasks } from './task.js'
 import { Worker } from './worker.js'
 
@@ -11,7 +11,7 @@ export async function ready(server: ServerCtx): Promise<void> {
   const t = server.settings.tasks
   configureTasks(t)
   if (server.appsDir) await discoverTasks(server.appsDir, server.settings.installedApps)
-  const progress = new ProgressRelay(server, t.relayMs)
+  const progress = new ProgressRelay(server, t.relayMs, relayClaim(server.settings))
   progress.start()
   const outbox = new OutboxRelay(server.log)
   outbox.start()

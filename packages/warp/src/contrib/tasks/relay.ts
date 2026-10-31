@@ -1,24 +1,41 @@
 // Web-server / worker side of tvine.tasks: the progress relay (broker.watch → `update` events with source 'job' on
 // the owner's session group), the outbox relay (durable enqueues → broker), and the /tvine/health section.
 // docs/design/contrib/tasks.md §Results, §Enqueueing, §Ops.
+import { createHash } from 'node:crypto'
 import type { ServerCtx } from '../../core/dispatch.js'
-import type { Event } from '../../core/types.js'
+import type { Event, Settings } from '../../core/types.js'
+import { getRedis, redisKey } from '../../redis/index.js'
 import { broker, bus, type Moved, type QueueStats } from './broker.js'
 import { FINAL, Outbox } from './models.js'
 import { push, tasks, type Payload } from './task.js'
 
+// Each web server watches the broker feed; with a shared channel layer (channels.backend 'redis') every server sees
+// every job event, so ONE of them claims it (SET NX on the channels alias) and publishes it once; with in-process
+// channels each server serves its own subscribers.
+export type Claim = (key: string) => Promise<boolean>
+export function relayClaim(settings: Pick<Settings, 'channels'>): Claim | undefined {
+  if (settings.channels.backend !== 'redis') return undefined
+  const alias = settings.channels.redis
+  return async (key) => (await (await getRedis(alias)).sendCommand(['SET', redisKey(alias, 'tasks', 'relay', key), '1', 'NX', 'PX', '60000'])) === 'OK'
+}
+
 export class ProgressRelay {
   private off?: () => void
-  constructor(private server: Pick<ServerCtx, 'sessions' | 'channels'>, private everyMs: number) {}
+  constructor(private server: Pick<ServerCtx, 'sessions' | 'channels'>, private everyMs: number, private claim?: Claim) {}
 
   start(): void { this.off = broker().watch((j) => this.send(j), { minMs: this.everyMs }) }
   stop(): void { this.off?.() }
 
   private send(j: Moved): void {
-    const s = j.sid ? this.server.sessions.peek({ sid: j.sid }) : undefined
+    void this.post(j).catch(() => undefined)   // a session store hiccup drops one progress event, never the relay
+  }
+  private async post(j: Moved): Promise<void> {
+    const s = j.sid ? await this.server.sessions.peek({ sid: j.sid }) : undefined
     if (!s) return   // another web process's session, or gone
+    // the first server to claim this exact change publishes it (and bumps the rev once)
+    if (this.claim && !(await this.claim(createHash('sha1').update(JSON.stringify([j.id, j.status, j.progress, j.message])).digest('hex')))) return
     // a final status bumps the rev (the page may show what the job changed); progress keeps it
-    if (FINAL.includes(j.status)) s.rev++
+    if (FINAL.includes(j.status)) { s.rev++; await this.server.sessions.save(s) }
     const e: Event = {
       kind: 'update', sid: s.sid, rev: s.rev, source: 'job',
       job: { id: j.id, task: j.task, status: j.status, ...(j.progress != null && { progress: j.progress }), ...(j.message != null && { message: j.message }) },

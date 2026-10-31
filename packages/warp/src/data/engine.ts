@@ -2,11 +2,16 @@
 // engine type or name to devs; errors are rewritten to model/field vocabulary.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { DomainError } from '../core/errors.js'
-import type { DataSource } from './queryset.js'
+import { CURSOR, type DataSource, type QuerySpec, type Where } from './queryset.js'
 import type { ModelDef } from './fields.js'
 import { connections, type Connection } from './db.js'
 import { Table } from './table.js'
-import { pkField } from './fields/index.js'
+import { concrete, pkField, type Field, type Kind } from './fields/index.js'
+import { compileAggregate, compileQuery, whereOf, type Out, type Plan } from './sql/compile.js'
+import { bin, inList, param, qcol, raw, type Expr, type Select } from './sql/ast.js'
+import type { Dialect, Statement } from './sql/dialect.js'
+import type { Expression, QNode } from './expressions.js'
+import { referencesTo } from './registry.js'
 
 // ---- error vocabulary ------------------------------------------------------------------------
 function wrapErr(def: ModelDef, e: unknown): never {
@@ -160,6 +165,9 @@ function lazyAtomic<R>(fn: () => Promise<R>, signal?: AbortSignal): Promise<R> {
   return settle().finally(() => signal?.removeEventListener('abort', onAbort))
 }
 
+// true inside an open atomic() block (selectForUpdate requires one, like Django)
+export function inAtomic(): boolean { const tx = bound.getStore(); return !!tx && !tx.closed }
+
 // Inside atomic(): run fn after the outermost commit (dropped on rollback). Outside atomic(), or
 // late from a block that already committed: run now. Late from a block that rolled back / was
 // aborted: throw — the writes it would announce never happened.
@@ -178,12 +186,55 @@ const gv = globalThis as { [VERSION]?: number }
 export const dataVersion = (): number => gv[VERSION] ?? 0
 // ponytail: one counter for the whole process and every table, so a write-heavy app rarely hits the snapshot
 // cache; per-table versions (pages would declare what they read) if that cost shows up.
-const bump = () => { gv[VERSION] = dataVersion() + 1 }
+const WATCH = Symbol.for('tvine.dataVersionWatchers')
+const gw = globalThis as { [WATCH]?: Set<() => void> }
+const watchers = (gw[WATCH] ??= new Set())
+// called after every bump (a shared snapshot cache publishes it to the other servers); must not throw
+export function onDataVersion(fn: () => void): () => void { watchers.add(fn); return () => { watchers.delete(fn) } }
+const bump = () => { gv[VERSION] = dataVersion() + 1; for (const w of watchers) { try { w() } catch { /* a watcher's own problem */ } } }
 function wrote<R>(r: R): R {
   const tx = bound.getStore()
   if (tx && !tx.closed) { if (!tx.hooks.includes(bump)) tx.hooks.unshift(bump) }   // first: before app hooks read
   else bump()
   return r
+}
+
+// ---- hydration (orm-advanced.md) ------------------------------------------------------------------
+type AnyField = Field<any, boolean, Kind, boolean>
+const NUM = new Set<Kind>(['int', 'float', 'money', 'id', 'fk'])
+// pg numeric / int8 and mysql DECIMAL arrive as strings: numbers (an unsafe integer is refused, like int8)
+function num(v: unknown, f: AnyField): unknown {
+  if (typeof v !== 'string' || !NUM.has(f.kind)) return typeof v === 'bigint' ? Number(v) : v
+  const n = Number(v)
+  if (f.kind !== 'float' && !Number.isSafeInteger(Math.round(n))) throw new Error(`integer ${v} is outside the safe JS number range`)
+  return n
+}
+function outValue(o: Out, r: Record<string, unknown>, d: Dialect): unknown {
+  if (!o.f) return r[o.alias] ?? null
+  const cols = o.f.columns(o.alias)
+  const sub: Record<string, unknown> = {}
+  cols.forEach((c, i) => { sub[c] = i === 0 ? num(r[c], o.f!) : r[c] })
+  if (o.round && typeof sub[cols[0]] === 'number') sub[cols[0]] = Math.round(sub[cols[0]] as number)
+  if (o.f.kind === 'money' && sub[cols[0]] != null && sub[cols[1]] == null) {
+    throw new DomainError('invalid_param', `${o.key} mixes currencies: filter on one currency (<field>__currency) or group by it`, o.key)
+  }
+  return o.f.fromDb(sub, o.alias, d)
+}
+export function hydrateWith(plan: Plan, t: Table, r: Record<string, unknown>, d: Dialect): Record<string, unknown> {
+  if (plan.mode === 'values') return Object.fromEntries(plan.outs.map(o => [o.key, outValue(o, r, d)]))
+  const row = t.hydrate(r, d)
+  for (const o of plan.outs) row[o.key] = outValue(o, r, d)
+  for (const rp of [...plan.related].sort((a, b) => a.path.length - b.path.length)) {
+    let parent: Record<string, unknown> | null = row
+    for (const p of rp.path.slice(0, -1)) parent = (parent?.[p] as Record<string, unknown> | null) ?? null
+    if (!parent) continue
+    const sub = Object.fromEntries(Object.entries(rp.cols).map(([c, a]) => [c, r[a]]))
+    parent[rp.path[rp.path.length - 1]] = sub[pkField(rp.def)[0]] == null ? null : Table.of(rp.def).hydrate(sub, d)
+  }
+  if (!plan.simple && plan.cursor.length) {
+    Object.defineProperty(row, CURSOR, { value: plan.cursor.map(c => ('key' in c ? row[c.key] : r[c.alias])), enumerable: false })
+  }
+  return row
 }
 
 // ---- DataSource ------------------------------------------------------------------------------
@@ -195,34 +246,175 @@ export function engineSource(def: ModelDef): DataSource<any> {
     try { return await f(c) } catch (e) { return wrapErr(def, e) }
   })
   return {
-    query: spec => run(async ({ driver, dialect }) => {
-      const { count, page } = t.query(spec, dialect)
-      const total = Number(Object.values((await driver.query(count.sql, count.params))[0])[0])
-      if (!page) return { items: [], total }
-      return { items: (await driver.query(page.sql, page.params)).map(r => t.hydrate(r, dialect)), total }
-    }),
+    def,
+    query: spec => {
+      if (spec.forUpdate && !inAtomic()) return Promise.reject(new Error('selectForUpdate() must run inside atomic()'))
+      return run(async ({ driver, dialect }) => {
+        const { count, page, plan } = compileQuery(spec, def, dialect)
+        let total: number | undefined
+        if (spec.count !== false || !page) {
+          const c = dialect.render(count)
+          total = Number(Object.values((await driver.query(c.sql, c.params))[0])[0])
+        }
+        if (!page) return { items: [], total }
+        const p = dialect.render(page)
+        return { items: (await driver.query(p.sql, p.params)).map(r => hydrateWith(plan, t, r, dialect)), total }
+      })
+    },
     get: id => run(async ({ driver, dialect }) => {
       const s = t.get(id, dialect)
       const [r] = await driver.query(s.sql, s.params)
       return r ? t.hydrate(r, dialect) : undefined
     }),
-    update: (ws, patch) => run(async ({ driver, dialect }) => {
-      const s = t.update(ws, patch, dialect)
+    update: (ws, patch, q) => run(async ({ driver, dialect }) => {
+      const s = t.update(ws, patch, dialect, q)
       return s ? wrote((await driver.exec(s.sql, s.params)).changes) : 0
     }),
-    delete: ws => run(async ({ driver, dialect }) => {
-      const s = t.delete(ws, dialect)
-      return wrote((await driver.exec(s.sql, s.params)).changes)
-    }),
+    delete: (ws, q) => deleteWhere(def, ws, q),
   }
 }
 
-export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise<any> {
+// ---- advanced reads ---------------------------------------------------------------------------
+export function aggregateRows(def: ModelDef, spec: QuerySpec, aggs: [string, Expression][]): Promise<Record<string, unknown>> {
+  return exec(async ({ driver, dialect }) => {
+    try {
+      const { select, outs } = compileAggregate(spec, def, aggs, dialect)
+      const s = dialect.render(select)
+      const [r] = await driver.query(s.sql, s.params)
+      return Object.fromEntries(outs.map(o => {
+        const v = outValue(o, r ?? {}, dialect)
+        return [o.key, o.f?.kind === 'int' && (aggs.find(([k]) => k === o.key)?.[1] as { fn?: string }).fn === 'count' ? (v ?? 0) : v]
+      }))
+    } catch (e) { return wrapErr(def, e) }
+  })
+}
+
+export function existsRows(def: ModelDef, spec: QuerySpec): Promise<boolean> {
+  return exec(async ({ driver, dialect }) => {
+    try {
+      const { count, page } = compileQuery({ ...spec, limit: 1, cursor: undefined }, def, dialect)
+      // a grouped page cannot drop its columns (GROUP BY ordinals): count over it instead
+      const sel: Select = page!.groupBy || page!.distinct || page!.distinctOn ? count : { ...page!, cols: [raw('1')], order: undefined }
+      const s = dialect.render(sel)
+      const rows = await driver.query(s.sql, s.params)
+      return sel === count ? Number(Object.values(rows[0])[0]) > 0 : rows.length > 0
+    } catch (e) { return wrapErr(def, e) }
+  })
+}
+
+// ---- bulk writes ------------------------------------------------------------------------------
+const MAX_PARAMS = 30_000      // under sqlite's 32 766, pg's / mysql's 65 535 bound params per statement
+const MAX_ROWS = 1_000         // the IN cap (queryset.ts MAX_IN)
+export const batchOf = (cols: number, want?: number) => Math.max(1, Math.min(want ?? MAX_ROWS, MAX_ROWS, Math.floor(MAX_PARAMS / Math.max(cols, 1))))
+
+// prepared rows (every key present) → multi-row INSERTs; pg / sqlite return the rows (RETURNING *),
+// mysql the given rows (it cannot report the auto ids of a multi-row insert — Django parity)
+export function insertMany(def: ModelDef, rows: Record<string, unknown>[], batchSize?: number): Promise<Record<string, unknown>[]> {
+  if (!rows.length) return Promise.resolve([])
+  const t = Table.of(def)
+  return atomic(async () => {
+    const out: Record<string, unknown>[] = []
+    const keys = Object.keys(rows[0]).sort().join()
+    for (const r of rows) if (Object.keys(r).sort().join() !== keys) throw new DomainError('invalid_param', `bulkCreate: every ${def.name} row must set the same fields (${keys})`)
+    const ncols = t.columnsFor(rows[0]).length
+    const size = batchOf(ncols, batchSize)
+    for (let i = 0; i < rows.length; i += size) {
+      const chunk = rows.slice(i, i + size)
+      await exec(async ({ driver, dialect }) => {
+        try {
+          const s = t.insertMany(chunk, dialect)
+          if (dialect.insertReturning) out.push(...(await driver.query(s.sql, s.params)).map(r => t.hydrate(r, dialect)))
+          else { await driver.exec(s.sql, s.params); out.push(...chunk) }
+        } catch (e) { return wrapErr(def, e) }
+      })
+    }
+    return wrote(out)
+  })
+}
+
+export function bulkUpdate(def: ModelDef, rows: Record<string, unknown>[], fields: string[], batchSize?: number): Promise<number> {
+  if (!rows.length || !fields.length) return Promise.resolve(0)
+  const t = Table.of(def)
+  return atomic(async () => {
+    let n = 0
+    // params per row: (pk + value) per column of each field (money = 2 columns) + the pk in IN
+    const cols = fields.reduce((n, f) => n + (Object.entries(def.fields).find(([k, x]) => k === f || x.key(k) === f)?.[1].columns(f).length ?? 1), 0)
+    const size = batchOf(cols * 2 + 1, batchSize)
+    for (let i = 0; i < rows.length; i += size) {
+      const chunk = rows.slice(i, i + size)
+      n += await exec(async ({ driver, dialect }) => {
+        try {
+          const s = t.bulkUpdate(chunk, fields, dialect)
+          return (await driver.exec(s.sql, s.params)).changes
+        } catch (e) { return wrapErr(def, e) }
+      })
+    }
+    return wrote(n)
+  })
+}
+
+// after rows were inserted with explicit ids (loaddata): postgres sequences do not move by themselves
+// (sqlite AUTOINCREMENT and mysql AUTO_INCREMENT follow the max id)
+export function resetSequences(defs: ModelDef[]): Promise<void> {
+  return exec(async ({ driver, dialect }) => {
+    if (dialect.name !== 'postgres') return
+    for (const def of defs) {
+      const [pk, f] = pkField(def)
+      if (f.kind !== 'id') continue
+      const q = dialect.quoteIdent
+      await driver.query(`SELECT setval(pg_get_serial_sequence($1, $2), COALESCE(MAX(${q(pk)}), 1), MAX(${q(pk)}) IS NOT NULL) FROM ${q(def.name)}`, [q(def.name), pk])
+    }
+  })
+}
+
+// ---- delete + ORM-side onDelete -------------------------------------------------------------------
+// PROTECT: refuse with a readable error (the DB's RESTRICT backs it). SET_DEFAULT on mysql (InnoDB
+// rejects it): set the default first. CASCADE / SET_NULL / RESTRICT / DO_NOTHING: the database does it.
+function deleteWhere(def: ModelDef, ws: Where[], q?: QNode[]): Promise<number> {
+  const t = Table.of(def)
+  const refs = referencesTo(def).filter(r => r.f.opts.onDelete === 'PROTECT' || r.f.opts.onDelete === 'SET_DEFAULT')
+  const del = () => exec(async ({ driver, dialect }) => {
+    try {
+      const s = t.delete(ws, dialect, q)
+      return wrote((await driver.exec(s.sql, s.params)).changes)
+    } catch (e) { return wrapErr(def, e) }
+  })
+  if (!refs.length) return del()
+  return atomic(async () => {
+    for (const r of refs) {
+      await exec(async ({ driver, dialect }) => {
+        if (r.f.opts.onDelete === 'SET_DEFAULT' && dialect.name !== 'mysql') return
+        const pk = pkField(def)[0]
+        const doomed: Select = { t: 'select', from: def.name, as: 'd0', cols: [qcol(pk, 'd0')], where: whereOf(def, ws, dialect, undefined, q, 'write') }
+        const fkCol = r.f.columns(r.field)[0]
+        if (r.f.opts.onDelete === 'PROTECT') {
+          const s = dialect.render({ t: 'select', from: r.source.name, cols: [raw('1')], where: { t: 'inSub', e: qcol(fkCol), q: doomed }, limit: 1 })
+          if ((await driver.query(s.sql, s.params)).length) {
+            throw new DomainError('domain', `cannot delete ${def.name}: still referenced by ${r.source.name}.${r.field} (on delete PROTECT)`, r.field)
+          }
+          return
+        }
+        // mysql SET_DEFAULT (a derived table: mysql refuses a subquery on the UPDATE target itself)
+        const v = r.f.toDb(r.f.opts.default, dialect)[0]
+        const s = dialect.render({ t: 'update', table: r.source.name, set: [[fkCol, param(v)]], where: { t: 'inSub', e: qcol(fkCol), q: { t: 'select', from: { ...doomed, cols: [{ t: 'as', e: qcol(pk, 'd0'), alias: 'v' }] }, as: 'd1', cols: [qcol('v', 'd1')] } } })
+        wrote((await driver.exec(s.sql, s.params)).changes)
+      })
+    }
+    return del()
+  })
+}
+
+// ignoreConflicts (getOrCreate): pg / sqlite ON CONFLICT DO NOTHING → undefined when nothing was inserted;
+// mysql: the duplicate error → undefined (a failed statement does not abort a mysql transaction)
+export function insertRow(def: ModelDef, data: Record<string, unknown>, opts: { ignoreConflicts?: boolean } = {}): Promise<any> {
   const t = Table.of(def)
   return exec(async ({ driver, dialect }) => wrote(await (async () => {
     try {
-      const s = t.insert(data, dialect)
-      if (dialect.insertReturning) return t.hydrate((await driver.query(s.sql, s.params))[0], dialect)
+      const s = t.insert(data, dialect, opts.ignoreConflicts && dialect.name !== 'mysql')
+      if (dialect.insertReturning) {
+        const [r] = await driver.query(s.sql, s.params)
+        return r ? t.hydrate(r, dialect) : undefined
+      }
       // no RETURNING (mysql): read the row back by pk — the given one (uuid) or the auto-increment id
       const { lastId } = await driver.exec(s.sql, s.params)
       const [pk, f] = pkField(def)
@@ -230,6 +422,9 @@ export function insertRow(def: ModelDef, data: Record<string, unknown>): Promise
       const [row] = await driver.query(g.sql, g.params)
       if (!row) throw new ReadBackError(`${def.name}: the inserted row could not be read back (pk ${String(data[f.key(pk)] ?? lastId)})`)
       return t.hydrate(row, dialect)
-    } catch (e) { return wrapErr(def, e) }
+    } catch (e) {
+      if (opts.ignoreConflicts && (e as { code?: string })?.code === 'ER_DUP_ENTRY') return undefined
+      return wrapErr(def, e)
+    }
   })()))
 }

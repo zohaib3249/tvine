@@ -31,19 +31,19 @@ export const UserGroup = defineModel('auth_user_groups', {
   id: field.id(),
   user: field.fk(() => User),
   group: field.fk(() => Group),
-})
+}, { indexes: [{ fields: ['user', 'group'], name: 'auth_user_groups_uniq', unique: true }] })
 
 export const UserPermission = defineModel('auth_user_permissions', {
   id: field.id(),
   user: field.fk(() => User),
   permission: field.fk(() => Permission),
-})
+}, { indexes: [{ fields: ['user', 'permission'], name: 'auth_user_permissions_uniq', unique: true }] })
 
 export const GroupPermission = defineModel('auth_group_permissions', {
   id: field.id(),
   group: field.fk(() => Group),
   permission: field.fk(() => Permission),
-})
+}, { indexes: [{ fields: ['group', 'permission'], name: 'auth_group_permissions_uniq', unique: true }] })
 
 export const Token = defineModel('auth_token', {
   id: field.id(),

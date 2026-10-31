@@ -1,5 +1,5 @@
 // redisBroker: the multi-host job store (docs/design/contrib/tasks.md §Brokers). The connection is the named one
-// `settings.tasks.redis ?? 'default'` (getRedis). Every state change is ONE Lua script, so it is atomic:
+// `settings.tasks.redis ?? 'default'` (packages/warp/src/redis: getRedis / getSubscriber / redisKey). Every state change is ONE Lua script, so it is atomic:
 //
 // - job: hash `j:<id>` (scalar fields as strings; args / result / chain kept as opaque JSON text, never decoded in Lua)
 // - ready: one STREAM per queue × priority (`s:<queue>:<prio>`, consumer group `w`); `qs` orders them (higher
@@ -21,14 +21,14 @@
 //   superseded by the next one, and the final status is always readable (tasks.status).
 // All keys share the hash tag `{tasks}`, so the scripts' keys live in one cluster slot.
 // Durability is the server's: run it with `appendonly yes` + `appendfsync everysec` (or `always`).
-import { randomUUID } from 'node:crypto'
-import type { Redis } from 'ioredis'
+import { createHash, randomUUID } from 'node:crypto'
+import { getRedis, getSubscriber, redisKey, type RedisClient } from '../../redis/index.js'
 import type { Broker, Claim, ChordSpec, Final, NewJob, QueueStats, SigJSON, WorkerInfo } from './broker.js'
 import type { JobRow, JobStatus } from './models.js'
-import { connect, getRedis, redisConf } from './redis-conn.js'
 import { bus, checkClaim, shown, type Moved, type StoreStatus } from './shared.js'
 
-export interface RedisBrokerOpts { alias?: string; prefix?: string; leaseMs?: number; safetyMs?: number; client?: Redis }
+// prefix: overrides the alias's key prefix (tests, bench: a throwaway namespace on the same server)
+export interface RedisBrokerOpts { alias?: string; prefix?: string; leaseMs?: number; safetyMs?: number }
 
 const INT = new Set(['priority', 'attempts', 'maxRetries', 'runAt', 'leaseUntil', 'expiresAt', 'groupIndex', 'createdAt', 'startedAt', 'finishedAt', 'purgeAt', 'updatedAt'])
 const BOOL = new Set(['acksLate', 'cancel'])
@@ -389,35 +389,43 @@ end
 return fixed`,
 }
 type ScriptName = keyof typeof S
-type Cmd = (key: string, base: string, ...args: (string | number)[]) => Promise<unknown>
+const SHA = Object.fromEntries(Object.entries(S).map(([k, lua]) => [k, { lua: PRELUDE + lua, sha: createHash('sha1').update(PRELUDE + lua).digest('hex') }])) as Record<ScriptName, { lua: string; sha: string }>
+type Arg = string | number
+const flat = (r: unknown): Record<string, string> => {   // HGETALL: RESP2 [k, v, …] or RESP3 map
+  if (Array.isArray(r)) { const o: Record<string, string> = {}; for (let i = 0; i < r.length; i += 2) o[String(r[i])] = String(r[i + 1]); return o }
+  return (r ?? {}) as Record<string, string>
+}
 
 export function redisBroker(o: RedisBrokerOpts = {}): RedisBroker { return new RedisBroker(o) }
 
 export class RedisBroker implements Broker {
   readonly base: string
-  private r: Redis
-  get client(): Redis { return this.r }
-  private sub?: Redis
+  private alias: string
   private safetyMs: number
   private leaseMs: number
   private wakeFns = new Set<() => void>()
   private movedFns = new Set<(m: Moved) => void>()
   private timer?: NodeJS.Timeout
-  private alias: string
+  private subscribed?: Promise<void>
 
   constructor(o: RedisBrokerOpts = {}) {
     this.alias = o.alias ?? 'default'
-    this.r = o.client ?? getRedis(this.alias)
-    this.base = `${o.prefix ?? redisConf(this.alias).prefix ?? ''}tvine:{tasks}:`
+    this.base = o.prefix !== undefined ? `${o.prefix}tvine:{tasks}:` : `${redisKey(this.alias, '{tasks}')}:`
     this.safetyMs = o.safetyMs ?? 5_000
     this.leaseMs = o.leaseMs ?? 30_000
-    for (const [name, lua] of Object.entries(S)) {
-      if (!(name in this.r)) this.r.defineCommand(`tvt_${name}`, { numberOfKeys: 1, lua: PRELUDE + lua })
-    }
   }
 
-  private call(name: ScriptName, ...args: (string | number)[]): Promise<unknown> {
-    return ((this.r as unknown as Record<string, Cmd>)[`tvt_${name}`]!)(`${this.base}meta`, this.base, ...args)
+  // one raw command on the alias's shared client (node-redis pipelines concurrent calls on its own)
+  async cmd<T = unknown>(args: Arg[]): Promise<T> { return (await getRedis(this.alias)).sendCommand<T>(args.map(String)) }
+
+  // EVALSHA, loading the script on NOSCRIPT (a restarted / failed-over server)
+  private async call(name: ScriptName, ...args: Arg[]): Promise<unknown> {
+    const s = SHA[name], c = await getRedis(this.alias)
+    const a = ['1', `${this.base}meta`, this.base, ...args.map(String)]
+    try { return await c.sendCommand(['EVALSHA', s.sha, ...a]) } catch (e) {
+      if (!String((e as Error)?.message).includes('NOSCRIPT')) throw e
+      return c.sendCommand(['EVAL', s.lua, ...a])
+    }
   }
   private now() { return Date.now() }
   private local(e: 'enqueued' | 'moved') { setImmediate(() => bus.emit(e)) }
@@ -432,14 +440,11 @@ export class RedisBroker implements Broker {
     if (await this.call('enqueueUnique', this.now(), JSON.stringify(encRow(job)), key, windowMs, ttlMs)) this.local('enqueued')
   }
 
-  async get(id: string) { return decRow(await this.r.hgetall(`${this.base}j:${id}`)) }
+  async get(id: string) { return decRow(flat(await this.cmd(['HGETALL', `${this.base}j:${id}`]))) }
 
   private async rows(ids: string[]): Promise<JobRow[]> {
-    if (!ids.length) return []
-    const p = this.r.pipeline()
-    for (const id of ids) p.hgetall(`${this.base}j:${id}`)
-    const res = (await p.exec()) ?? []
-    return res.map(([e, h]) => { if (e) throw e; return decRow(h as Record<string, string>) }).filter((j): j is JobRow => !!j)
+    const all = await Promise.all(ids.map((id) => this.cmd(['HGETALL', `${this.base}j:${id}`])))
+    return all.map((h) => decRow(flat(h))).filter((j): j is JobRow => !!j)
   }
 
   async list({ status, queue, limit }: { status?: string; queue?: string; limit: number }) {
@@ -448,8 +453,10 @@ export class RedisBroker implements Broker {
     for (let off = 0; out.length < limit; off += 500) {
       const ids: { id: string; at: number }[] = []
       for (const k of keys) {
-        const z = await this.r.zrevrange(`${this.base}${k}`, off, off + 499, 'WITHSCORES')
-        for (let i = 0; i < z.length; i += 2) ids.push({ id: z[i]!, at: Number(z[i + 1]) })
+        const z = await this.cmd<unknown[]>(['ZREVRANGE', `${this.base}${k}`, off, off + 499, 'WITHSCORES'])
+        // RESP2: [member, score, …]; RESP3: [[member, score], …]
+        if (Array.isArray(z[0])) for (const [id, at] of z as [string, string][]) ids.push({ id, at: Number(at) })
+        else for (let i = 0; i < z.length; i += 2) ids.push({ id: String(z[i]), at: Number(z[i + 1]) })
       }
       if (!ids.length) break
       ids.sort((a, b) => b.at - a.at)
@@ -462,7 +469,7 @@ export class RedisBroker implements Broker {
   async claim({ worker, queues, n, leaseMs, now = this.now(), skipTasks = [] }: Claim) {
     checkClaim(n, queues)
     const token = randomUUID()
-    const [ids, next] = (await this.call('claim', now, worker, token, now + leaseMs, n, queues === '*' ? '*' : JSON.stringify(queues), JSON.stringify(skipTasks.slice(0, 100)))) as [string[], string | false | null]
+    const [ids, next] = (await this.call('claim', now, worker, token, now + leaseMs, n, queues === '*' ? '*' : JSON.stringify(queues), JSON.stringify(skipTasks.slice(0, 100)))) as [string[], string | null]
     const jobs = (await this.rows(ids)).filter((j) => j.token === token)
     jobs.sort((a, b) => b.priority - a.priority || a.runAt - b.runAt)
     return { token, jobs, ...(jobs.length < n && next && { nextAt: Number(next) }) }
@@ -504,7 +511,7 @@ export class RedisBroker implements Broker {
   }
 
   async expired(now: number, limit: number) {
-    const ids = await this.r.zrangebyscore(`${this.base}lease`, '-inf', `(${now}`, 'LIMIT', 0, limit)
+    const ids = await this.cmd<string[]>(['ZRANGEBYSCORE', `${this.base}lease`, '-inf', `(${now}`, 'LIMIT', 0, limit])
     return (await this.rows(ids)).filter((j) => j.status === 'running')
   }
 
@@ -527,6 +534,7 @@ export class RedisBroker implements Broker {
     return total
   }
 
+  // ponytail: redis locks run on the server's clock (PX); the `now` argument (tests, beat) is not used here
   async lock(key: string, owner: string, ttlMs: number) { return (await this.call('lock', key, owner, ttlMs)) === 1 }
   async unlock(key: string, owner: string) { await this.call('unlock', key, owner) }
 
@@ -541,14 +549,14 @@ export class RedisBroker implements Broker {
     return ok
   }
 
-  async register(w: WorkerInfo) { const now = this.now(); await this.r.hset(`${this.base}w`, w.name, JSON.stringify({ ...w, startedAt: now, beatAt: now, running: 0, processed: 0 })) }
+  async register(w: WorkerInfo) { const now = this.now(); await this.cmd(['HSET', `${this.base}w`, w.name, JSON.stringify({ ...w, startedAt: now, beatAt: now, running: 0, processed: 0 })]) }
   async beat(name: string, running: number, processed: number) {
-    const cur = await this.r.hget(`${this.base}w`, name)
-    if (cur) await this.r.hset(`${this.base}w`, name, JSON.stringify({ ...JSON.parse(cur), beatAt: this.now(), running, processed }))
+    const cur = await this.cmd<string | null>(['HGET', `${this.base}w`, name])
+    if (cur) await this.cmd(['HSET', `${this.base}w`, name, JSON.stringify({ ...JSON.parse(cur), beatAt: this.now(), running, processed })])
   }
-  async unregister(name: string) { await this.r.hdel(`${this.base}w`, name) }
+  async unregister(name: string) { await this.cmd(['HDEL', `${this.base}w`, name]) }
   private async workerRows() {
-    return Object.values(await this.r.hgetall(`${this.base}w`)).map((v) => JSON.parse(v) as WorkerInfo & { beatAt: number; running: number; processed: number })
+    return Object.values(flat(await this.cmd(['HGETALL', `${this.base}w`]))).map((v) => JSON.parse(v) as WorkerInfo & { beatAt: number; running: number; processed: number })
   }
 
   async cleanup(now: number, o: Parameters<Broker['cleanup']>[1] = {}) {
@@ -556,11 +564,11 @@ export class RedisBroker implements Broker {
     for (const w of await this.workerRows()) if (w.beatAt < now - 86_400_000) await this.unregister(w.name)
     await this.call('repair', 2 * this.leaseMs)
     // chords a crashed member left 'firing': rebuild the callback and fire it (the CAS keeps it once)
-    for (const gid of await this.r.zrangebyscore(`${this.base}firing`, '-inf', now - 30_000, 'LIMIT', 0, 100)) {
-      const g = await this.r.hgetall(`${this.base}g:${gid}`)
-      if (g.status !== 'firing') { await this.r.zrem(`${this.base}firing`, gid); continue }
+    for (const gid of await this.cmd<string[]>(['ZRANGEBYSCORE', `${this.base}firing`, '-inf', now - 30_000, 'LIMIT', 0, 100])) {
+      const g = flat(await this.cmd(['HGETALL', `${this.base}g:${gid}`]))
+      if (g.status !== 'firing') { await this.cmd(['ZREM', `${this.base}firing`, gid]); continue }
       const parent = g.firingBy ? await this.get(g.firingBy) : undefined
-      const members = await this.rows(await this.r.zrange(`${this.base}gm:${gid}`, 0, -1))
+      const members = await this.rows(await this.cmd<string[]>(['ZRANGE', `${this.base}gm:${gid}`, 0, -1]))
       let cb: NewJob | undefined
       try { cb = parent && o.callback?.(JSON.parse(g.callback!) as SigJSON, members.map((m) => m.result), parent) } catch { cb = undefined }
       await this.call('chordFire', this.now(), gid, cb ? JSON.stringify(encRow(cb)) : '', parent?.purgeAt ?? now + 86_400_000)
@@ -569,28 +577,31 @@ export class RedisBroker implements Broker {
 
   async stats(leaseMs: number): Promise<QueueStats> {
     const now = this.now()
-    const [queued, scheduled, running, dead] = await Promise.all(['queued', 'scheduled', 'running', 'dead'].map((s) => this.r.zcard(`${this.base}st:${s}`)))
+    const [queued, scheduled, running, dead] = await Promise.all(['queued', 'scheduled', 'running', 'dead'].map((s) => this.cmd<number>(['ZCARD', `${this.base}st:${s}`])))
     const workers = (await this.workerRows()).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 200)
     return {
-      queued: queued!, scheduled: scheduled!, running: running!, dead: dead!,
+      queued: Number(queued), scheduled: Number(scheduled), running: Number(running), dead: Number(dead),
       workers: workers.map((w) => ({ name: w.name, queues: w.queues, running: w.running, processed: w.processed, beatAgoMs: now - w.beatAt, stale: now - w.beatAt > leaseMs })),
     }
   }
 
-  // one subscriber connection per broker: `wake` for workers, `moved` for the progress relay
+  // the alias's shared subscriber connection: `wake` for workers, `moved` for the progress relay
   private subscribe(): void {
-    if (this.sub) return
-    const sub = (this.sub = connect(this.alias))
-    void sub.subscribe(`${this.base}wake`, `${this.base}moved`).catch(() => undefined)
-    sub.on('message', (ch: string, msg: string) => {
-      if (ch === `${this.base}wake`) { for (const f of [...this.wakeFns]) { try { f() } catch { /* listener */ } } return }
-      let m: Record<string, unknown>
-      try { m = JSON.parse(msg) as Record<string, unknown> } catch { return }
-      const v = (x: unknown) => (x === false || x === undefined ? null : x)
-      const mv: Moved = { id: String(m.id), task: String(m.task), status: shown(m.status as StoreStatus), progress: v(m.progress) === null ? null : Number(m.progress), message: v(m.message) as string | null, sid: v(m.sid) as string | null, userId: v(m.userId) as string | null }
-      for (const f of [...this.movedFns]) { try { f(mv) } catch { /* a watcher's own failure */ } }
-    })
-    this.timer = setInterval(() => { for (const f of [...this.wakeFns]) { try { f() } catch { /* listener */ } } }, this.safetyMs)
+    if (this.subscribed) return
+    const wakeAll = () => { for (const f of [...this.wakeFns]) { try { f() } catch { /* listener */ } } }
+    this.subscribed = (async () => {
+      const sub = await getSubscriber(this.alias)
+      await sub.SUBSCRIBE(`${this.base}wake`, () => wakeAll())
+      await sub.SUBSCRIBE(`${this.base}moved`, (msg) => {
+        let m: Record<string, unknown>
+        try { m = JSON.parse(msg) as Record<string, unknown> } catch { return }
+        const v = (x: unknown) => (x === false || x === undefined ? null : x)
+        const mv: Moved = { id: String(m.id), task: String(m.task), status: shown(m.status as StoreStatus), progress: v(m.progress) === null ? null : Number(m.progress), message: v(m.message) as string | null, sid: v(m.sid) as string | null, userId: v(m.userId) as string | null }
+        for (const f of [...this.movedFns]) { try { f(mv) } catch { /* a watcher's own failure */ } }
+      })
+    })()
+    this.subscribed.catch(() => { this.subscribed = undefined })   // redis down: the safety poll keeps workers going
+    this.timer = setInterval(wakeAll, this.safetyMs)
     this.timer.unref()
   }
 
@@ -606,11 +617,17 @@ export class RedisBroker implements Broker {
     return () => { this.wakeFns.delete(fn) }
   }
 
+  // ready: subscribed (tests wait for it before relying on a push)
+  async ready(): Promise<void> { this.subscribe(); await this.subscribed }
+
   async close() {
     clearInterval(this.timer)
     this.wakeFns.clear(); this.movedFns.clear()
-    const s = this.sub
-    this.sub = undefined
-    if (s) await s.quit().catch(() => s.disconnect())
+    if (this.subscribed) {
+      await this.subscribed.catch(() => undefined)
+      const sub = await getSubscriber(this.alias).catch(() => undefined)
+      await sub?.UNSUBSCRIBE([`${this.base}wake`, `${this.base}moved`]).catch(() => undefined)
+    }
+    this.subscribed = undefined
   }
 }

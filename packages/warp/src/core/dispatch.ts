@@ -4,17 +4,18 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
-import { MemoryChannelLayer } from './channels.js'
+import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
 import { siteRedirect } from './redirect.js'
 import { ev, isTerminal } from './events.js'
 import { compose, deepFreeze, Hooks } from './middleware.js'
-import { SessionStore } from './session.js'
+import { SessionBusy, SessionStore } from './session.js'
+import { channelsFor, idempotencyFor, limiterFor, marksFor, sessionsFor } from '../backends/index.js'
 import type { ActionCtx, ActionDef, ChannelLayer, Command, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
-import { hashParams, IdempotencyCache } from '../security/idempotency.js'
+import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
-import { RateLimiter } from '../security/ratelimit.js'
+import type { Limiter } from '../security/ratelimit.js'
 import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
@@ -27,14 +28,20 @@ export interface ServerCtx {
   snapshot: (route: string, sid: Sid) => Promise<Snapshot>
   settings: Settings
   channels: ChannelLayer           // the same layer the SessionStore was built on
-  limiter: RateLimiter
-  idempotency: IdempotencyCache
+  limiter: Limiter                 // settings.limits.backend (backends/index.ts)
+  idempotency: Idempotency
   log: Log
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
   route?: (path: string) => string | undefined   // the site's route matcher (createAgentServer): redirect targets must match
   // transport/tab: true while a remote agent's forwarded command is running in a tab of this session
-  tabs?: { forcedAgent(sid: Sid): boolean }
+  tabs?: { forcedAgent(sid: Sid): boolean | Promise<boolean> }
+  // a shared snapshot cache (snapshotCache.backend 'redis'): resolves once this process's committed writes are
+  // visible to every server's cache. Awaited after a commit, before the reply.
+  settle?: () => Promise<void>
+  // tab agent marking shared across servers (limits.backend 'redis'): set(sid, ms) marks the session agent for ms
+  // (0 clears), has(sid) reads it. Absent = in-process only (transport/tab.ts keeps its own maps).
+  marks?: { set(sid: Sid, ms: number): Promise<void>; has(sid: Sid): Promise<boolean> }
   appsDir?: string                 // the project's apps/ (createAgentServer): contrib apps' ready() discover more modules from it
   health: Map<string, () => unknown>   // extra /tvine/health sections (sync, cheap: e.g. tvine.tasks' cached queue stats)
   onClose(fn: () => unknown): void // run fn on close() (an app's ready() timers, relays)
@@ -56,16 +63,19 @@ const watching = new WeakMap<SessionStore, WeakSet<Hooks>>()   // one session wa
 // ponytail: setOnCommitErrorHandler is process-global, so the last ServerCtx built owns it (single-process v1).
 export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'> & Partial<ServerCtx>): ServerCtx {
   const { settings } = o
-  const channels = o.channels ?? new MemoryChannelLayer()
   const log: Log = o.log ?? (settings.logging === 'none' ? () => {} : (level, msg, data) => console[level](JSON.stringify({ level, msg, ...data })))
+  // backends from settings (backends/index.ts): memory by default, 'redis' shares them across servers
+  const channels = o.channels ?? channelsFor(settings, log)
   const closers: (() => unknown)[] = []
+  if (!o.channels && 'close' in channels) closers.push(() => (channels as { close(): unknown }).close())
   const ctx: ServerCtx = {
     ...o, channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
     hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
     appMiddleware: o.appMiddleware ?? new Map(),
-    sessions: o.sessions ?? new SessionStore(settings.session, { channels }),
-    limiter: o.limiter ?? new RateLimiter(settings.limits.rate),
-    idempotency: o.idempotency ?? new IdempotencyCache(settings.session.ttlMs),
+    sessions: o.sessions ?? sessionsFor(settings, { channels }, log),
+    limiter: o.limiter ?? limiterFor(settings),
+    idempotency: o.idempotency ?? idempotencyFor(settings),
+    marks: o.marks ?? marksFor(settings),
   }
   const w = watching.get(ctx.sessions) ?? new WeakSet<Hooks>()
   watching.set(ctx.sessions, w)
@@ -124,8 +134,8 @@ export async function collect(events: AsyncIterable<Event>): Promise<Event[]> {
 }
 
 // {sid, rev, page} for serialize render(): err events without a snapshot carry none themselves.
-export function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, request: Request): Ctx {
-  const s = rotatedSession(request) ?? server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
+export async function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, request: Request): Promise<Ctx> {
+  const s = rotatedSession(request) ?? await server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
   return { sid: s?.sid ?? cmd.sid ?? '', rev: s?.rev ?? 0, page: pageOf(request) }
 }
 
@@ -151,7 +161,8 @@ function cookieOf(r: Request, s: Settings): string | undefined {
 }
 
 // Next's server-action check, kept for every path into dispatch: a browser Origin must match the host.
-// No Origin (curl, SDKs, MCP clients) passes. ponytail: no allowedOrigins list yet; add with settings when needed.
+// No Origin (curl, SDKs, MCP clients) passes. A foreign Origin passes only where settings.cors opted it in
+// for this endpoint + method (core/cors-match corsAllows); the human <Form> path never.
 // the public host of the request (X-Forwarded-Host only through trusted proxies)
 const hostOf = (r: Request, s: Settings) => ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase() || undefined
 
@@ -159,7 +170,9 @@ export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
   const host = hostOf(r, s)
-  try { return new URL(origin).host !== host } catch { return true }
+  let same: boolean
+  try { same = new URL(origin).host === host } catch { return true }
+  return !same && !corsAllows(r, s, origin)
 }
 
 // One command at a time per sid: rev bumps and session.data writes never interleave. The queue depth
@@ -208,31 +221,36 @@ type Ran = { sid: Sid | undefined; events: Event[] }   // sid: the session the c
 
 async function run(cmd: Command, server: ServerCtx, request: Request): Promise<Ran> {
   const { settings, sessions } = server
-  const peeked = () => sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) })?.sid
-  if (crossOrigin(request, settings)) return { sid: peeked(), events: [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })] }
+  const peeked = async () => (await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }))?.sid
+  if (crossOrigin(request, settings)) return { sid: await peeked(), events: [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })] }
   // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
   const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
-  const known = cmd.cmdId && sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) })
+  const known = cmd.cmdId ? await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }) : undefined
   if (known) {
-    const r = server.idempotency.replay(known.sid, cmd.cmdId!, hash)
+    const r = await server.idempotency.replay(known.sid, cmd.cmdId!, hash)
     if (r.hit === true) return { sid: known.sid, events: r.events }
   }
   // 3a. ip + default sid bucket first: abusive traffic never creates sessions or queues (3b, an action's own rate, runs later)
-  const rl = server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
-  if (!rl.ok) return { sid: peeked(), events: [rateLimited(rl.retryAfterMs)] }
+  const rl = await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
-  const session = sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
+  const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
   if (!session) {
-    const fresh = sessions.create()
+    const fresh = await sessions.create()
     return { sid: fresh.sid, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })] }
   }
   const { sid } = session
   await authenticate(settings, request, session)   // request.user from this session (core/auth.ts; no-op without an auth app)
   const original = request
-  request = asAgent(cmd, server, request, sid)
+  request = await asAgent(cmd, server, request, sid)
   if (request !== original) aliasRequest(request, original)   // a rotation in the pipeline reaches the transport's request too
   const hold: Hold = {}
-  if (!cmd.cmdId) return { sid, events: await serial(sid, () => pipeline(cmd, server, request, session, '', hold)) }
+  // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
+  const locked = (fn: () => Promise<Event[]>) => serial(sid, () => sessions.lock(sid, fn).catch((e: unknown) => {
+    if (e instanceof SessionBusy) return [rateLimited(1000)]
+    throw e
+  }))
+  if (!cmd.cmdId) return { sid, events: await locked(() => pipeline(cmd, server, request, session, '', hold)) }
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
   const key = `${sid}:${cmd.cmdId}`
   const running = inFlight.get(key)
@@ -240,7 +258,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     const r = await running
     return { sid, events: r.hash === hash ? r.events : [conflict()] }
   }
-  const p = serial(sid, () => pipeline(cmd, server, request, session, hash, hold)).then((events) => ({ hash, events }))
+  const p = runOnce(server, sid, cmd.cmdId, hash, hold, () => locked(() => pipeline(cmd, server, request, session, hash, hold))).then((events) => ({ hash, events }))
   inFlight.set(key, p)
   try { return { sid, events: (await p).events } } finally {
     // held until the handler itself settles (not the timeout): a retry never runs it a second time
@@ -248,12 +266,32 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   }
 }
 
+// A shared idempotency store (limits.backend 'redis'): the sid:cmdId is claimed across servers while it runs. A
+// retry that reaches another server meanwhile waits for the stored result instead of running it a second time.
+// The claim is released when the handler itself settles (like inFlight), or by its TTL if this process dies.
+async function runOnce(server: ServerCtx, sid: Sid, cmdId: string, hash: string, hold: Hold, run: () => Promise<Event[]>): Promise<Event[]> {
+  const idem = server.idempotency
+  if (!idem.claim) return run()
+  const ttl = 4 * server.settings.limits.handlerMs + 15_000
+  const until = Date.now() + ttl
+  while (!(await idem.claim(sid, cmdId, ttl))) {
+    const r = await idem.replay(sid, cmdId, hash)
+    if (r.hit === 'conflict') return [conflict()]
+    if (r.hit) return r.events
+    if (Date.now() > until) return [rateLimited(1000)]
+    await new Promise((ok) => setTimeout(ok, 50))
+  }
+  try { return await run() } finally {
+    void Promise.resolve(hold.settled).catch(() => undefined).then(() => idem.release!(sid, cmdId)).catch(() => undefined)
+  }
+}
+
 // security.md invariant 3: the agent flag is downgrade-only. agentCmd (the client marks a request it sends for
 // an agent) can only make a request agent; and while a remote agent's forwarded command runs in a tab of this
 // session, EVERY request of the session is agent, whatever the client says (a page handler calling an api,
 // a form path, a client that drops the flag). So denyAgents holds on every path through a controlled tab.
-function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Request {
-  const forced = server.tabs?.forcedAgent(sid) === true
+async function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Promise<Request> {
+  const forced = (await server.tabs?.forcedAgent(sid)) === true
   if (!forced && cmd.agentCmd === undefined) return request
   const claim = cmd.agentCmd?.via
   // 'inspector' = the dev gallery's try-it (weft dev/Gallery.tsx); meaningless in production (no gallery there)
@@ -280,18 +318,18 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   const { settings } = server, { sid } = session
   // C1: resolved before the queue; while it waited, a login/logout may have rotated this session away (or it
   // expired). Refuse without any sid or snapshot: the new sid belongs to whoever ran the rotating command.
-  if (!server.sessions.isLive(session)) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
+  if (!(await server.sessions.isLive(session))) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
   let live = session   // the session after this command (a rotation replaces it)
   // 2b. idempotency replay
   if (cmd.cmdId) {
-    const r = server.idempotency.replay(sid, cmd.cmdId, hash)
+    const r = await server.idempotency.replay(sid, cmd.cmdId, hash)
     if (r.hit === 'conflict') return [conflict()]
     if (r.hit) return r.events
   }
   // 3b. an action's own rate: a bucket keyed by sid + action id
   const def = server.actions.get(cmd.action)
   if (def?.rules?.rate) {
-    const rl = server.limiter.check({ sid, action: def.id }, def.rules.rate)
+    const rl = await server.limiter.check({ sid, action: def.id }, def.rules.rate)
     if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
   }
   // 4. resolve action
@@ -335,11 +373,14 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       // 9. committed: apply staged session data, bump rev, flush channel events
       try {
         session.data = staged.data
-        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
+        if (!def.rules?.readOnly) await server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
+        else await server.sessions.save(session)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
         // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
-        if (wantsCycle(staged)) { live = server.sessions.rotate(session); markRotated(request, live) }
+        if (wantsCycle(staged)) { live = await server.sessions.rotate(session); markRotated(request, live) }
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
+      // every server's snapshot cache sees this commit before anyone gets the reply
+      try { await server.settle?.() } catch (e) { server.log('error', 'shared cache invalidation failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
       if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
@@ -390,7 +431,10 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       server.log('error', 'middleware dropped the committed result', { action: def.id })
       events = committed
     }
-    if (committed && cmd.cmdId) server.idempotency.remember(sid, cmd.cmdId, hash, events)
+    if (committed && cmd.cmdId) {
+      try { await server.idempotency.remember(sid, cmd.cmdId, hash, events) }
+      catch (e) { server.log('error', 'idempotency store failed', { action: def.id, error: errStr(e) }) }   // committed: never report failure
+    }
     return events
   } catch (e) {
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]

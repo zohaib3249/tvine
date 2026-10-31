@@ -79,7 +79,7 @@ export function memorySource<T extends { id: string | number }>(items: T[]): Dat
       rows.sort((x, y) => cmpKeys(keys(x, order), keys(y, order), order))
       if (spec.cursor) {
         const cv = decodeCursor(spec.cursor)
-        if (cv.length !== order.length) throw new Error('invalid cursor')
+        if (cv.length !== order.length) throw new DomainError('invalid_param', 'invalid cursor', 'cursor')
         rows = rows.filter(r => cmpKeys(keys(r, order), cv, order) > 0)
       }
       return { items: rows.slice(0, spec.limit) as unknown as T[], total }

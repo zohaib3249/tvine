@@ -3,6 +3,7 @@ import type { ChannelLayer, Event, Settings } from '../core/types.js'
 import type { SessionStore } from '../core/session.js'
 import { clientIp } from '../core/request.js'
 import { ev } from '../core/events.js'
+import { RING } from '../core/channels.js'
 import { render } from '../serialize/envelope.js'
 import { ipKey } from '../security/ratelimit.js'
 import type { Frame, TabHub } from './tab.js'
@@ -10,7 +11,6 @@ import type { Frame, TabHub } from './tab.js'
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
 const HEARTBEAT_MS = 25_000
 const MAX_BUF = 1_048_576 // close streams whose client stopped reading
-const RING = 64 // must match MemoryChannelLayer's ring size
 
 export interface Clock { setInterval(fn: () => void, ms: number): unknown; clearInterval(h: unknown): void }
 export interface ChannelDeps {
@@ -54,7 +54,10 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
   return (req, res, next) => {
     const url = new URL(req.url ?? '/', 'http://x')
     if (req.method !== 'GET' || url.pathname !== '/tvine/channel') return next()
+    void stream(req, res, url).catch(() => { if (!res.headersSent) res.writeHead(500).end(); else res.destroy() })
+  }
 
+  async function stream(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const json = (code: number, e: Event, sid = '', rev = 0) => {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(render([e], 'json', settings, { ctx: { sid, rev, page: '' } }))
@@ -70,17 +73,16 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)
     const sidKey = hdr('x-tvine-sid') ?? url.searchParams.get('sid') ?? undefined
-    const lookup = (f: SessionStore['resolve']) => (cookie !== undefined && f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
-    const resolve = () => lookup(sessions.resolve)
-    const session = inspector ? undefined : resolve()
-    const byCookieSession = () => session !== undefined && cookie !== undefined && sessions.peek({ cookie }) === session
+    const lookup = async (f: SessionStore['resolve']) => (cookie !== undefined && await f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
+    const session = inspector ? undefined : await lookup(sessions.resolve)
+    const cookieSession = session !== undefined && cookie !== undefined && await sessions.peek({ cookie }) === session
     // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
-    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && byCookieSession()
+    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && cookieSession
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
     const sid = session?.sid ?? ''
     // I3: a stream authenticated by the httpOnly cookie never carries the sid (page script, XSS included, must
     // not learn it); an agent's sid-keyed stream already knows its own sid.
-    const byCookie = byCookieSession()
+    const byCookie = cookieSession
     const ctx = () => ({ sid: byCookie ? '' : sid, rev: session?.rev ?? 0, page: '' })
 
     if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid)   // I3: never the cookie session's sid
@@ -129,22 +131,35 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
       untab = () => deps.tabs!.gone(tabId, tf)
     }
 
+    // subscribe first, replay second: an event sent while the replay is read is held, then sent once (by seq)
+    let held: { e: Event; seq: number }[] | undefined = []
+    let shown = 0
+    const live = (e: Event, seq: number) => { if (!closed && seq > shown) { shown = seq; safe(() => frame(e, seq)) } }
+    unsub = group.add((e, seq) => { if (held) held.push({ e, seq }); else live(e, seq) })
     const last = hdr('last-event-id')
     if (last !== undefined && /^\d+$/.test(last)) {
-      const missed = group.since(Number(last))
-      // ponytail: a full ring after a cursor can't be told from a truncated one (no seq exposed); treat as gap.
-      if (missed.length >= RING) safe(() => frame(ev.err('stale_rev', 'missed events fell out of the buffer; re-GET a snapshot'), channels.head()))
-      else safe(() => { for (const [i, e] of missed.entries()) { if (closed) break; frame(e, i === missed.length - 1 ? channels.head() : undefined) } })
+      const missed = await group.since(Number(last))
+      // ponytail: a full ring after a cursor can't be told from a truncated one (cursors are global); treat as gap.
+      if (missed.length >= RING) safe(() => frame(ev.err('stale_rev', 'missed events fell out of the buffer; re-GET a snapshot'), missed[missed.length - 1]!.seq))
+      else for (const [i, r] of missed.entries()) { if (closed) break; safe(() => frame(r.e, i === missed.length - 1 ? r.seq : undefined)) }
+      shown = Math.max(shown, missed[missed.length - 1]?.seq ?? 0)
     }
-
-    // send() pushes to the ring before fan-out, so head() is this event's cursor.
-    unsub = group.add((e) => { if (!closed) safe(() => frame(e, channels.head())) })
+    const queued = held
+    held = undefined
+    for (const r of queued) live(r.e, r.seq)
     if (inspector && deps.watchInspector && !closed) release = deps.watchInspector()
 
     timer = clock.setInterval(() => {
       if (closed) return
       // Expiry doesn't notify subscribers (core-session): poll here and end the stream.
-      if (!inspector && !lookup(sessions.peek)) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close(true) }
+      if (!inspector) {
+        void lookup(sessions.peek).then((s) => {
+          if (closed) return
+          if (!s) { safe(() => frame(ev.err('expired_sid', 'session expired'))); return close(true) }
+          safe(() => { res.write(': ping\n\n'); if (res.writableLength > MAX_BUF) close() })
+        }, () => safe(() => { res.write(': ping\n\n') }))   // a store hiccup is not an expiry
+        return
+      }
       safe(() => { res.write(': ping\n\n'); if (res.writableLength > MAX_BUF) close() })
     }, HEARTBEAT_MS)
   }

@@ -65,17 +65,19 @@ export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal'
 
-// channels.md: named pub/sub groups. Implementation: core/channels.ts (MemoryChannelLayer).
+// channels.md: named pub/sub groups. Implementations: core/channels.ts (memory), backends/redis.ts (redis:
+// fan-out across servers, replay from a stream). seq = the event's cursor (SSE `id:`); one counter for the layer.
 export interface ChannelLayer {
   group(name: string): {
-    add(subscriber: (e: Event) => void): () => void   // returns unsubscribe
-    send(e: Event): void
-    size(): number                                    // live subscribers
-    since(cursor: number): Event[]                    // ring events after a cursor (Last-Event-ID)
+    add(subscriber: (e: Event, seq: number) => void): () => void   // returns unsubscribe
+    send(e: Event): void                                          // fire and forget; delivery may be async
+    size(): number                                                // live subscribers in this process
+    since(cursor: number): Replayed[] | Promise<Replayed[]>       // ring events after a cursor (Last-Event-ID)
   }
-  head(): number                                      // cursor of the latest event on any group
+  head(): number                                      // cursor of the latest event this process has seen
   drop(name: string): void                            // remove a group's ring and subscribers
 }
+export interface Replayed { seq: number; e: Event }
 
 // request.md: the per-call request object.
 export interface ReadonlyHeaders {
@@ -116,7 +118,7 @@ export interface Request {
   }
   files: UploadedFile[]                 // media uploads (empty unless multipart)
   user: TvineUser                      // ALWAYS present; anonymous = ANONYMOUS
-  raw?: IncomingMessage                 // escape hatch, http transport only
+  raw?: IncomingMessage                 // escape hatch: http + api (browser) transports
 }
 
 export interface Session {
@@ -175,24 +177,57 @@ export interface ActionRules {
 }
 
 // Canonical shape: docs/design/conventions/settings.md (zod schema arrives in Task 2).
+// server/security-headers.md
+export interface SecurityHeaders {
+  enabled: boolean
+  hsts: false | { maxAge: number; includeSubDomains: boolean; preload: boolean }   // https only
+  csp: false | {
+    reportOnly: boolean
+    directives: Record<string, string[] | false>   // over the built-in defaults; false drops one
+    reportUri: string | false                      // '/tvine/csp-report' = ours (mounted); another URL = external
+    staticPages: 'relaxed' | 'strict'              // prerendered (nonce-less) HTML: 'self' 'unsafe-inline' scripts, or keep the nonce policy
+  }
+  referrerPolicy: string
+  coop: false | 'same-origin' | 'same-origin-allow-popups' | 'unsafe-none'
+  corp: false | 'same-origin' | 'same-site' | 'cross-origin'
+  permissionsPolicy: Record<string, string[] | false>   // feature → allowlist ([] = nobody, ['self'], origins)
+}
+export type CorsOrigin = string | RegExp   // exact origin, '*' (never with credentials), or an anchored RegExp
+export interface CorsPolicy {
+  origins: CorsOrigin[]
+  methods: string[]
+  allowHeaders: string[]
+  exposeHeaders: string[]
+  credentials: boolean
+  maxAge: number
+}
+export interface CorsSettings extends CorsPolicy { routes: ({ path: string } & Partial<CorsPolicy>)[] }
+export interface CompressionSettings { enabled: boolean; threshold: number; brotli: boolean; gzipLevel: number; brotliQuality: number }
+
 export interface Settings {
   site: { name: string; description: string }
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust
-  session: { ttlMs: number; cookieName: string; max: number }   // max: live sessions kept; past it the least recently used is evicted
+  // Named connections (docs/design/conventions/backends.md). `default` falls back to REDIS_URL. Every subsystem
+  // whose backend is 'redis' names one of these (its `redis` key, default 'default').
+  redis: Record<string, RedisConnection>
+  session: { ttlMs: number; cookieName: string; max: number   // max: live sessions kept; past it the least recently used is evicted
+    backend: Backend; redis: string }
+  channels: { backend: Backend; redis: string }                 // pub/sub fan-out + Last-Event-ID replay
   limits: {
     bodyBytes: number
     handlerMs: number
     rate: { limit: number; windowMs: number }
     sseConnPerIp: number
+    backend: Backend; redis: string                               // rate limits, idempotency, login throttle, tab agent marks
   }
   socket: boolean
   mcp: { tools: 'both' | 'generic' | 'typed'; exclude: string[]; maxTools: number }
   middleware: Middleware[]
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string }
-  snapshotCache: { ttlMs: number }      // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
+  snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
     url: string
@@ -205,17 +240,23 @@ export interface Settings {
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
+  security: { headers: SecurityHeaders }
+  cors: CorsSettings                // default closed: no routes
+  compression: CompressionSettings
   // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
-  // SIGTERM grace, how long final job rows are kept; the job store (§Brokers): broker kind, the file broker's path and
-  // power-cut durability, how many jobs one claim takes, the named redis connection (settings.redis alias)
-  tasks: {
-    leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
-    broker: 'file' | 'memory' | 'redis' | 'db'; file: string; durable: boolean; claimBatch: number; redis?: string
-  }
+  // SIGTERM grace, how long final job rows are kept
+  // broker: the job store (tvine.tasks picks the default: 'file'); redis: the settings.redis alias a 'redis' broker
+  // uses; file / durable: the file broker's tasks.db path and power-cut durability; claimBatch: jobs per claim
+  tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
+    broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
 }
+
+export type Backend = 'memory' | 'redis'
+// settings.redis.<alias>. url: redis:// or rediss:// (TLS); prefix: every key this connection writes starts with it.
+export interface RedisConnection { url: string; tls?: boolean; prefix?: string; connectTimeoutMs?: number }
 
 // settings.auth: `user` is the BYO resolver (overrides everything); the rest configures tvine.auth
 // (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.

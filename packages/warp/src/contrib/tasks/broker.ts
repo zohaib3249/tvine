@@ -375,7 +375,7 @@ let conf: TasksSettings = DEFAULTS.tasks
 let current: Broker | undefined
 
 export function openBroker(t: TasksSettings): Broker {
-  switch (t.broker) {
+  switch (t.broker ?? 'file') {
     case 'db': return dbBroker()
     case 'memory': return memoryBroker()
     case 'redis': return redisBroker({ alias: t.redis ?? 'default', leaseMs: t.leaseMs })

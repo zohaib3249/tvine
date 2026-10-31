@@ -1,5 +1,8 @@
 // tvine worker / tvine tasks (docs/design/contrib/tasks.md §Worker, §Ops). Called from the main CLI.
+import { snapshotCacheFor } from '../../backends/index.js'
 import { connections } from '../../data/db.js'
+import { dataVersion } from '../../data/engine.js'
+import { closeRedis, configureRedis } from '../../redis/index.js'
 import type { Settings } from '../../core/types.js'
 import { Beat } from './beat.js'
 import { broker, closeBroker } from './broker.js'
@@ -28,6 +31,7 @@ async function boot(apps: string, settings: Settings, cmd: string) {
   if (settings.tasks.broker === 'memory' && cmd !== 'bench') throw new Error(MEMORY)
   configureTasks(settings.tasks)
   connections.configure(settings)
+  configureRedis(settings)
   return discoverTasks(apps, settings.installedApps)
 }
 
@@ -38,6 +42,15 @@ const int = (v: unknown, name: string, min: number): number | undefined => {
   return n
 }
 
+// Job handlers write the app's database from this process: with a shared snapshot cache (snapshotCache.backend
+// 'redis') those commits must bump the shared version too, exactly like a web server's, or the web servers would keep
+// serving pre-job snapshots until the TTL. With the in-process cache there is nothing shared to tell: say so once.
+export function workerCache(settings: Settings, log: Log): ReturnType<typeof snapshotCacheFor> {
+  const c = settings.snapshotCache
+  if (c.backend !== 'redis' && c.ttlMs > 0) log('warn', 'worker.snapshotCache', { msg: "snapshotCache.backend is 'memory': the web servers' cached snapshots do not see job writes until ttlMs passes; use backend 'redis' to invalidate them at once" })
+  return snapshotCacheFor(settings, dataVersion, log)
+}
+
 export async function workerCommand(apps: string, settings: Settings, o: Flags, io: Io): Promise<undefined> {
   const found = await boot(apps, settings, 'worker')
   const log = logger(settings.logging)
@@ -45,10 +58,11 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   const w = new Worker({ name: o.name as string | undefined, queues, concurrency: int(o.concurrency, 'concurrency', 0), graceMs: int(o.grace, 'grace', 0), log })
   const beat = o.beat ? new Beat({ log }) : undefined
   const outbox = new OutboxRelay(log)
+  const cache = workerCache(settings, log)
   await w.start()
   beat?.start()
   outbox.start()
-  io.out(`worker ${w.name}: ${found.length} task(s), broker ${settings.tasks.broker}, queues ${queues === '*' ? '*' : queues.join(',')}, concurrency ${w.concurrency}${beat ? ', beat' : ''}`)
+  io.out(`worker ${w.name}: ${found.length} task(s), broker ${settings.tasks.broker ?? 'file'}, queues ${queues === '*' ? '*' : queues.join(',')}, concurrency ${w.concurrency}${beat ? ', beat' : ''}`)
   let stopping = false
   const stop = () => {
     if (stopping) { io.err('tvine worker: second signal, exiting now'); io.exit(1); return }
@@ -58,8 +72,11 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
       await beat?.stop()
       await outbox.stop()
       await w.stop()
+      await cache.settle?.()
+      cache.close?.()
       await closeBroker()
       await connections.closeAll()
+      await closeRedis()
     })().then(() => io.exit(0), (e: unknown) => { io.err(`tvine worker: stop failed: ${String(e)}`); io.exit(1) })
   }
   process.on('SIGTERM', stop); process.on('SIGINT', stop)
@@ -116,5 +133,5 @@ export async function tasksCommand(apps: string, settings: Settings, args: strin
         io.err('usage: tvine tasks list [--status s] [--queue q] [--limit n] | inspect <jobId> | retry <jobId> | purge --dead | compact | bench [--jobs n] [--workers n] [--batch n]')
         return 1
     }
-  } finally { await closeBroker(); await connections.closeAll() }
+  } finally { await closeBroker(); await connections.closeAll(); await closeRedis() }
 }

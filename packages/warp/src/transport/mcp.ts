@@ -162,14 +162,14 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       if (name === 'release') {
         const p = releaseIn.safeParse(args)
         if (!p.success) return bad(server, p.error)
-        if (server.sessions.peek({ sid: p.data.sid })) tabs.releaseAgent(p.data.sid)
+        if (await server.sessions.peek({ sid: p.data.sid })) tabs.releaseAgent(p.data.sid)
         return json({ kind: 'ok', action: 'release', sid: p.data.sid })
       }
       const p = controlIn.safeParse(args)
       if (!p.success) return bad(server, p.error)
       // the session is created only after the ip rate check (a refused request creates none)
-      const sid = () => ((p.data.sid ? server.sessions.resolve({ sid: p.data.sid }) : undefined) ?? server.sessions.create()).sid
-      const r = tabs.request(sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base: caller.base ?? '' })
+      const sid = async () => ((p.data.sid ? await server.sessions.resolve({ sid: p.data.sid }) : undefined) ?? await server.sessions.create()).sid
+      const r = await tabs.request(sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base: caller.base ?? '' })
       if (!r.ok) return json({ kind: 'err', ...r, ok: undefined })
       return json({ kind: 'ok', action: 'request_control', sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
     }
@@ -220,8 +220,8 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const request = await requestFor(server, opts, src, url, sid)
     if (!request) return notPage(server, url)
     if (request === FORBIDDEN) return forbidden(server)
-    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], renderCtx(server, cmd, request))
-    return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
+    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], await renderCtx(server, cmd, request))
+    return reply(server, await collect(dispatch(cmd, server, request)), await renderCtx(server, cmd, request))
   }
   return srv
 }
@@ -274,7 +274,7 @@ const notPage = (server: ServerCtx, url: string) =>
 // reply()), so disabled ids can't be probed. No live session → no snapshot (never creates one).
 async function unknownAction(server: ServerCtx, cmd: Command, request: Request): Promise<Event> {
   const msg = `unknown action ${String(cmd.action).slice(0, 100)}`
-  const session = server.sessions.peek({ sid: cmd.sid })
+  const session = await server.sessions.peek({ sid: cmd.sid })
   if (!session) return ev.err('unknown_action', msg)
   const page = pagePath(request)
   try { return ev.err('unknown_action', msg, { snapshot: await server.snapshot(page, session.sid) }) }
@@ -296,7 +296,7 @@ async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: st
   let path: string
   try { path = decodeURIComponent(u.pathname) } catch { return undefined }
   const request = await buildRequest({ ...src, url: u.pathname + u.search, route }, server.settings)
-  return (await guardCheck(server.settings)(path, request, server.sessions.peek({ sid }))) ? request : FORBIDDEN
+  return (await guardCheck(server.settings)(path, request, await server.sessions.peek({ sid }))) ? request : FORBIDDEN
 }
 
 // read_page (view) and expand (L2 of one node from the session's cached snapshot; unknown id → L0 map).
@@ -304,7 +304,7 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: str
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
-  const session = server.sessions.resolve({ sid: a.sid }) ?? server.sessions.create()
+  const session = (await server.sessions.resolve({ sid: a.sid })) ?? await server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   return rendering(server, ctx, async () => {
     const t0 = performance.now()
@@ -325,13 +325,13 @@ async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<type
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
-  const known = a.sid === undefined ? undefined : server.sessions.resolve({ sid: a.sid })
-  const session = known ?? server.sessions.create()
+  const known = a.sid === undefined ? undefined : await server.sessions.resolve({ sid: a.sid })
+  const session = known ?? await server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   if (a.sid !== undefined && !known) {   // like dispatch: a dead sid never runs steps; a fresh sid + snapshot to restart
     return rendering(server, ctx, async () => reply(server, [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await server.snapshot(ctx.page, session.sid) })], ctx))
   }
-  const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
+  const rl = await server.limiter.check({ ip: request.ip, sid: session.sid })
   if (!rl.ok) return reply(server, [rateLimited(rl.retryAfterMs)], ctx)
   return rendering(server, ctx, async () => {
     const at = async (pg: string) => { const r = await requestFor(server, opts, src, pg, session.sid); return r && r !== FORBIDDEN ? r : undefined }

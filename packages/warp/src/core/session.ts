@@ -7,42 +7,45 @@ import { dataVersion } from '../data/engine.js'
 export const SNAP_CAP = 5000, SNAP_PER_SID = 8
 
 // core-session.md: one store, two keys (sid for agents, cookie for humans), per-sid event group.
+// The API is async because the store may be shared (settings.session.backend = 'redis', backends/redis.ts):
+// this class is the in-process ('memory') store AND the local object cache a shared store builds on. Within one
+// process a sid always maps to ONE Session object (isLive compares identity; dispatch stages data on it).
 export interface SessionStoreOptions {
   channels?: ChannelLayer
   onEvict?: (sid: Sid) => void   // fired once per evicted sid (lets idempotency/ratelimit clean up)
 }
 
+export type SessionKey = { sid?: Sid; cookie?: string }
+
 export class SessionStore {
-  private byId = new Map<Sid, Session>()
-  private byCookie = new Map<string, Sid>()
-  private cookiesBySid = new Map<Sid, Set<string>>()
-  private channels: ChannelLayer
+  protected byId = new Map<Sid, Session>()
+  protected byCookie = new Map<string, Sid>()
+  protected cookiesBySid = new Map<Sid, Set<string>>()
+  protected channels: ChannelLayer
   private onEvict?: (sid: Sid) => void
   private watchers: ((sid: Sid, kind: 'created' | 'expired') => void)[] = []
   // progressive-disclosure.md §expand: the last snapshot each sid saw of a page (expand serves L2 from it).
   // ONE LRU keyed `sid\0page` (total cap SNAP_CAP, SNAP_PER_SID per sid); a key always names its sid, so a
-  // session never reads another's entry. Dropped with the session.
+  // session never reads another's entry. Dropped with the session. Always per process (a cache: a miss re-renders).
   private snaps = new Map<string, { snap: Snapshot; data: number }>()
   private snapCount = new Map<Sid, number>()
-  private once = new Map<Sid, Session>()   // ephemeral(): outside the flood cap, cookies and session hooks
+  protected once = new Map<Sid, Session>()   // ephemeral(): outside the flood cap, cookies and session hooks
 
-  constructor(private settings: Settings['session'], opts: SessionStoreOptions = {}) {
+  constructor(protected settings: Pick<Settings['session'], 'ttlMs'> & Partial<Settings['session']>, opts: SessionStoreOptions = {}) {
     this.channels = opts.channels ?? new MemoryChannelLayer()
     this.onEvict = opts.onEvict
   }
 
   // byId's insertion order is recency (resolve re-inserts), so the first key is the least recently used
-  create(): Session {
-    const now = Date.now()
-    const s: Session = { sid: nanoid(), rev: 0, data: new Map(), createdAt: now, lastSeen: now }
-    while (this.byId.size >= this.settings.max) this.evict(this.byId.keys().next().value as Sid)   // #20: flood cap
-    this.byId.set(s.sid, s)
-    for (const w of this.watchers) w(s.sid, 'created')
+  async create(): Promise<Session> {
+    while (this.byId.size >= (this.settings.max ?? Infinity)) this.evict(this.byId.keys().next().value as Sid)   // #20: flood cap
+    const s = this.adopt(newSession())
+    this.created(s.sid)
     return s
   }
 
   // A session for one call only (an anonymous api read, an agent-render read): resolvable by sid until
-  // dropEphemeral(), never stored by cookie, never counted against the flood cap, no session hooks.
+  // dropEphemeral(), never stored by cookie, never counted against the flood cap, no session hooks, never shared.
   ephemeral(data: Map<string, unknown> = new Map()): Session {
     const now = Date.now()
     const s: Session = { sid: `ephemeral:${nanoid()}`, rev: 0, data, createdAt: now, lastSeen: now }
@@ -51,8 +54,8 @@ export class SessionStore {
   }
   dropEphemeral(sid: Sid): void { this.once.delete(sid) }
 
-  resolve(key: { sid?: Sid; cookie?: string }): Session | undefined {
-    const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
+  async resolve(key: SessionKey): Promise<Session | undefined> {
+    const sid = this.sidOf(key)
     if (sid === undefined) return undefined
     const e = this.once.get(sid)
     if (e) return e
@@ -68,13 +71,17 @@ export class SessionStore {
   }
 
   // Like resolve() but read-only: TTL-checked, never refreshes lastSeen or evicts (liveness polling).
-  peek(key: { sid?: Sid; cookie?: string }): Session | undefined {
-    const sid = key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
+  async peek(key: SessionKey): Promise<Session | undefined> {
+    const sid = this.sidOf(key)
     const s = sid === undefined ? undefined : this.once.get(sid) ?? this.byId.get(sid)
     return s && this.alive(s) ? s : undefined
   }
 
-  private alive(s: Session): boolean {
+  protected sidOf(key: SessionKey): Sid | undefined {
+    return key.sid ?? (key.cookie !== undefined ? this.byCookie.get(key.cookie) : undefined)
+  }
+
+  protected alive(s: Session): boolean {
     return Date.now() - s.lastSeen <= this.settings.ttlMs
   }
 
@@ -86,22 +93,31 @@ export class SessionStore {
   }
 
   // Reverse mapping; creates and links a cookie on first use.
-  cookieFor(sid: Sid): string {
+  async cookieFor(sid: Sid): Promise<string> {
     const existing = this.cookiesBySid.get(sid)
     if (existing?.size) return existing.values().next().value as string
-    if (!this.byId.has(sid)) throw new Error(`cookieFor: unknown sid ${sid}`)
+    if (!this.byId.has(sid)) throw new Error('cookieFor: unknown sid')
     const cookie = nanoid()
     this.link(cookie, sid)
     return cookie
   }
 
-  bump(sid: Sid, source: 'human' | 'agent' = 'human', action?: string): Rev {
+  // A committed change: rev + 1 (the session's data is saved with it), then the `update` event on its group.
+  async bump(sid: Sid, source: 'human' | 'agent' = 'human', action?: string): Promise<Rev> {
     const s = this.byId.get(sid)
-    if (!s) throw new Error(`bump: unknown sid ${sid}`)
+    if (!s) throw new Error('bump: unknown sid')
     s.rev++
+    await this.save(s)
     this.channels.group(`sid:${sid}`).send(ev.update(sid, s.rev, source, action))
     return s.rev
   }
+
+  // Persist the session's data without a rev bump (a readOnly action may still write session.data).
+  // Memory: the object IS the store.
+  async save(_s: Session): Promise<void> {}
+
+  // One command at a time per sid ACROSS servers (dispatch already serializes within a process). Memory: no-op.
+  lock<T>(_sid: Sid, fn: () => Promise<T>): Promise<T> { return fn() }
 
   subscribe(sid: Sid, fn: (e: Event) => void): () => void {
     return this.channels.group(`sid:${sid}`).add(fn)
@@ -138,20 +154,23 @@ export class SessionStore {
     if (this.snaps.delete(k)) this.count(k.slice(0, k.indexOf('\0')), -1)
   }
 
+  // sessions held by THIS process (a shared store: the ones cached here)
   get size(): number { return this.byId.size }
 
   // Session fixation (Django cycle_key): a NEW Session object (same data, rev) under a fresh sid. The old one is
   // evicted like an expired one (cookies, channel group, snapshots, limiter/idempotency via onEvict) and stays a
   // dead object: anyone still holding it (a command queued on the old sid) must re-check with isLive() and never
   // learns the new sid. The caller hands out the new sid / cookie.
-  rotate(old: Session): Session {
-    if (this.byId.get(old.sid) !== old) throw new Error(`rotate: unknown sid ${old.sid}`)
+  async rotate(old: Session): Promise<Session> {
+    if (this.byId.get(old.sid) !== old) throw new Error('rotate: unknown sid')
+    return this.rotated(old, { ...old, sid: nanoid(), data: old.data, lastSeen: Date.now() })
+  }
+
+  protected rotated(old: Session, s: Session): Session {
     this.evict(old.sid)
-    const now = Date.now()
-    const s: Session = { ...old, sid: nanoid(), data: old.data, lastSeen: now }
     old.data = new Map()   // the dead object keeps nothing
     this.byId.set(s.sid, s)
-    for (const w of this.watchers) w(s.sid, 'created')
+    this.created(s.sid)
     for (const r of this.rotations) r(old.sid, s.sid)
     return s
   }
@@ -164,14 +183,16 @@ export class SessionStore {
     return () => { this.rotations = this.rotations.filter((r) => r !== fn) }
   }
 
-  // still the live session under its own sid (not rotated away, evicted or expired)
-  isLive(s: Session): boolean { return (this.once.get(s.sid) ?? this.byId.get(s.sid)) === s && this.alive(s) }
+  // Still the live session under its own sid (not rotated away, evicted or expired). A shared store also
+  // re-reads it here, so a command that waited in the queue runs on the latest data and rev.
+  async isLive(s: Session): Promise<boolean> { return this.liveHere(s) }
+  protected liveHere(s: Session): boolean { return (this.once.get(s.sid) ?? this.byId.get(s.sid)) === s && this.alive(s) }
 
   // Drop a session now (e.g. one created for a render that was then refused): the normal evict path.
-  delete(sid: Sid): void { if (this.byId.has(sid)) this.evict(sid) }
+  async delete(sid: Sid): Promise<void> { if (this.byId.has(sid)) this.evict(sid) }
 
   // ponytail: full scan per call; caller runs it on an interval of ttl/4. Cap+cursor if sessions get numerous.
-  sweep(): number {
+  async sweep(): Promise<number> {
     const now = Date.now()
     let evicted = 0
     for (const s of [...this.byId.values()]) {
@@ -183,11 +204,24 @@ export class SessionStore {
     return evicted
   }
 
-  private evict(sid: Sid): void {
+  // put a session object in the local map (a shared store: loaded or created elsewhere)
+  protected adopt(s: Session): Session {
+    this.byId.set(s.sid, s)
+    return s
+  }
+  protected created(sid: Sid): void { for (const w of this.watchers) w(sid, 'created') }
+
+  // Forget a session HERE only (a shared store found it gone): cookies, snapshots; no hooks, no channel drop.
+  protected forget(sid: Sid): void {
     this.byId.delete(sid)
-    for (const k of this.snaps.keys()) if (k.startsWith(`${sid}\0`)) this.dropSnap(k)   // ponytail: scan on evict; index by sid if SNAP_CAP grows
+    for (const k of this.snaps.keys()) if (k.startsWith(`${sid}\0`)) this.dropSnap(k)
     for (const c of this.cookiesBySid.get(sid) ?? []) this.byCookie.delete(c)
     this.cookiesBySid.delete(sid)
+  }
+
+  // The session ended (expired, evicted, rotated away, deleted): once, with hooks.
+  protected evict(sid: Sid): void {
+    this.forget(sid)
     this.channels.drop(`sid:${sid}`)
     this.onEvict?.(sid)
     for (const w of this.watchers) w(sid, 'expired')
@@ -198,4 +232,12 @@ export class SessionStore {
     this.watchers.push(fn)
     return () => { this.watchers = this.watchers.filter((w) => w !== fn) }
   }
+}
+
+// lock() could not get the session within its time (another server holds it): dispatch answers rate_limited
+export class SessionBusy extends Error { constructor() { super('session is busy on another server'); this.name = 'SessionBusy' } }
+
+export function newSession(sid: Sid = nanoid()): Session {
+  const now = Date.now()
+  return { sid, rev: 0, data: new Map(), createdAt: now, lastSeen: now }
 }

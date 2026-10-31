@@ -111,9 +111,24 @@ const deepFreeze = <T>(v: T): T => {
   return v
 }
 
+// The cached part of a snapshot (no sid/rev) and its content etag. Deep-frozen: shared between requests.
+export type SnapBody = Body
+export function cacheBody(snap: Body | Snapshot): { etag: string; body: Body } {
+  const { page, title, nodes, links, widgets, folds } = snap
+  const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }), ...(folds && { folds }) })
+  return { etag: createHash('sha1').update(canon(body)).digest('hex'), body }
+}
+
+// settings.snapshotCache.backend: 'memory' = SnapshotCache, 'redis' = backends/redis.ts (shared entries + version).
+export interface SnapshotStore {
+  get(route: string): { etag: string; body: Body } | undefined | Promise<{ etag: string; body: Body } | undefined>
+  set(route: string, snap: Body | Snapshot, ver?: number): string | Promise<string>
+  version(): number | Promise<number>
+}
+
 // Entries die by TTL (settings.snapshotCache.ttlMs; 0 = off) or as soon as the data version moves on
 // (every committed write bumps it: data/engine.ts dataVersion).
-export class SnapshotCache {
+export class SnapshotCache implements SnapshotStore {
   private m = new Map<string, { etag: string; body: Body; at: number; ver: number }>()
   constructor(private ttlMs = 60_000, private max = 1000, readonly version: () => number = () => 0) {}
 
@@ -129,9 +144,7 @@ export class SnapshotCache {
   // ver: the data version the render STARTED at (a write committed mid-render leaves the entry stale)
   set(route: string, snap: Body | Snapshot, ver = this.version()): string {
     const now = Date.now()
-    const { page, title, nodes, links, widgets, folds } = snap
-    const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }), ...(folds && { folds }) })
-    const etag = createHash('sha1').update(canon(body)).digest('hex')
+    const { etag, body } = cacheBody(snap)
     if (this.ttlMs <= 0) return etag   // cache off: nothing stored
     for (const [k, e] of this.m) if (now - e.at > this.ttlMs) this.m.delete(k)
     this.m.delete(route)
@@ -144,7 +157,7 @@ export class SnapshotCache {
 export function makeSnapshotter(opts: {
   origin: string
   sessions: SessionStore
-  cache: SnapshotCache
+  cache: SnapshotStore
   fetch?: typeof globalThis.fetch
   cookieName?: string
   timeoutMs?: number
@@ -155,7 +168,7 @@ export function makeSnapshotter(opts: {
   const { origin, sessions, cache, cookieName = 'tvine_s', timeoutMs = 10_000 } = opts
   const doFetch = opts.fetch ?? globalThis.fetch
   const stamp = (b: Body, sid: Sid, rev: number): Snapshot => ({ ...b, sid, rev })
-  const revOf = (sid: Sid) => sessions.resolve({ sid })?.rev ?? 0
+  const revOf = async (sid: Sid) => (await sessions.resolve({ sid }))?.rev ?? 0
   const origin0 = new URL(origin).origin
 
   return async (route, sid) => {
@@ -164,15 +177,15 @@ export function makeSnapshotter(opts: {
     try { if (route.startsWith('/') && !route.startsWith('//')) url = new URL(route, origin) } catch { /* below */ }
     if (!url || url.origin !== origin0) throw new RegistryError('internal', `invalid route: ${route}`)
 
-    const hit = cache.get(route)
-    if (hit) return stamp(hit.body, sid, revOf(sid))
-    const rev = revOf(sid) // before the await: old content must not get a newer rev
-    const ver = cache.version()
+    const hit = await cache.get(route)
+    if (hit) return stamp(hit.body, sid, await revOf(sid))
+    const rev = await revOf(sid) // before the await: old content must not get a newer rev
+    const ver = await cache.version()
     let res: Response
     const as = opts.asSession?.(sid)
     try {
       res = await doFetch(url.href, {
-        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${sessions.cookieFor(sid)}`, ...as?.headers },
+        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${await sessions.cookieFor(sid)}`, ...as?.headers },
         redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
@@ -188,7 +201,7 @@ export function makeSnapshotter(opts: {
     if (res.status === 401 || res.status === 403) throw new DomainError('forbidden', `forbidden: ${route}`)
     if (res.status !== 200) throw new RegistryError('internal', `render failed (${res.status}) for ${route}`)
     const { personal, live, ...body } = extract(html, route)
-    if (!personal && !live && !readSession) cache.set(route, body, ver)
+    if (!personal && !live && !readSession) await cache.set(route, body, ver)
     return stamp(body, sid, rev)
   }
 }

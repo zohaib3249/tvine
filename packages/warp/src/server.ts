@@ -11,16 +11,21 @@ import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, typ
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
-import { makeSnapshotter, SnapshotCache } from './core/registry.js'
+import { makeSnapshotter } from './core/registry.js'
+import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
+import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
-import { defineSettings, merge, type SettingsInput } from './settings.js'
+import { checkBackends, defineSettings, merge, type SettingsInput } from './settings.js'
+import { closeRedis, configureRedis } from './redis/index.js'
 import { channelTransport } from './transport/channel.js'
+import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
+import { corsLayer } from './transport/cors.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
@@ -100,6 +105,7 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
   const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
+  checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   return settings
 }
 
@@ -112,8 +118,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (settings.logging !== 'none') console.error(settings.logging === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
-  if (process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) {
-    say('WARNING: multi-instance run detected; sessions, limits and channels are in-process in v1 — run exactly one process', 'warn')
+  const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
+  if ((process.env.NODE_APP_INSTANCE || process.env.pm_id || Number(process.env.WEB_CONCURRENCY) > 1) && local.length) {
+    say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
   }
 
   // 2. discover: duplicate/invalid actions fail here, naming the file, never at request time
@@ -129,12 +136,14 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
+  if (fe && !opts.dev) for (const w of nextBuildWarnings(fe.nextDir, settings)) say(`WARNING: ${w}`, 'warn')
   if (!actions.all().length && process.env.NODE_ENV === 'production') {
     say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
   }
 
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
+  configureRedis(settings, (level, msg, data) => say(data ? `${msg} ${JSON.stringify(data)}` : msg, level === 'error' ? 'warn' : level))
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
   const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (route, sid) => snapshot(route, sid) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
@@ -142,7 +151,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   for (const { app, fn } of signals.ready) {
     try { await (fn as (s: ServerCtx) => unknown)(ctx) } catch (e) { ctx.close(); throw new Error(`app ${app}: ready() failed: ${(e as Error).message}`, { cause: e }) }
   }
-  const cache = new SnapshotCache(settings.snapshotCache.ttlMs, 1000, dataVersion)
+  const cache = snapshotCacheFor(settings, dataVersion, ctx.log)
+  if (cache.settle) ctx.settle = () => cache.settle!()
+  if (cache.close) ctx.onClose(() => cache.close!())
+  ctx.health.set('backends', () => backendHealth(settings))
+  // a shared channel layer must be subscribed before the first event it should deliver
+  if ('ready' in ctx.channels) await (ctx.channels as { ready: Promise<void> }).ready
   const nonce = randomBytes(16).toString('hex')
   // C2: a render whose page read the agent's session (currentSession/currentRequest) is personal, whatever
   // its fragments say: the page marks its per-render token in `touched`, the snapshotter checks it after extract.
@@ -177,7 +191,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
   }
+  // security/headers + transport/cors + transport/compress (server/security-headers.md): boot-checked here
+  const sec = securityHeaders(settings, { isDev })
+  const cors = corsLayer(settings)
   const chain: Handler[] = [
+    ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
     discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
@@ -203,12 +221,17 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ? (req, res) => { void startNext().then((n) => n.handle(req, res)).catch(fail(res)) }
     : (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found') }
 
+  // the paths this server itself answers (embedded mode hands everything else to the host app)
+  const mediaRoot = settings.media.route.replace(/\/$/, '')
+  const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
+    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
+    let unhook = () => {}
     const step = () => {
       const h = chain[i++]
       if (h) h(req, res, step)
-      else if (done) done()
+      else if (done) { unhook(); done() }   // the host app's response: its own headers
       else frontend(req, res)
     }
     // nothing a client sends may throw out of here (a throw in a 'request' listener kills the process)
@@ -218,6 +241,26 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      // embedded: CORS only for paths this server answers; the host app's own paths are the host's business
+      const ours = !done || ownPath(pathOf(req))
+      if (ours && cors.preflight(req, res)) return
+      const corsPlan = ours ? cors.request(req) : undefined
+      const plan = sec.begin(req, httpsOf(req, settings))
+      weakIfNoneMatch(req)
+      // a real node response only (a test double without header methods is passed through untouched)
+      if (typeof res.getHeader === 'function') {
+        unhook = hookResponse(req, res, {
+          compression: settings.compression,
+          onHeaders: () => {
+            sec.apply(res, plan)
+            if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
+              for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
+              if (corsPlan.dropSetCookie) res.removeHeader('set-cookie')   // no cookie went in: none comes back
+              addVary(res, 'Origin')
+            }
+          },
+        })
+      }
       step()
     } catch (e) { fail(res)(e) }
   }
@@ -241,7 +284,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   g[API] = api
 
   // 5. session sweep; 6. server hygiene (SSE sets its own socket timeout to 0)
-  const sweep = setInterval(() => ctx.sessions.sweep(), settings.session.ttlMs / 4)
+  const sweep = setInterval(() => void ctx.sessions.sweep().catch((e: unknown) => ctx.log('error', 'session sweep failed', { error: String(e) })), settings.session.ttlMs / 4)
   sweep.unref()
   const server = createServer((req, res) => handler(req, res))
   server.headersTimeout = 10_000
@@ -284,6 +327,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       }
       if (next) await (await next.catch(() => undefined))?.app.close?.()
       await connections.closeAll()
+      await closeRedis()
     },
   }
 }
@@ -316,7 +360,7 @@ function manifestSnapshot(ctx: ServerCtx): (page: string, sid: string) => Promis
     byApp.set(app, [...(byApp.get(app) ?? []), { id: d.id, params: ctx.actions.paramSpecs(d.id), bind: '' }])
   }
   const nodes: Node[] = [...byApp].map(([app, refs]) => ({ id: `app:${app}`, type: 'app', data: { name: app }, actions: refs }))
-  return async (page, sid) => ({ page, title: ctx.settings.site.name, sid, rev: ctx.sessions.peek({ sid })?.rev ?? 0, nodes, links: [] })
+  return async (page, sid) => ({ page, title: ctx.settings.site.name, sid, rev: (await ctx.sessions.peek({ sid }))?.rev ?? 0, nodes, links: [] })
 }
 
 export interface FormSource {
@@ -348,14 +392,14 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     const jar = await src.cookies()
     let cookie = jar.get(name)?.value
     const request = await buildRequest({ url: path, route: pattern, headers: h, ip, via: 'human' }, settings)
-    if (!(await guardCheck(settings)(decodeURIComponent(path), request, sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
-    if (!sessions.peek({ cookie })) {
+    if (!(await guardCheck(settings)(decodeURIComponent(path), request, await sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
+    if (!(await sessions.peek({ cookie }))) {
       // a refused request creates no session and sets no cookie: dispatch's own origin + ip checks, run first.
       // ponytail: dispatch charges the ip bucket again, so a session's first submit costs 2 tokens
       if (crossOrigin(request, settings)) return formResult([ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })])
-      const rl = server.limiter.check({ ip: request.ip })
+      const rl = await server.limiter.check({ ip: request.ip })
       if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
-      cookie = sessions.cookieFor(sessions.create().sid)
+      cookie = await sessions.cookieFor((await sessions.create()).sid)
       // the same attributes as transport/http.ts sets on its session cookie
       jar.set(name, cookie, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
       const others = (h.cookie ?? '').split(';').map((p) => p.trim()).filter((p) => p && !p.startsWith(`${name}=`))
@@ -365,7 +409,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     }
     const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
     const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
-    if (rotated) jar.set(name, sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
     return out
   }
 }
@@ -426,7 +470,7 @@ function pagesFor(server: ServerCtx, route: (path: string) => string | undefined
       // ponytail: an agent's render says http even when the agent came through MCP (the snapshotter does not know)
       if (sid !== undefined) request.agent = { is: true, via: 'http' }
       const cookie = sid === undefined ? (await src.cookies()).get(settings.session.cookieName)?.value : undefined
-      await authenticate(settings, request, sessions.peek({ sid, cookie }))   // request.user of the page's session
+      await authenticate(settings, request, await sessions.peek({ sid, cookie }))   // request.user of the page's session
       return request
     },
   }
@@ -456,7 +500,7 @@ export function apiFor(server: ServerCtx, route: (path: string) => string | unde
     const action = h['next-action'] !== undefined
     return invoke(server, call, {
       request, cookie: jar.get(name)?.value, mode: action ? 'action' : 'render',
-      mint: (s) => { jar.set(name, sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
+      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
     })
   }
 }

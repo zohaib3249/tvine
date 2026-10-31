@@ -92,11 +92,11 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     return parts[parts.length - settings.trustProxy] === 'https'
   }
   // Only when the browser has no live cookie session: an explicit agent sid never steals a human's cookie.
-  const setCookie = (req: IncomingMessage, res: ServerResponse, sid: string) => {
+  const setCookie = async (req: IncomingMessage, res: ServerResponse, sid: string) => {
     const c = cookieOf(req)
-    if (!sid || (c !== undefined && sessions.peek({ cookie: c }))) return
-    if (!sessions.peek({ sid })) return
-    res.setHeader('set-cookie', `${cookieName}=${sessions.cookieFor(sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${https(req) ? '; Secure' : ''}`)
+    if (!sid || (c !== undefined && await sessions.peek({ cookie: c }))) return
+    if (!(await sessions.peek({ sid }))) return
+    res.setHeader('set-cookie', `${cookieName}=${await sessions.cookieFor(sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${https(req) ? '; Secure' : ''}`)
   }
 
   const pickFormat = (req: IncomingMessage, q: URLSearchParams, forced?: Format): Format => {
@@ -138,10 +138,10 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         .catch((e: unknown) => server.log('error', 'upload cleanup failed', { id, key: f.key, error: String(e) }))
     }
     let shape: { view?: ViewOpt; expand?: ExpandOpt } = {}
-    const reply = (status: number, events: Event[], headers: Record<string, string> = {}) => {
+    const reply = async (status: number, events: Event[], headers: Record<string, string> = {}) => {
       for (const e of events) if (e.kind === 'snapshot') sessions.remember(e.snapshot)   // expand serves from it
       sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
-      setCookie(req, res, sid)
+      await setCookie(req, res, sid).catch((e: unknown) => server.log('error', 'session cookie failed', { error: String(e) }))
       const shown = reveal ? events : events.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
       res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape }))
@@ -164,7 +164,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       if (!route) throw new Refuse(404, 'domain', 'not found: this page has no agent view')
       const isGet = req.method === 'GET'
       if (isGet) {   // before auth and guards: a refused GET costs nothing
-        const rl = server.limiter.check({ ip: clientIp(hdr.get('x-forwarded-for'), req.socket.remoteAddress ?? '', settings.trustProxy) })
+        const rl = await server.limiter.check({ ip: clientIp(hdr.get('x-forwarded-for'), req.socket.remoteAddress ?? '', settings.trustProxy) })
         if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
       }
       request = await buildRequest({ req, route, isAgent: true }, settings)
@@ -172,8 +172,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       // header first: a ?sid= lands in logs and Referers (#14)
       const sidKey = (req.headers['x-tvine-sid'] as string | undefined) ?? (isGet ? u.searchParams.get('sid') : null) ?? undefined
       const cookie = cookieOf(req)
-      const bySid = sidKey ? sessions.peek({ sid: sidKey }) : undefined
-      const known = bySid ?? (cookie !== undefined ? sessions.peek({ cookie }) : undefined)
+      const bySid = sidKey ? await sessions.peek({ sid: sidKey }) : undefined
+      const known = bySid ?? (cookie !== undefined ? await sessions.peek({ cookie }) : undefined)
       if (bySid) reveal = true
       ctx = { sid: known?.sid ?? '', rev: known?.rev ?? 0, page: u.pathname }
       await guard(raw, request, known)
@@ -189,7 +189,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
           ctx = out.ctx
           const err = out.events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
           const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
-          status = reply(code, out.events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
+          status = await reply(code, out.events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
           return
         }
         const cmd = got
@@ -199,10 +199,10 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
         upload.keep = upload.file !== undefined && (ok?.result as UploadedFile | undefined)?.key === upload.file.key
         await cleanup()
-        ctx = renderCtx(server, cmd, request)
+        ctx = await renderCtx(server, cmd, request)
         const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
         const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
-        status = reply(code, events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
+        status = await reply(code, events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
       }
     } catch (e) {
       await cleanup()
@@ -210,12 +210,12 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       else if (e instanceof Refuse) {
         if (e.status === 413 || req.method === 'POST') res.setHeader('connection', 'close')
         const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
-        status = reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
+        status = await reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
       } else if (e instanceof DomainError) {   // e.g. not_found: the page Next rendered called notFound()
-        status = reply(DOMAIN_STATUS[e.code] ?? 400, [ev.err('domain', e.message, { reason: e.code })])
+        status = await reply(DOMAIN_STATUS[e.code] ?? 400, [ev.err('domain', e.message, { reason: e.code })])
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
-        status = reply(500, [ev.err('internal', 'internal error')])
+        status = await reply(500, [ev.err('internal', 'internal error')])
       }
     } finally {
       await cleanup()
@@ -243,13 +243,13 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       throw new Refuse(400, 'invalid_param', i ? `ui.${i.path.join('.')}: ${i.message}` : 'ui needs target + control, or steps', 'ui')
     }
     const sidKey = body.sid ?? p.data.sid
-    const known = sessions.resolve({ sid: sidKey, cookie: sidKey === undefined ? cookie : undefined })
-    const session = known ?? sessions.create()
+    const known = await sessions.resolve({ sid: sidKey, cookie: sidKey === undefined ? cookie : undefined })
+    const session = known ?? await sessions.create()
     const ctx = { sid: session.sid, rev: session.rev, page: page0 }
     if (sidKey !== undefined && !known) {   // like dispatch: a dead sid never runs steps
       return { ctx, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await server.snapshot(page0, session.sid) })] }
     }
-    const rl = server.limiter.check({ ip: request.ip, sid: session.sid })
+    const rl = await server.limiter.check({ ip: request.ip, sid: session.sid })
     if (!rl.ok) return { ctx, events: [rateLimited(rl.retryAfterMs)] }
     const at = async (pg: string) => {
       const u = new URL(pg, BASE)
@@ -267,17 +267,17 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   }
 
   async function agentGet(req: IncomingMessage, res: ServerResponse, request: Request, u: URL, format: Format, ctx: Ctx,
-    shape: { view?: ViewOpt; expand?: ExpandOpt }, setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => number): Promise<number> {
+    shape: { view?: ViewOpt; expand?: ExpandOpt }, setCtx: (c: Ctx) => void, reply: (s: number, e: Event[]) => Promise<number>): Promise<number> {
     const t0 = performance.now()
-    const known = ctx.sid ? sessions.resolve({ sid: ctx.sid }) : undefined
-    const session = known ?? sessions.create()
+    const known = ctx.sid ? await sessions.resolve({ sid: ctx.sid }) : undefined
+    const session = known ?? await sessions.create()
     const q = new URLSearchParams(u.searchParams)
     q.delete('sid'); q.delete('format')
     const page = request.path + (q.size ? `?${q}` : '')
     setCtx({ sid: session.sid, rev: session.rev, page })
     let snap
     try { snap = shape.expand ? await pageSnapshot(server, session.sid, page) : await server.snapshot(page, session.sid) } catch (e) {
-      if (!known) { sessions.delete(session.sid); setCtx({ sid: '', rev: 0, page }) }   // a refused render or a redirect leaves no session and no cookie
+      if (!known) { await sessions.delete(session.sid); setCtx({ sid: '', rev: 0, page }) }   // a refused render or a redirect leaves no session and no cookie
       if (e instanceof Goto) return reply(200, [ev.goto(e.url)])
       throw e
     }
@@ -311,7 +311,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(req.headers['content-type'] ?? '')
     if (mp) {
       // I2: the IP bucket is charged before a byte is stored (dispatch charges it again; fine)
-      const rl = server.limiter.check({ ip: request.ip })
+      const rl = await server.limiter.check({ ip: request.ip })
       if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
       const fields = await multipart(req, mp[1] ?? mp[2]!, upload)
       const { file, def } = upload as Required<Upload>

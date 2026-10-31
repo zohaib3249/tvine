@@ -72,7 +72,7 @@ export interface Caller {
   sid?: string                             // an agent's render session (x-tvine-session)
   cookie?: string
   mode: 'render' | 'action'                // render = a server component render: read actions only
-  mint?: (s: Session) => void              // action mode: hand a newly created session's cookie to the caller
+  mint?: (s: Session) => Promise<void> | void              // action mode: hand a newly created session's cookie to the caller
 }
 
 // One api call. A read with no session runs on a throwaway session; a mutation creates one (after the
@@ -88,7 +88,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   if (call.params !== undefined && (typeof call.params !== 'object' || call.params === null || Array.isArray(call.params))) {
     return { ok: false, code: 'invalid_param', message: 'params must be an object', field: 'params' }
   }
-  let session = sessions.peek({ sid: who.sid, cookie: who.cookie })
+  let session = await sessions.peek({ sid: who.sid, cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
   let ephemeral = false
   if (session && who.sid !== undefined) {
@@ -99,11 +99,11 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   } else if (!session) {
     if (who.sid !== undefined) return fail('expired_sid', 'session expired')   // an agent render whose session is gone
     if (crossOrigin(who.request, settings)) return FORBIDDEN
-    const rl = server.limiter.check({ ip: who.request.ip })
+    const rl = await server.limiter.check({ ip: who.request.ip })
     if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
     if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
     else if (!who.mint) return fail('expired_sid', 'this action needs a session')
-    else { session = sessions.create(); who.mint(session) }
+    else { session = await sessions.create(); await who.mint(session) }
   }
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
@@ -113,7 +113,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   try {
     const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false })))
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
-    if (rotated) who.mint?.(rotated)
+    if (rotated) await who.mint?.(rotated)
     return r
   } finally {
     if (ephemeral) sessions.dropEphemeral(session.sid)
@@ -169,7 +169,7 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       const page = new URL(f.path, 'http://tvine.local').pathname
       const request = await buildRequest({ url: f.path, route: o.route(page) ?? page, headers: {}, ip: f.ip || 'unknown', via: 'human' }, settings)
       if (own || f.agent) request.agent = { is: true, via: 'http' }
-      who = { request, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: (s) => res.setHeader(MINTED, sessions.cookieFor(s.sid)) }
+      who = { request, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: async (s) => { res.setHeader(MINTED, await sessions.cookieFor(s.sid)) } }
     } else {
       // a browser (client component): custom header forces a CORS preflight cross-site; origin checked by dispatch
       if (req.headers['x-tvine-api'] !== '1') return send(res, FORBIDDEN)
@@ -178,9 +178,10 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       const shown = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !k.startsWith('x-tvine-')).map(([k, v]) => [k, String(v)]))
       const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
       const request = await buildRequest({ url: page, route: o.route(page) ?? page, headers: shown, ip, via: 'human' }, settings)
+      request.raw = req   // the endpoint (/tvine/api/<id>) + method for settings.cors (core/cors-match)
       who = {
         request, cookie: cookieOf(req), mode: 'action',
-        mint: (s) => res.setHeader('set-cookie', `${name}=${sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure(req) ? '; Secure' : ''}`),
+        mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure(req) ? '; Secure' : ''}`) },
       }
     }
     const ct = String(req.headers['content-type'] ?? '')

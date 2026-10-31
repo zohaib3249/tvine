@@ -21,24 +21,36 @@ export function resolveDbUrl(explicit?: string): string {
   return env
 }
 
+// REDIS_URL fills settings.redis.default (same precedence as db.url: explicit setting > env > none).
+export function redisFromEnv(): Settings['redis'] {
+  const env = process.env.REDIS_URL
+  if (env === undefined) return {}
+  if (!env.trim()) throw new Error('REDIS_URL is set but empty')
+  return { default: { url: env } }
+}
+
 export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   site: { name: 'tvine app', description: '' },
   header: 'x-tvine',
   formats: { default: 'json', notationPath: true },
   trustProxy: 0,
-  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000 },
+  redis: {},
+  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default' },
+  channels: { backend: 'memory', redis: 'default' },
   limits: {
     bodyBytes: 65_536,
     handlerMs: 10_000,
     rate: { limit: 60, windowMs: 60_000 },
     sseConnPerIp: 20,
+    backend: 'memory',
+    redis: 'default',
   },
   socket: true,
   mcp: { tools: 'both', exclude: [], maxTools: 40 },
   middleware: [],
   guards: [],
   media: { dir: './media', route: '/media' },
-  snapshotCache: { ttlMs: 60_000 },
+  snapshotCache: { ttlMs: 60_000, backend: 'memory', redis: 'default' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
   // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
@@ -46,31 +58,68 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
   audit: false,
-  tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, broker: 'file', file: './tasks.db', durable: false, claimBatch: 10 },
+  security: {
+    headers: {
+      enabled: true,
+      hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: false },
+      csp: { reportOnly: false, directives: {}, reportUri: '/tvine/csp-report', staticPages: 'relaxed' },
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      coop: 'same-origin',
+      corp: 'same-origin',
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [] },
+    },
+  },
+  cors: {
+    origins: [], methods: ['GET', 'POST'],
+    allowHeaders: ['content-type', 'authorization', 'x-tvine', 'x-tvine-sid', 'x-tvine-view', 'x-tvine-expand', 'x-tvine-offset', 'x-tvine-limit', 'mcp-protocol-version', 'mcp-session-id', 'last-event-id'],
+    exposeHeaders: ['x-request-id', 'etag', 'retry-after', 'mcp-session-id'],
+    credentials: false, maxAge: 600, routes: [],
+  },
+  compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
+  tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
   installedApps: [],
 }
 
+const corsPolicy = z.object({
+  origins: z.array(z.union([z.string(), z.instanceof(RegExp)])),
+  methods: z.array(z.string().regex(/^[A-Za-z]+$/)),
+  allowHeaders: z.array(z.string().regex(/^[\w-]+$/)),
+  exposeHeaders: z.array(z.string().regex(/^[\w-]+$/)),
+  credentials: z.boolean(),
+  maxAge: z.number().int().min(0),
+})
 const fn = <T>() => z.custom<T>((v) => typeof v === 'function', { message: 'must be a function' })
 const posInt = z.number().int().min(0)
+const backend = z.enum(['memory', 'redis'])
+const alias = z.string().regex(/^[A-Za-z_][\w-]*$/, 'a connection alias is a plain name (letters, digits, _ -)')
+// never echo the url in a validation error: it may carry a password
+const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redis url must start with redis:// or rediss://')
 
 const schema: z.ZodType<Settings> = z.object({
   site: z.object({ name: z.string(), description: z.string() }),
   header: z.string(),
   formats: z.object({ default: z.enum(['json', 'notation']), notationPath: z.boolean() }),
   trustProxy: posInt,
-  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive() }),
+  redis: z.record(alias, z.object({
+    url: redisUrl, tls: z.boolean().optional(),
+    prefix: z.string().max(64).regex(/^[^\s*?[\]]*$/, 'prefix may not hold spaces or glob characters').optional(),
+    connectTimeoutMs: z.number().int().positive().optional(),
+  }).strict()),
+  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias }),
+  channels: z.object({ backend, redis: alias }),
   limits: z.object({
     bodyBytes: posInt,
     handlerMs: z.number().positive(),
     rate: z.object({ limit: posInt, windowMs: z.number().positive() }),
     sseConnPerIp: posInt,
+    backend, redis: alias,
   }),
   socket: z.boolean(),
   mcp: z.object({ tools: z.enum(['both', 'generic', 'typed']), exclude: z.array(z.string()), maxTools: posInt }),
   middleware: z.array(fn<Middleware>()),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
   media: z.object({ dir: z.string(), route: z.string() }),
-  snapshotCache: z.object({ ttlMs: posInt }),
+  snapshotCache: z.object({ ttlMs: posInt, backend, redis: alias }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
     url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),
@@ -81,10 +130,27 @@ const schema: z.ZodType<Settings> = z.object({
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
-  tasks: z.object({
-    leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
-    broker: z.enum(['file', 'memory', 'redis', 'db']), file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100), redis: z.string().min(1).optional(),
+  security: z.object({
+    headers: z.object({
+      enabled: z.boolean(),
+      hsts: z.union([z.literal(false), z.object({ maxAge: z.number().int().min(0), includeSubDomains: z.boolean(), preload: z.boolean() })
+        .refine((h) => !h.preload || (h.maxAge >= 31_536_000 && h.includeSubDomains), 'hsts.preload needs maxAge >= 31536000 and includeSubDomains')]),
+      csp: z.union([z.literal(false), z.object({
+        reportOnly: z.boolean(),
+        directives: z.record(z.string().regex(/^[a-z-]+$/, 'directive names are lowercase'), z.union([z.array(z.string().regex(/^[^;,\s]+$/, 'one source per entry, no ; , or spaces')), z.literal(false)])),
+        reportUri: z.union([z.string().regex(/^(\/|https:\/\/)[^;,\s"]*$/, 'a path or an https URL'), z.literal(false)]),
+        staticPages: z.enum(['relaxed', 'strict']),
+      })]),
+      referrerPolicy: z.enum(['no-referrer', 'no-referrer-when-downgrade', 'origin', 'origin-when-cross-origin', 'same-origin', 'strict-origin', 'strict-origin-when-cross-origin', 'unsafe-url']),
+      coop: z.union([z.literal(false), z.enum(['same-origin', 'same-origin-allow-popups', 'unsafe-none'])]),
+      corp: z.union([z.literal(false), z.enum(['same-origin', 'same-site', 'cross-origin'])]),
+      permissionsPolicy: z.record(z.string().regex(/^[a-z-]+$/), z.union([z.array(z.string().regex(/^(self|\*|https?:\/\/[^\s"()]+)$/, "'self', '*' or an origin")), z.literal(false)])),
+    }),
   }),
+  cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),
+  compression: z.object({ enabled: z.boolean(), threshold: posInt, brotli: z.boolean(), gzipLevel: z.number().int().min(1).max(9), brotliQuality: z.number().int().min(0).max(11) }),
+  tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
+    broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
@@ -122,7 +188,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
-  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
   const settings = schema.parse(merge(base as Record<string, unknown>, rest as Record<string, unknown>))
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
   // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
@@ -132,3 +198,19 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
 }
 
 const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
+
+// Every subsystem whose backend is 'redis' must name a configured connection. Run at boot (loadSettings,
+// tvine check), not in defineSettings: a page may import settings.ts during `next build` with no REDIS_URL.
+export function redisUsers(s: Settings): { key: string; alias: string }[] {
+  const out: { key: string; alias: string }[] = []
+  for (const k of ['session', 'channels', 'limits', 'snapshotCache'] as const) if (s[k].backend === 'redis') out.push({ key: `settings.${k}.backend`, alias: s[k].redis })
+  if (s.tasks.broker === 'redis') out.push({ key: 'settings.tasks.broker', alias: s.tasks.redis })
+  return out
+}
+export function checkBackends(s: Settings): void {
+  for (const u of redisUsers(s)) {
+    if (!s.redis[u.alias]) {
+      throw new Error(`${u.key} is 'redis' but settings.redis.${u.alias} is not configured (set settings.redis.${u.alias}.url${u.alias === 'default' ? ' or REDIS_URL' : ''})`)
+    }
+  }
+}

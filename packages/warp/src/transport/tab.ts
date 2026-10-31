@@ -79,6 +79,7 @@ export class TabHub {
       if (b) this.busy.set(to, (this.busy.get(to) ?? 0) + b)
       if (t !== undefined) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, t))
       if (b) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, Date.now() + TAB_LIMITS.driftMs))   // its in-flight count stays on the old key
+      if (b || t !== undefined) void this.share(to)
     })
     this.timer = setInterval(() => this.sweep(), 15_000)
     this.timer.unref?.()
@@ -130,12 +131,12 @@ export class TabHub {
 
   // ---- agent side (mcp.ts, /tvine/agent/*) -------------------------------------------------
   // `sid` is called only after the ip check passed: a refused request creates no session.
-  request(sid: () => Sid, o: { name?: unknown; ip: string; base?: string }): TabAnswer & { sid?: Sid } {
+  async request(sid: () => Promise<Sid>, o: { name?: unknown; ip: string; base?: string }): Promise<TabAnswer & { sid?: Sid }> {
     if (!this.on) return fail('domain', 'forbidden', 'this site does not allow agents to control browser tabs')
     const limited = (k: string) => { const r = this.askRate.check({ sid: k }); return r.ok ? undefined : { ok: false as const, code: 'rate_limited' as const, message: `rate limited: retry after ${r.retryAfterMs}ms` } }
     const byIp = limited(`ip:${ipKey(o.ip)}`)
     if (byIp) return byIp
-    const agentSid = sid()
+    const agentSid = await sid()
     const bySid = limited(`sid:${agentSid}`)
     if (bySid) return { ...bySid, sid: agentSid }
     for (const a of [...this.asks.values()]) if (a.agentSid === agentSid) this.asks.delete(a.id)   // newer replaces older
@@ -162,30 +163,37 @@ export class TabHub {
     return n ? { kind: 'note', reason: n.reason } : undefined
   }
 
-  forward(agentSid: Sid, op: TabOp, payload: unknown): Promise<TabAnswer> {
+  async forward(agentSid: Sid, op: TabOp, payload: unknown): Promise<TabAnswer> {
     const h = this.held.get(agentSid)
     const tab = h && this.tabs.get(h.tabId)
-    if (!h || !tab) return Promise.resolve(fail('domain', 'not_connected', 'no tab under your control: call request_control'))
-    if (!tab.send) return Promise.resolve(fail('expired_sid', 'tab_closed', 'the tab is disconnected; retry shortly or call request_control again'))
+    if (!h || !tab) return fail('domain', 'not_connected', 'no tab under your control: call request_control')
+    if (!tab.send) return fail('expired_sid', 'tab_closed', 'the tab is disconnected; retry shortly or call request_control again')
     const rl = this.cmdRate.check({ sid: `tab:${tab.id}` })
-    if (!rl.ok) return Promise.resolve({ ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` })
+    if (!rl.ok) return { ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` }
     h.used = Date.now()
     const cmdId = token(), sid = tab.sid
+    // every server must see the session as agent BEFORE the tab runs the command (its requests may land anywhere)
+    this.busy.set(sid, (this.busy.get(sid) ?? 0) + 1)
+    try { await this.share(sid) } catch (e) {
+      this.unbusy(sid)
+      this.server.log('error', 'tab: agent marking failed; command not forwarded', { error: String(e) })
+      return fail('internal', undefined, 'internal error')
+    }
+    if (!tab.send || tab.agent !== agentSid) { this.unbusy(sid); void this.share(sid).catch(() => undefined); return fail('domain', 'stopped', 'control of the tab ended') }
     return new Promise((resolve) => {
       const done = (a: TabAnswer) => {
         if (!tab.pending.delete(cmdId)) return
         clearTimeout(timer)
-        const n = (this.busy.get(sid) ?? 1) - 1
-        if (n > 0) this.busy.set(sid, n); else this.busy.delete(sid)
+        this.unbusy(sid)
         // answered (or Stop, which aborts it in the tab) → short tail; no answer → it may still be running there
         const ran = a.ok || a.reason === 'stopped'
         this.tail.set(sid, Math.max(this.tail.get(sid) ?? 0, Date.now() + (ran ? TAB_LIMITS.tailMs : TAB_LIMITS.driftMs)))
+        void this.share(sid).catch((e: unknown) => this.server.log('error', 'tab: agent marking failed', { error: String(e) }))
         resolve(a)
       }
       const timer = setTimeout(() => done(fail('domain', 'timeout', 'the tab did not answer in time; the step may have run: read_page before retrying')), TAB_LIMITS.cmdMs)
       timer.unref?.()
       tab.pending.set(cmdId, { resolve: done })
-      this.busy.set(sid, (this.busy.get(sid) ?? 0) + 1)
       tab.send!('cmd', { cmdId, op, payload })
     })
   }
@@ -193,10 +201,29 @@ export class TabHub {
   // dispatch(): while a forwarded command runs in a tab of this session, every request of it is agent.
   // ponytail: per session, not per tab: a human acting in ANOTHER tab of the same session during those
   // seconds is treated as agent too (stricter, never looser).
-  forcedAgent(sid: Sid): boolean {
+  // A shared store (limits.backend 'redis', ServerCtx.marks) carries the marking to every server: the tab and its
+  // stream live on this one, the session's other requests may reach any.
+  forcedAgent(sid: Sid): boolean | Promise<boolean> {
+    if (this.localForced(sid)) return true
+    return this.server.marks ? this.server.marks.has(sid) : false
+  }
+  private localForced(sid: Sid): boolean {
     if ((this.busy.get(sid) ?? 0) > 0) return true
     const t = this.tail.get(sid)
     return t !== undefined && t > Date.now()
+  }
+  private unbusy(sid: Sid): void {
+    const n = (this.busy.get(sid) ?? 1) - 1
+    if (n > 0) this.busy.set(sid, n); else this.busy.delete(sid)
+  }
+  // this server's marking of `sid`, published: busy → until the command's answer could still come (cmdMs + drift);
+  // else the tail. Only the server holding the session's tabs writes it (tabs are pinned to their stream).
+  private share(sid: Sid): Promise<void> {
+    const m = this.server.marks
+    if (!m) return Promise.resolve()
+    const now = Date.now()
+    const until = (this.busy.get(sid) ?? 0) > 0 ? now + TAB_LIMITS.cmdMs + TAB_LIMITS.driftMs : this.tail.get(sid) ?? 0
+    return m.set(sid, Math.max(0, until - now))
   }
 
   releaseAgent(agentSid: Sid): void {
@@ -370,14 +397,14 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     if (!sameOrigin(req) || !tabId) return send(res, 403, { error: 'forbidden' })
     const ip = ipOf(req)
     const cookie = cookieOf(req)
-    let session = cookie !== undefined ? sessions.resolve({ cookie }) : undefined
+    let session = cookie !== undefined ? await sessions.resolve({ cookie }) : undefined
     if (op === 'hello') {
       // a tab needs a cookie session to be controlled: mint one (after the origin + ip checks), never echo it
       if (!hub.helloRate.check({ sid: `ip:${ipKey(ip)}` }).ok) return tooMany(res)
       if (session) return send(res, 200, { ok: true })
-      if (!server.limiter.check({ ip }).ok) return tooMany(res)   // as the <Form> path, before minting
-      session = sessions.create()
-      const c = sessions.cookieFor(session.sid)
+      if (!(await server.limiter.check({ ip })).ok) return tooMany(res)   // as the <Form> path, before minting
+      session = await sessions.create()
+      const c = await sessions.cookieFor(session.sid)
       return send(res, 200, { ok: true }, { 'set-cookie': `${name}=${c}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${httpsOf(req, settings) ? '; Secure' : ''}` })
     }
     if (!session) return send(res, 401, { error: 'no session' })
@@ -400,11 +427,11 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     const ip = ipOf(req)
     const sidKey = hdr(req, 'x-tvine-sid') ?? (typeof b.sid === 'string' ? b.sid : undefined)
     if (op === 'release') {
-      if (sidKey && sessions.peek({ sid: sidKey })) hub.releaseAgent(sidKey)
+      if (sidKey && await sessions.peek({ sid: sidKey })) hub.releaseAgent(sidKey)
       return send(res, 200, { ok: true })
     }
-    if (!server.limiter.check({ ip }).ok) return tooMany(res)
-    const r = hub.request(() => ((sidKey ? sessions.resolve({ sid: sidKey }) : undefined) ?? sessions.create()).sid, { name: b.name, ip, base: originOf(req, settings) })
+    if (!(await server.limiter.check({ ip })).ok) return tooMany(res)
+    const r = await hub.request(async () => ((sidKey ? await sessions.resolve({ sid: sidKey }) : undefined) ?? await sessions.create()).sid, { name: b.name, ip, base: originOf(req, settings) })
     if (!r.ok) return send(res, r.code === 'rate_limited' ? 429 : 403, { ...(r.sid && { sid: r.sid }), error: r.message, code: r.code, reason: r.reason })
     send(res, 200, { sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
   }

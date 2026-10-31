@@ -43,9 +43,8 @@ export async function benchConfigured(t: TasksSettings, o: BenchOpts): Promise<B
   if (t.broker === 'redis') {
     const b = redisBroker({ alias: t.redis ?? 'default', prefix: `bench-${randomUUID()}:` })
     try { return await runBench(b, 'redis', o) } finally {
-      const r = b.client
       let cur = '0'
-      do { const [next, keys] = await r.scan(cur, 'MATCH', `${b.base}*`, 'COUNT', 1000); cur = next; if (keys.length) await r.del(...keys) } while (cur !== '0')
+      do { const [next, keys] = await b.cmd<[string, string[]]>(['SCAN', cur, 'MATCH', `${b.base}*`, 'COUNT', 1000]); cur = next; if (keys.length) await b.cmd(['DEL', ...keys]) } while (cur !== '0')
       await b.close()
     }
   }
