@@ -35,16 +35,18 @@ export async function confirmGate(def: ActionDef, input: Record<string, unknown>
     const human = by === 'human' && agent
     const t = human ? undefined : signBind({ $confirm: def.id, s: ctx.sid, h, n: randomBytes(9).toString('base64url') }, ctx.settings, CONFIRM_TTL_MS)
     const how = human ? 'only the user can confirm this: ask the user to confirm in their browser'
-      : `nothing ran yet. To confirm, repeat the same call with the same params plus $confirm: "${t}" (do: in params; ui: on the step); valid ${CONFIRM_TTL_MS / 1000}s, once`
+      : `nothing ran yet. To confirm, repeat the same call with the same params plus $confirm = the confirm token (do: in params; ui: on the step); valid ${CONFIRM_TTL_MS / 1000}s, once`
     return ev.err('confirm_required', `${message} — ${how}`, { reason: 'confirm_required', confirm: { ...(t && { token: t }), message, summary: summary(input), expiresIn: CONFIRM_TTL_MS / 1000, by } })
   }
   if (by === 'human' && agent) return ev.err('human_only', 'only the user can confirm this: ask the user to confirm in their browser', { reason: 'human_only' })
   const v = typeof token === 'string' ? verifyBind(token, ctx.settings) : { ok: false as const }
   if (!v.ok || v.payload.$confirm !== def.id || v.payload.s !== ctx.sid || typeof v.payload.n !== 'string') return refused('invalid or expired token')
   if (v.payload.h !== h) return refused('params differ from the confirmed ones')
-  // single-use: the sid's commands run one at a time (dispatch serial + session lock), so replay-then-remember is race-free
-  const key = `confirm:${v.payload.n}`
-  if ((await server.idempotency.replay(ctx.sid, key, h)).hit !== false) return refused('token already used')
-  await server.idempotency.remember(ctx.sid, key, h, [])
+  // single-use: a shared store claims the nonce (SET NX + TTL, across servers); in memory the sid's commands run one
+  // at a time (dispatch serial + session lock), so replay-then-remember is race-free there
+  const key = `confirm:${v.payload.n}`, idem = server.idempotency
+  if (idem.claim) return (await idem.claim(ctx.sid, key, CONFIRM_TTL_MS)) ? undefined : refused('token already used')
+  if ((await idem.replay(ctx.sid, key, h)).hit !== false) return refused('token already used')
+  await idem.remember(ctx.sid, key, h, [])
   return undefined
 }

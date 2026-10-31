@@ -25,7 +25,8 @@ export const askConfirm: Asker = async (ask) => {
   const fn = (globalThis as { [ASK]?: Asker })[ASK]
   if (fn) return fn(ask)
   const w = globalThis as { confirm?: (m: string) => boolean }   // no DOM lib here: core.ts also runs on the server
-  return typeof w.confirm === 'function' ? w.confirm(ask.message) : false
+  const lines = Object.entries(ask.summary).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+  return typeof w.confirm === 'function' ? w.confirm([ask.message, ...lines].join('\n')) : false
 }
 
 // A confirm_required answer the human here may confirm: ask, and on yes resend once with the token. Cancel →

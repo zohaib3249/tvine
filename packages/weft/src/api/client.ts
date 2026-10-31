@@ -27,7 +27,8 @@ const post = async (id: string, params: unknown, opts: Parameters<Transport>[2],
 export const browserTransport: Transport = async (id, params, opts) => {
   const via = agentVia()
   const r = await post(id, params, opts, via)
-  return via ? r : confirmed(r, (token) => post(id, { ...(params as object), $confirm: token }, { ...opts, cmdId: opts?.cmdId && `${opts.cmdId}.c` }, via))
+  // the resend carries the agent mark of whoever is acting when Confirm resolves (a WebMCP step clicking it = agent)
+  return via ? r : confirmed(r, (token) => post(id, { ...(params as object), $confirm: token }, { ...opts, cmdId: opts?.cmdId && `${opts.cmdId}.c` }, agentVia()))
 }
 
 export const api: Api = makeApi(browserTransport)   // annotated: else the d.ts inlines the empty manifest and api.* is never typed

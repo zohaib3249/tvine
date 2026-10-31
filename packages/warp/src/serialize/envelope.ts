@@ -31,6 +31,7 @@ type ErrEvent = Extract<Event, { kind: 'err' }>
 export function errText(e: ErrEvent): string {
   let t = `${e.message} — ${recoveryOf(e)}`
   if (e.field) t += ` (field ${e.field})`
+  if (e.confirm?.token) t += ` (confirm token: ${e.confirm.token})`   // agents' wire text only, never err.message
   if (e.code === 'unknown_action' && e.snapshot) {
     const ids = [...new Set(e.snapshot.nodes.flatMap(n => n.actions.map(a => a.id)))]
     if (ids.length) t += ` Valid actions: ${ids.join(', ')}`

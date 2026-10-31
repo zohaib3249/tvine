@@ -532,8 +532,12 @@ async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: 
       if (url === undefined) throw e
       out = { goto: siteRedirect(url, { base: `http://${hostOf(ctx.request, server.settings) ?? 'tvine.local'}`, hosts: [hostOf(ctx.request, server.settings) ?? 'tvine.local'], route: server.route }) }   // goto commits; a refused one rolls back
     }
-    // the audit row joins the handler's transaction: a rollback leaves none (a failed write fails the command)
-    if (hold.audit) await hold.audit()
+    // in a transaction the audit row is all-or-nothing with the handler (a failed write rolls it back). Without one
+    // the handler's work is already done: a failed write is logged, never turned into an error (a retry would repeat it)
+    if (hold.audit) {
+      if (tx) await hold.audit()
+      else await hold.audit().catch((e: unknown) => server.log('error', 'audit write failed', { action: def.id, error: errStr(e) }))
+    }
     return out
   }
   // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing

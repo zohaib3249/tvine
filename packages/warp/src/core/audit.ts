@@ -31,8 +31,7 @@ export const audited = (settings: Settings, def: ActionDef | undefined): boolean
   !!slot.write && !!def && settings.audit.enabled && def.rules?.audit !== false && (settings.audit.actions === 'all' || !def.rules?.readOnly)
 
 export function viaOf(r: Request): AuditVia {
-  if (r.user.scopes) return 'api-token'
-  if (!r.agent.is) return 'human'
+  if (!r.agent.is) return r.user.scopes ? 'api-token' : 'human'
   return r.agent.via === 'webmcp' ? 'webmcp' : r.agent.via === 'channel' ? 'tab' : 'agent'
 }
 

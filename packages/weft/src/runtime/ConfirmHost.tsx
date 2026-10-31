@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { Dialog } from '../widgets/dialog.js'
+import { HumanOnly } from '../widget/humanOnly.js'
 import { setConfirmHandler, type ConfirmAsk } from '../api/core.js'
 
 // rules.confirm in the browser (BACKLOG #2): <WeftRoot> mounts this; api.* and <Form> ask it (askConfirm) and it
@@ -19,8 +20,11 @@ export function ConfirmHost() {
       {Object.keys(ask.a.summary).length > 0 && (
         <dl data-part="summary">{Object.entries(ask.a.summary).map(([k, v]) => [<dt key={`k${k}`}>{k}</dt>, <dd key={`v${k}`}>{typeof v === 'string' ? v : JSON.stringify(v)}</dd>])}</dl>
       )}
-      <button type="button" data-part="cancel" onClick={() => answer(false)}>Cancel</button>
-      <button type="button" data-part="confirm" autoFocus onClick={() => answer(true)}>Confirm</button>
+      {/* only a human's own click confirms: scripts / WebMCP / in-tab agents are stopped (by 'human' or not) */}
+      <HumanOnly reason="Confirm this action">
+        <button type="button" data-part="cancel" onClick={() => answer(false)}>Cancel</button>
+        <button type="button" data-part="confirm" autoFocus onClick={() => answer(true)}>Confirm</button>
+      </HumanOnly>
     </Dialog>
   )
 }
