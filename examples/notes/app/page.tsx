@@ -18,7 +18,7 @@ export default async function Notes() {
         {notes.map((n) => (
           <li key={n.id}>
             <Card entity={`note:${n.id}`} label={n.title} data={{ title: n.title, pinned: n.pinned, words: n.words }}>
-              <strong>{n.pinned ? '📌 ' : ''}{n.title}</strong> <small>{n.words} words</small>
+              <strong>{n.pinned ? '[pinned] ' : ''}{n.title}</strong> <small>{n.words} words</small>
               <p>{n.body}</p>
               <NoteButtons id={n.id} />
             </Card>
