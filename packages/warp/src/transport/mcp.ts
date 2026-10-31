@@ -17,13 +17,16 @@ import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot }
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
+import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
 
 export interface McpOptions {
   // Next route pattern for a site path ('/product/42' → '/product/[id]'); undefined = not a page.
   // The composition root passes the same route-table matcher the HTTP transport uses.
   route: (path: string) => string | undefined
+  tabs?: TabHub   // transport/tab: request_control/release, and calls of a sid that controls a tab go to that tab
 }
-export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers'>>
+// base: the site's public origin as the MCP request reached it (approveUrl); mcpHandler derives it from its own request
+export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers'>> & { base?: string }
 export type McpTool = Tool & { action?: ActionId }
 
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
@@ -32,6 +35,8 @@ export const GENERIC = {
   expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
   do: 'Advanced: prefer ui on the page\'s widgets. Run a backend action listed on a page from read_page. Pass url (that page), action (its id), params, and the sid read_page returned. Copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
+  request_control: 'Ask to operate the user\'s open browser tab. Give the user the approveUrl to open (or the code to type in the site\'s Connect box); they click Allow. Then read_page/ui act in their tab as them, and they see what you do. Your name is shown to them as unverified.',
+  release: 'Give the user\'s browser tab back (ends request_control). Pass your sid.',
 } as const
 
 // fresh instances: a reused zod instance becomes a $ref in the JSON Schema
@@ -40,6 +45,8 @@ const envelope = z.object({ url: z.string().default('/'), sid: opt(), cmdId: opt
 const readPage = z.object({ url: z.string(), sid: opt(), view: z.enum(['auto', 'full', 'L1', 'L0']).optional() })
 const expandIn = z.object({ url: z.string(), id: z.string(), sid: opt(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() })
 const doInput = envelope.extend({ url: z.string(), action: z.string(), params: z.record(z.unknown()).default({}) })
+const controlIn = z.object({ name: z.string().max(200).optional(), reason: z.string().max(500).optional(), sid: opt() })
+const releaseIn = z.object({ sid: z.string() })
 const IMPLICIT = Object.keys(envelope.shape)
 
 export const toolName = (id: ActionId) => id.replaceAll('.', '_')
@@ -72,9 +79,13 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
     { name: 'do', description: GENERIC.do, inputSchema: jsonSchema(doInput) as Tool['inputSchema'],
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
+    { name: 'request_control', description: GENERIC.request_control, inputSchema: jsonSchema(controlIn) as Tool['inputSchema'],
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } },
+    { name: 'release', description: GENERIC.release, inputSchema: jsonSchema(releaseIn) as Tool['inputSchema'],
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
   ]
   if (mode === 'generic') return generic
-  const taken = new Set(['read_page', 'expand', 'ui', 'do'])
+  const taken = new Set(['read_page', 'expand', 'ui', 'do', 'request_control', 'release'])
   let typed: (McpTool & { def: ActionDef })[] = []
   for (const def of actions.all()) {
     if (!mcpEnabled(def, settings)) continue
@@ -145,6 +156,39 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     // no cookie: MCP is sid-only, a browser cookie must never pick the session
     const headers = Object.fromEntries(Object.entries(caller.headers ?? {}).filter(([k]) => k.toLowerCase() !== 'cookie'))
     const src = { ...caller, headers, clientInfo: srv.getClientVersion() }
+    const tabs = opts.tabs
+    if (name === 'request_control' || name === 'release') {
+      if (!tabs) return reply(server, [ev.err('unknown_action', `unknown tool ${name}`)], blank('/'))
+      if (name === 'release') {
+        const p = releaseIn.safeParse(args)
+        if (!p.success) return bad(server, p.error)
+        if (server.sessions.peek({ sid: p.data.sid })) tabs.releaseAgent(p.data.sid)
+        return json({ kind: 'ok', action: 'release', sid: p.data.sid })
+      }
+      const p = controlIn.safeParse(args)
+      if (!p.success) return bad(server, p.error)
+      // the session is created only after the ip rate check (a refused request creates none)
+      const sid = () => ((p.data.sid ? server.sessions.resolve({ sid: p.data.sid }) : undefined) ?? server.sessions.create()).sid
+      const r = tabs.request(sid, { name: p.data.name ?? src.clientInfo?.name, ip: caller.ip, base: caller.base ?? '' })
+      if (!r.ok) return json({ kind: 'err', ...r, ok: undefined })
+      return json({ kind: 'ok', action: 'request_control', sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
+    }
+    // a sid that controls a tab (or waits for one) is answered by that tab, never headless
+    const st = tabs?.state(typeof args.sid === 'string' ? args.sid : undefined)
+    if (st && st.kind !== 'control') {
+      // tab errors are JSON with a machine-readable reason (control-protocol.md §Errors), like forwarded results
+      return json(st.kind === 'awaiting'
+        ? { kind: 'err', code: 'domain', reason: 'awaiting_approval', message: `waiting for the human to click Allow: ask them to open ${st.approveUrl} (or type code ${st.code} in the site's Connect box)`, approveUrl: st.approveUrl }
+        : { kind: 'err', code: st.reason === 'tab_closed' ? 'expired_sid' : 'domain', reason: st.reason, message: NOTE[st.reason] ?? 'no tab under your control' })
+    }
+    if (st && (name === 'read_page' || name === 'expand' || name === 'ui')) {
+      const op: TabOp = name === 'read_page' ? 'read' : name
+      const p = (name === 'read_page' ? readPage : name === 'expand' ? expandIn : uiInput).safeParse(args)
+      if (!p.success) return bad(server, p.error)
+      const { url: _u, sid, ...payload } = p.data as { url: string; sid: string }
+      const a = await tabs!.forward(sid, op, payload)
+      return json(a.ok ? { ...(a.data as object), sid, via: 'tab' } : { kind: 'err', code: a.code, reason: a.reason, message: a.message })
+    }
     if (name === 'read_page') {
       const p = readPage.safeParse(args)
       return p.success ? page(server, opts, src, p.data, { view: p.data.view }) : bad(server, p.error)
@@ -164,10 +208,18 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     const cmd: Command = tool.action
       ? { action: tool.action, params: rest, sid, cmdId, bind }
       : { action: p.data.action as string, params: p.data.params as Record<string, unknown>, sid, cmdId, bind }
+    const def = server.actions.get(cmd.action)
+    if (st) {
+      // A remote controller's `do` runs IN the tab, like ui: the tab POSTs it with its own cookie (its user, its
+      // auth) + agentCmd{via:'channel'}; the agent's own identity (headers, clientInfo) is never used for it.
+      // Presence, Stop and idle tracking apply. MCP-disabled actions stay uncallable over MCP.
+      if (!def || !mcpEnabled(def, server.settings)) return json({ kind: 'err', code: 'unknown_action', message: `unknown action ${String(cmd.action).slice(0, 100)}` })
+      const a = await tabs!.forward(sid!, 'do', { action: cmd.action, params: cmd.params, ...(bind !== undefined && { bind }), ...(cmdId !== undefined && { cmdId }) })
+      return json(a.ok ? { ...(a.data as object), sid, via: 'tab' } : { kind: 'err', code: a.code, reason: a.reason, message: a.message })
+    }
     const request = await requestFor(server, opts, src, url, sid)
     if (!request) return notPage(server, url)
     if (request === FORBIDDEN) return forbidden(server)
-    const def = server.actions.get(cmd.action)
     if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], renderCtx(server, cmd, request))
     return reply(server, await collect(dispatch(cmd, server, request)), renderCtx(server, cmd, request))
   }
@@ -175,6 +227,14 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
 }
 
 // ---- helpers -------------------------------------------------------------------------------
+const json = (v: object): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(v) }], ...((v as { kind?: unknown }).kind === 'err' && { isError: true }) })
+const NOTE: Record<string, string> = {
+  not_connected: 'not connected to a tab: the human pressed Stop, or control ended. Call request_control to ask again, or release to work headless',
+  human_denied: 'the human denied control of their tab',
+  busy: 'busy: another agent controls that tab',
+  timeout: 'the control request expired before the human allowed it; call request_control again',
+  tab_closed: 'the tab was closed; call request_control again',
+}
 type Src = Omit<McpSource, 'url' | 'route'>
 const blank = (page: string): Ctx => ({ sid: '', rev: 0, page })
 const pagePath = (r: Request) => r.path + (r.query.size ? `?${r.query}` : '')
@@ -302,7 +362,7 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : v
     const ip = clientIp(headers['x-forwarded-for'] ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    const srv = mcpServer(server, opts, { ip, headers }, tools)
+    const srv = mcpServer(server, opts, { ip, headers, base: originOf(req, settings) }, tools)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => { void transport.close(); void srv.close() })
     await srv.connect(transport)

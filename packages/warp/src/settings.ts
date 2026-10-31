@@ -43,7 +43,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true },
   logging: 'json',
-  agent: { shape: 'v2', budget: 1500, rowsL1: 10 },
+  agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
   audit: false,
   installedApps: [],
@@ -77,7 +77,7 @@ const schema: z.ZodType<Settings> = z.object({
     atomicRequests: z.boolean(),
   }),
   logging: z.enum(['json', 'pretty', 'none']),
-  agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt }),
+  agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.boolean(),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),

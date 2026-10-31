@@ -32,6 +32,10 @@
       "import": "./dist/widgets/index.js",
       "default": "./dist/widgets/index.js"
     },
+    "./dev": {
+      "types": "./dist/dev/Gallery.d.ts",
+      "default": "./dist/dev/Gallery.js"
+    },
     "./jsx-runtime": {
       "types": "./dist/jsx/jsx-runtime.d.ts",
       "default": "./dist/jsx/jsx-runtime.js"

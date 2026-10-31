@@ -49,5 +49,9 @@ export const wantsCycle = (staged: Session): boolean => cycling.has(staged)
 
 // the session a request's command rotated to (transports hand out its new sid / cookie)
 const rotations = new WeakMap<Request, Session>()
-export function markRotated(request: Request, session: Session): void { rotations.set(request, session) }
+const aliases = new WeakMap<Request, Request>()   // dispatch's agent-marked copy → the request the transport holds
+export function aliasRequest(copy: Request, original: Request): void { aliases.set(copy, original) }
+export function markRotated(request: Request, session: Session): void {
+  for (let r: Request | undefined = request; r; r = aliases.get(r)) rotations.set(r, session)
+}
 export const rotatedSession = (request: Request): Session | undefined => rotations.get(request)

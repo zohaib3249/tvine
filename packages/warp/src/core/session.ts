@@ -95,11 +95,11 @@ export class SessionStore {
     return cookie
   }
 
-  bump(sid: Sid, source: 'human' | 'agent' = 'human'): Rev {
+  bump(sid: Sid, source: 'human' | 'agent' = 'human', action?: string): Rev {
     const s = this.byId.get(sid)
     if (!s) throw new Error(`bump: unknown sid ${sid}`)
     s.rev++
-    this.channels.group(`sid:${sid}`).send(ev.update(sid, s.rev, source))
+    this.channels.group(`sid:${sid}`).send(ev.update(sid, s.rev, source, action))
     return s.rev
   }
 

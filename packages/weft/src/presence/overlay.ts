@@ -25,6 +25,12 @@ const CSS = `
 .pill{font:600 12px/1.2 system-ui!important;z-index:2147483647!important;position:fixed;right:16px;bottom:16px;display:flex!important;align-items:center;gap:8px;min-width:160px;min-height:32px;padding:6px 8px 6px 12px;
   border-radius:999px;background:linear-gradient(var(--c),var(--c)),#7c3aed;color:#fff;text-shadow:0 0 2px #000;outline:2px solid #fff;
   opacity:1!important;visibility:visible!important;pointer-events:auto!important;box-shadow:0 2px 8px #0008}
+.panel{font:500 13px/1.4 system-ui!important;z-index:2147483647!important;position:fixed;right:16px;bottom:60px;box-sizing:border-box;width:min(340px,calc(100vw - 32px));padding:12px;border-radius:10px;
+  background:#fff;color:#111;outline:2px solid var(--c);box-shadow:0 4px 16px #0006;opacity:1!important;visibility:visible!important;pointer-events:auto!important}
+.panel p{margin:0 0 10px} .panel b{font-weight:700} .panel .row{display:flex;gap:8px;justify-content:flex-end}
+.panel button{all:unset;font:600 13px/1.2 system-ui!important;cursor:pointer;padding:6px 12px;border-radius:6px;background:#eee;color:#111}
+.panel button.go{background:#7c3aed;color:#fff} .panel button:focus-visible{outline:2px solid #111}
+.panel input{font:600 15px/1.2 ui-monospace,monospace!important;letter-spacing:2px;width:100%;box-sizing:border-box;margin:0 0 10px;padding:6px 8px;border:1px solid #999;border-radius:6px;color:#111;background:#fff}
 .pill button{all:unset;font:600 12px/1.2 system-ui!important;cursor:pointer;padding:4px 10px;border-radius:999px;background:#fff;color:#111;text-shadow:none;font-weight:600}
 `
 const CURSOR = '<svg viewBox="0 0 20 20"><path d="M2 2l6 16 2.5-6.5L17 9z"/></svg>'   // static, runtime-owned
@@ -35,7 +41,7 @@ const PAST: Partial<Record<ActionKind, string>> = {
 }
 export const POINTED: ReadonlySet<ActionKind> = new Set(['click', 'select', 'toggle', 'open'])
 
-const clean = (s: string, max: number) => s.replace(/[\0-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").slice(0, max)
+const clean = (s: string, max: number) => s.replace(/[\0-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, "").slice(0, max)
 export const reducedMotion = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 export interface Act { verb: ActionKind; label: string; control: string; danger?: boolean; options?: false | PresenceOptions }
@@ -48,6 +54,7 @@ export class Overlay {
   private label!: HTMLElement
   private cursor!: HTMLElement
   private pill!: HTMLElement
+  private panelEl!: HTMLElement
   private pillText!: HTMLElement
   private pillBtn!: HTMLButtonElement
   private onPill: (() => void) | null = null
@@ -80,6 +87,8 @@ export class Overlay {
       // Only a real human click: page/agent script can't dispatch a trusted event.
       this.pillBtn.addEventListener('click', (e) => { if (e.isTrusted) this.onPill?.() })
       this.pill.append(this.pillText, this.pillBtn)
+      this.panelEl = this.part('panel')
+      this.panelEl.setAttribute('role', 'dialog')
       this.root.append(style, this.wrap)
       this.host = host
     }
@@ -108,7 +117,17 @@ export class Overlay {
     try { h.hidePopover?.(); h.showPopover() } catch { /* not connected / unsupported */ }
   }
 
-  private showing(): boolean { return !!this.host && (!this.pill.hidden || !this.ring.hidden) }
+  private showing(): boolean { return !!this.host && (!this.pill.hidden || !this.ring.hidden || !this.panelEl.hidden) }
+
+  // The trusted chrome's prompt box (presence/chrome.ts): emptied and shown; null hides it. Inside the closed
+  // shadow root, so page script and agent controls can't reach its buttons.
+  panel(show = true): HTMLElement | null {
+    if (!show) { if (this.host) { this.panelEl.hidden = true; this.panelEl.replaceChildren() } return null }
+    this.ensure()
+    this.panelEl.replaceChildren()
+    this.panelEl.hidden = false
+    return this.panelEl
+  }
 
   get reduced(): boolean { return reducedMotion() }
 

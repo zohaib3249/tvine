@@ -1,7 +1,7 @@
 // core/dispatch — the single mutation path (docs/design/server/core-dispatch.md). Every command
 // (HTTP, MCP, channel, WebMCP, human <Form>) runs this pipeline; first failure → one `err` event.
 import type { ActionManifest } from './actions.js'
-import { authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
+import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
 import { siteRedirect } from './redirect.js'
@@ -31,6 +31,8 @@ export interface ServerCtx {
   hooks: Hooks                     // server.ctx.hooks.on('command' | 'error' | 'session' | 'read', fn)
   appMiddleware: Map<string, Middleware[]>   // apps/<app>/middleware.ts (discoverMiddleware)
   route?: (path: string) => string | undefined   // the site's route matcher (createAgentServer): redirect targets must match
+  // transport/tab: true while a remote agent's forwarded command is running in a tab of this session
+  tabs?: { forcedAgent(sid: Sid): boolean }
   close(): void                    // stops this ctx's session watcher
 }
 
@@ -203,6 +205,9 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   }
   const { sid } = session
   await authenticate(settings, request, session)   // request.user from this session (core/auth.ts; no-op without an auth app)
+  const original = request
+  request = asAgent(cmd, server, request, sid)
+  if (request !== original) aliasRequest(request, original)   // a rotation in the pipeline reaches the transport's request too
   const hold: Hold = {}
   if (!cmd.cmdId) return { sid, events: await serial(sid, () => pipeline(cmd, server, request, session, '', hold)) }
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
@@ -218,6 +223,21 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
     // held until the handler itself settles (not the timeout): a retry never runs it a second time
     void Promise.resolve(hold.settled).catch(() => undefined).then(() => { if (inFlight.get(key) === p) inFlight.delete(key) })
   }
+}
+
+// security.md invariant 3: the agent flag is downgrade-only. agentCmd (the client marks a request it sends for
+// an agent) can only make a request agent; and while a remote agent's forwarded command runs in a tab of this
+// session, EVERY request of the session is agent, whatever the client says (a page handler calling an api,
+// a form path, a client that drops the flag). So denyAgents holds on every path through a controlled tab.
+function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: Sid): Request {
+  const forced = server.tabs?.forcedAgent(sid) === true
+  if (!forced && cmd.agentCmd === undefined) return request
+  const claim = cmd.agentCmd?.via
+  // 'inspector' = the dev gallery's try-it (weft dev/Gallery.tsx); meaningless in production (no gallery there)
+  const via = forced ? 'channel' : claim === 'webmcp' ? 'webmcp' : claim === 'inspector' && process.env.NODE_ENV !== 'production' ? 'inspector' : 'channel'
+  const out: Request = { ...request, agent: { ...request.agent, is: true, via } }
+  if (quiet.has(request)) quiet.add(out)
+  return out
 }
 
 async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {
@@ -288,7 +308,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       // 9. committed: apply staged session data, bump rev, flush channel events
       try {
         session.data = staged.data
-        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human')
+        if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
         // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
         if (wantsCycle(staged)) { server.sessions.rotate(session); markRotated(request, session) }

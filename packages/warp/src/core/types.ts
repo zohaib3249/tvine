@@ -41,6 +41,9 @@ export interface Command {
   cmdId?: string                    // idempotency key
   rev?: Rev                         // optimistic concurrency (stale_rev)
   auth?: string                     // RESERVED v2
+  // control-protocol.md: a client marks a request it sends FOR an agent. Downgrade-only: it can make a
+  // request agent (is=true), never human. via: 'webmcp' (in-browser agent) | 'channel' (remote agent via a tab)
+  agentCmd?: { cmdId?: string; via?: string }
 }
 
 export type Event =
@@ -50,7 +53,7 @@ export type Event =
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
-  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' }   // v2 live
+  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent'; action?: ActionId }   // v2 live; action: an agent's server action (presence outlines its widget)
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
 
 export type ErrCode =
@@ -102,7 +105,7 @@ export interface Request {
   id: string                            // request id (x-request-id / traceparent trace-id)
   agent: {
     is: boolean
-    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'human'
+    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'inspector' | 'human'   // inspector: dev gallery try-it (dev only)
     client?: string                     // UA string or MCP clientInfo.name
     verified?: { directory: string; keyid: string }   // v1.1: Web Bot Auth
   }
@@ -192,7 +195,8 @@ export interface Settings {
   }
   logging: 'json' | 'pretty' | 'none'
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
-  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
+  // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
+  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)

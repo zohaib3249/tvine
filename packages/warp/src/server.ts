@@ -26,7 +26,8 @@ import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
 import { httpTransport } from './transport/http.js'
 import { mcpHandler } from './transport/mcp.js'
-import { inspectorFeed } from './transport/inspector.js'
+import { TabHub, tabTransport } from './transport/tab.js'
+import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 
@@ -166,8 +167,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const sse = new Set<ServerResponse>()
   const isDev = process.env.NODE_ENV !== 'production'
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
-  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch })
-  const mcp = mcpHandler(ctx, { route })
+  // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
+  const tabs = new TabHub(ctx)
+  ctx.tabs = tabs
+  const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs })
+  const mcp = mcpHandler(ctx, { route, tabs })
   const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
   const fail = (res: ServerResponse) => (e: unknown) => {
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
@@ -182,6 +186,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       channel(req, res, next)
     },
     (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
+    ...(feed ? [widgetsTransport(feed)] : []),   // W10 inspector Widgets tab; dev only, like the feed
+    tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
     apiTransport(ctx, { route, tokens, asSession: (v) => internalOf(v, nonce) }),
     httpTransport(ctx, { routes, match: route }),
@@ -261,6 +267,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     async close() {
       clearInterval(sweep)
       feed?.close()
+      tabs.close()
       ctx.close()
       if (g[SIGNER] === signer) g[SIGNER] = prev.signer
       if (g[DISPATCHER] === dispatcher) g[DISPATCHER] = prev.dispatcher

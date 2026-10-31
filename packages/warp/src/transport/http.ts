@@ -336,7 +336,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
 
   function toCommand(v: unknown, headerSid: string | undefined): Command {
     if (!isPlain(v)) throw new Refuse(400, 'invalid_param', 'body must be a JSON object {action, params, sid}')
-    const { action, params = {}, sid = headerSid, bind, cmdId, rev } = v
+    const { action, params = {}, sid = headerSid, bind, cmdId, rev, agentCmd } = v
     if (typeof action !== 'string' || !action) throw new Refuse(400, 'invalid_param', 'action must be a string', 'action')
     if (!isPlain(params)) throw new Refuse(400, 'invalid_param', 'params must be an object', 'params')
     for (const [k, x] of [['sid', sid], ['bind', bind], ['cmdId', cmdId]] as const) {
@@ -347,6 +347,8 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
       action, params,
       ...(sid !== undefined && { sid: sid as string }), ...(bind !== undefined && { bind: bind as string }),
       ...(cmdId !== undefined && { cmdId: cmdId as string }), ...(rev !== undefined && { rev: rev as number }),
+      // downgrade-only marker (any value makes the request agent; dispatch reads only `via`)
+      ...(agentCmd !== undefined && { agentCmd: { via: isPlain(agentCmd) && typeof agentCmd.via === 'string' ? agentCmd.via : undefined } }),
     }
   }
 

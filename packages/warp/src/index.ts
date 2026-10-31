@@ -32,4 +32,5 @@ export { apiTransport, invoke, signForward, verifyForward, toApiResult, API_PREF
 export { mcpHandler, mcpServer, mcpTools, type McpOptions } from './transport/mcp.js'
 export { discoveryTransport, buildSiteManifest, loadNextRoutes, type RouteInfo, type SiteManifest } from './transport/discovery.js'
 export { channelTransport, type ChannelDeps } from './transport/channel.js'
+export { TabHub, tabTransport, TAB_LIMITS, type TabAnswer, type AgentState } from './transport/tab.js'
 export { routeMatcher } from './transport/routes.js'
