@@ -32,7 +32,7 @@ export function adminHandler(o: { path?: string; title?: string } = {}) {
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
       `<meta name="robots" content="noindex, nofollow"><title>${esc(o.title ?? 'Administration')}</title>` +
       `<link rel="stylesheet" href="${esc(base)}/_static/admin.css"></head>` +
-      `<body style="margin:0"><div id="tva-root" data-base="${esc(base)}"></div>` +
+      `<body class="tva-page"><div id="tva-root" data-base="${esc(base)}"></div>` +
       `<script type="module"${n} src="${esc(base)}/_static/admin.js"></script></body></html>`)
   }
 }

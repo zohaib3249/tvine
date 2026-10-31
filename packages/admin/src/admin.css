@@ -7,6 +7,9 @@
 @import "@tvine/weft/forms/forms.css";
 @source "./";
 
+/* the Warp-served shell (serve.ts): no inline style, so a strict CSP needs no style-src exception */
+body.tva-page { margin: 0; }
+
 @theme inline {
   --color-bg: var(--tva-bg);
   --color-surface: var(--tva-surface);

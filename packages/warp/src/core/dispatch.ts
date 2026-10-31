@@ -163,8 +163,8 @@ export function formResult(events: Event[]): FormResult {
   for (const e of events) {
     if (e.kind === 'err') {
       const errs = e.code !== 'invalid_param' ? undefined
-        : e.errors?.length ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
-        : e.field ? { [e.field]: e.message } : undefined
+        : e.errors && e.errors.length > 1 ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
+        : (e.field ?? e.errors?.[0]?.field) ? { [(e.field ?? e.errors![0]!.field)]: e.message } : undefined   // one field: the "field: message" text, as before errors[]
       return { ok: false, ...(errs && { errors: errs }), message: e.message }
     }
     if (e.kind === 'goto') return { ok: true, goto: e.url }

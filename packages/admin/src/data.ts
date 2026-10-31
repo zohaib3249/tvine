@@ -6,9 +6,24 @@ import type { DeletePreview, ListResult, LogEntry, ModelMeta, ObjectData, Site, 
 
 export type Call = (id: string, params?: unknown) => Promise<ApiResult<any>>
 // api.<app>.<name> by full id ("admin.list"), so action ids from the backend (widgets' data) work too.
-export const caller = (api: unknown): Call => (id, params) => {
-  const i = id.indexOf('.')
-  return (api as Record<string, Record<string, (p: unknown) => Promise<ApiResult>>>)[id.slice(0, i)][id.slice(i + 1)](params ?? {})
+// admin.meta is cached per model for the life of this caller (one browser page, or one server render — never shared
+// between users). Any call that is not a read may change perms or filter choices, so it drops the cache; a schema change
+// means a server restart, which the next page load picks up.
+const READS = new Set(['admin.site', 'admin.list', 'admin.get', 'admin.deletePreview', 'admin.history', 'admin.autocomplete', 'admin.search', 'admin.recent', 'auth.me'])
+export const caller = (api: unknown): Call => {
+  const metas = new Map<string, Promise<ApiResult<any>>>()
+  return (id, params) => {
+    const i = id.indexOf('.')
+    const go = () => (api as Record<string, Record<string, (p: unknown) => Promise<ApiResult>>>)[id.slice(0, i)][id.slice(i + 1)](params ?? {})
+    if (id === 'admin.meta') {
+      const k = JSON.stringify(params)
+      let m = metas.get(k)
+      if (!m) metas.set(k, (m = go().then((r) => { if (!r.ok) metas.delete(k); return r })))
+      return m
+    }
+    if (!READS.has(id)) metas.clear()
+    return go()
+  }
 }
 
 export type RouteData = {
