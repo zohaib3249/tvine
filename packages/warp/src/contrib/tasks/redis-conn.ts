@@ -1,3 +1,4 @@
+// TODO(task-connect): replace this file with `import { getRedis } from "../../redis/index.js"` once it is on main.
 // ponytail: a local stand-in for the central named redis connections (packages/warp/src/redis, branch task-connect:
 // `getRedis(alias)` configured by `settings.redis = { default: { url, tls?, prefix? } }` + REDIS_URL). Same
 // signature, so swapping is one import. Until then: configureRedis() or REDIS_URL for the 'default' alias.
