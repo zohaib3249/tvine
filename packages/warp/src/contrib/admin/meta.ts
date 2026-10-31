@@ -14,6 +14,7 @@ export interface FieldMeta {
   decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes?: number }
+  prefix?: string; suffix?: string   // text / number adornments inside the box ('$', 'kg', 'https://')
   step?: number; palette?: string[]; language?: string; from?: string; of?: Partial<FieldMeta>; free?: boolean; humanOnly?: boolean; allowRemoteImages?: boolean
 }
 
@@ -34,7 +35,7 @@ function kindOf(n: string, f: AnyField): MetaKind {
       if (/email/i.test(n)) return 'email'
       if (/(^url|Url|URL)$/.test(n)) return 'url'
       if (n === 'slug') return 'slug'
-      return 'text'
+      return (f.opts.maxLength ?? 0) > 255 ? 'textarea' : 'text'   // Django: CharField → input, long text → textarea
     case 'richText': return 'rich'
     case 'dateRange': return 'daterange'
     case 'encrypted': return (f.opts as { of?: string }).of === 'json' ? 'json' : 'text'   // shown only with hidden: false
@@ -45,6 +46,7 @@ function kindOf(n: string, f: AnyField): MetaKind {
 export interface MetaOpts {
   readonly: string[]; autocomplete: string[]; rawId: string[]
   overrides: Record<string, Partial<FieldMeta>>
+  widgets?: Record<string, MetaKind>        // ModelAdmin.widgets: { status: 'segmented' } (sugar for overrides[name].kind)
   keyOf: (def: ModelDef) => string           // a related model's '<app>.<model>'
 }
 export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
@@ -77,7 +79,7 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
   if (f.kind === 'decimal') { m.decimals = (f as unknown as { places: number }).places; m.max = 10 ** ((f as unknown as { digits: number }).digits - m.decimals) - 10 ** -m.decimals }
   const ml = f.opts.maxLength ?? ({ email: 254, url: 200, slug: 50, markdown: LONG_TEXT_MAX, code: LONG_TEXT_MAX } as Record<string, number>)[f.kind]
   if (ml) m.maxLength = ml
-  return { ...m, ...o.overrides[f.kind], ...o.overrides[n] }
+  return { ...m, ...o.overrides[f.kind], ...o.overrides[n], ...(o.widgets?.[n] && { kind: o.widgets[n] }) }
 }
 
 // a stored row value → JSON (fk = the related pk, money = {value, currency}, dates ISO)

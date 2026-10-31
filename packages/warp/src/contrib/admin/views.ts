@@ -86,7 +86,7 @@ function formFields(a: Base): string[] {
   const fs = (a as ModelAdmin).fieldsets?.flatMap(([, f]) => f.fields) ?? a.fields ?? all.map(([n]) => n)
   return fs.filter((n) => !a.exclude.includes(n))
 }
-const metaOpts = (a: Base) => ({ readonly: a.readonlyFields, autocomplete: a.autocompleteFields, rawId: a.rawIdFields, overrides: a.formfieldOverrides, keyOf: (d: ModelDef) => site.keyOf(d) })
+const metaOpts = (a: Base) => ({ readonly: a.readonlyFields, autocomplete: a.autocompleteFields, rawId: a.rawIdFields, overrides: a.formfieldOverrides, widgets: a.widgets, keyOf: (d: ModelDef) => site.keyOf(d) })
 function formMeta(a: Base): Record<string, FieldMeta> {
   const out: Record<string, FieldMeta> = {}
   for (const n of formFields(a)) {
