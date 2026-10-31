@@ -263,7 +263,7 @@ export interface Settings {
   allowedHosts: string[]            // Django ALLOWED_HOSTS ('*', '.example.com'); required in production
   debug: boolean                    // Django DEBUG: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
-  media: { dir: string; route: string }
+  media: { dir: string; route: string; auditAccess?: boolean }   // auditAccess: an audit row per private-file read
   snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
@@ -294,8 +294,9 @@ export interface Settings {
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
+  // allowIps: addresses / CIDRs that may use the admin (panel + actions); require2fa: staff need TOTP; idleMs: staff idle timeout
   admin: {
-    path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }
+    path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }; allowIps?: string[]; require2fa?: boolean; idleMs?: number
     // dashboard: widget ids in display order (others follow) + the automatic per-model charts; stats: the hourly rollups
     dashboard: { widgets: string[]; autoCharts: boolean }
     stats: { enabled: boolean; retentionDays: number; flushMs: number }
@@ -307,6 +308,8 @@ export interface Settings {
   // extra path rules for every agent; extra: raw lines appended; sitemap: an absolute url (else /sitemap.xml if the app has one)
   robots: { allow: string[]; disallow: string[]; extra: string[]; sitemap?: string }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
+  // encrypted model fields: AES-256-GCM root keys, newest first (rotation); empty = derived from secret (HKDF)
+  encryption: { keys: string[] }
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
 }
@@ -337,6 +340,9 @@ export interface AuthSettings {
   objectPermission?: (user: TvineUser, perm: string, obj: unknown) => boolean | Promise<boolean>
   tokens?: { defaultDays?: number; maxDays?: number }
   totp?: { issuer?: string }
+  breachCheck?: boolean                // new passwords are checked against Have I Been Pwned (k-anonymity), off by default
+  // security notices by mail (contrib/auth/notify.ts); each defaults to on when settings.email.backend is not 'dummy'
+  notify?: { newLogin?: boolean; passwordChanged?: boolean; twoFactorDisabled?: boolean; tokenCreated?: boolean; emailChanged?: boolean }
 }
 export interface PasswordHasher {
   algorithm: string

@@ -95,3 +95,15 @@ export async function boundaryCheck(root: string): Promise<Violation[]> {
 export const boundaryReport = (v: Violation[], level: 'error' | 'warn' = 'error') => v.map((x) => x.chain.length
   ? `${level.padEnd(5)}  ${x.chain.join(' → ')}${x.chain.at(-1) === x.what ? '' : ` → ${x.what}`}\n       frontend code must not use models/the ORM. Fix: add a view (e.g. a ListView with readOnly rules) in apps/<app>/views.ts and call it: \`must(await api.<app>.<name>(params))\` from '@tvine/weft/api'.`
   : `${level.padEnd(5)}  ${x.file}: ${x.what}`).join('\n')
+
+// tvine check: `const x = Model.objects.<read>(…)` without await holds a Promise, not rows (a cheap line regex,
+// not a type check: a promise kept on purpose and awaited later is reported too). Writes need no await.
+const UNAWAITED_READ = /\b(?:const|let|var)\s+[\w$]+\s*(?::[^=]+)?=\s*(?!await\b)[\w$]+\.objects\b[^;\n]*?\.(?:get|first|last|count|exists|all|fetchAll|page|aggregate|inBulk)\(/
+export function unawaitedReads(dir: string): string[] {
+  const files: string[] = [], out: string[] = []
+  walk(dir, files)
+  for (const f of files) {
+    readFileSync(f, 'utf8').split('\n').forEach((l, i) => { if (UNAWAITED_READ.test(l)) out.push(`${posix(relative(dir, f))}:${i + 1}: ${l.trim()}`) })
+  }
+  return out
+}

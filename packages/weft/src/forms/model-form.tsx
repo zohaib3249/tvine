@@ -23,6 +23,7 @@ export type ModelFormProps = {
   layout?: 'stacked' | 'aligned'                                 // aligned = label beside input (Django admin) on wide screens
   name?: string; label?: string; model?: string                  // widget id form:<name>; model 'app.model' for overrides/search
   search?: FormSearch
+  uploadImage?: (file: File, field: string) => Promise<string>    // rich text image button: upload, return the URL
   call?: { id: string; args?: Record<string, Json> }             // headless parity: submit = `do <id>` with args + values
   onDirtyChange?(dirty: boolean): void
   actions?: ReactNode | ((s: ModelFormState) => ReactNode)        // submit-row slot; default: one Save button
@@ -48,6 +49,7 @@ function initialRows(im: InlineMeta, given?: Row[] | { rows: Row[] }): Row[] {
 // Django ignores an untouched extra form; a deleted new row is simply dropped.
 const live = (rows: Row[]) => rows.filter((r) => !(r._new && (!r._touched || r.DELETE)))
 
+export const slugify = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9\s_-]/g, '').trim().replace(/[\s_-]+/g, '-').slice(0, 50)
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // Django capfirst
 
 export function ModelForm(props: ModelFormProps) {
@@ -76,7 +78,12 @@ export function ModelForm(props: ModelFormProps) {
   const errors: Record<string, string> = { ...server.fields, ...inlineClient, ...client }
 
   const setField = (n: string, v: unknown) => {
-    setValues((s) => ({ ...s, [n]: v }))
+    setValues((s) => {
+      const next = { ...s, [n]: v }
+      // Django prepopulated_fields: a slugAuto field follows its source until someone edits it away from the generated slug
+      for (const [k, f] of Object.entries(form.fields)) if (f.kind === 'slugAuto' && f.from === n && (!s[k] || s[k] === slugify(String(s[n] ?? '')))) next[k] = slugify(String(v ?? ''))
+      return next
+    })
     if (server.fields[n]) setServer((s) => { const f = { ...s.fields }; delete f[n]; return { ...s, fields: f } })
   }
   const submitRef = useRef<() => Promise<unknown>>(async () => undefined)
@@ -127,7 +134,8 @@ export function ModelForm(props: ModelFormProps) {
   const field = (n: string) => {
     const m = form.fields[n]
     if (!m) return null
-    return <Field key={n} meta={m} value={values[n]} onChange={(v) => setField(n, v)} error={errors[n]} readOnly={readOnly} model={model} search={fieldSearch(m, model)} />
+    return <Field key={n} meta={m} value={values[n]} onChange={(v) => setField(n, v)} error={errors[n]} readOnly={readOnly} model={model} search={fieldSearch(m, model)}
+      uploadImage={props.uploadImage && ((f: File) => props.uploadImage!(f, n))} />
   }
   const sets = form.fieldsets.length ? form.fieldsets : [{ title: null, fields: Object.keys(form.fields) }]
   const slot = (x: ReactNode | ((s: ModelFormState) => ReactNode)) => (typeof x === 'function' ? (x as (s: ModelFormState) => ReactNode)(st) : x)

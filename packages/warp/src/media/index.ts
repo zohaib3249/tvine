@@ -7,10 +7,12 @@ import { pipeline } from 'node:stream/promises'
 import { nanoid } from 'nanoid'
 import { z } from 'zod'
 import { defineAction, DomainError } from '../core/actions.js'
-import type { ActionDef, ActionRules, Settings, UploadedFile } from '../core/types.js'
+import { securityEvent } from '../core/audit.js'
+import type { ActionDef, ActionRules, Settings, TvineUser, UploadedFile } from '../core/types.js'
+import { loadedSettings, TimestampSigner } from '../security/signing.js'
 
 export interface Storage {
-  put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean }): Promise<void>
+  put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean; private?: boolean }): Promise<void>
   url(key: string): string
   delete(key: string): Promise<void>
 }
@@ -35,7 +37,7 @@ const sniff = (b: Buffer) => SIGS.find((s) => s.test(b))
 export class DiskStorage implements Storage {
   constructor(readonly dir: string, readonly routePrefix = '/media') {}
 
-  async put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean }): Promise<void> {
+  async put(key: string, data: Readable | Buffer, meta: { type: string; size: number; public?: boolean; private?: boolean }): Promise<void> {
     if (!KEY_RE.test(key)) throw new Error(`bad storage key ${key}`)
     await mkdir(dirname(join(this.dir, key)), { recursive: true })
     const tmp = join(this.dir, `.tmp-${nanoid()}`)
@@ -48,7 +50,7 @@ export class DiskStorage implements Storage {
         await pipeline(data, out)
         size = out.bytesWritten
       }
-      await writeFile(metaTmp, JSON.stringify({ type: meta.type, size, ...(meta.public && { public: true }) }))
+      await writeFile(metaTmp, JSON.stringify({ type: meta.type, size, ...(meta.public && { public: true }), ...(meta.private && { private: true }) }))
       await rename(metaTmp, join(this.dir, `${key}.json`))
       await rename(tmp, join(this.dir, key))
     } catch (e) {
@@ -66,8 +68,9 @@ export class DiskStorage implements Storage {
 type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
 // uploadTo: key folder (Django upload_to), e.g. 'avatars' → 'avatars/<id>.png'; pass the file / image field's own uploadTo
 // public: served with `Cache-Control: public` (shared caches, CDNs); default private (a user's upload)
-export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string; public?: boolean }
-export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage' | 'uploadTo' | 'public'> }
+// private: never served without a signed, expiring url (media.url(file, { expiresIn, user }))
+export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string; public?: boolean; private?: boolean }
+export type UploadDef = ActionDef & { upload: Required<Pick<UploadOpts, 'maxBytes' | 'types'>> & Pick<UploadOpts, 'storage' | 'uploadTo' | 'public' | 'private'> }
 type Media = Settings['media']
 
 // The def's own storage, else disk at settings.media (known only once the server runs, so resolved per use).
@@ -79,7 +82,8 @@ export const storageOf = (def: UploadDef, media: Media = { dir: './media', route
 export function defineUpload(name: string, opts: UploadOpts & { rate?: ActionRules['rate'] }): UploadDef {
   const uploadTo = opts.uploadTo?.replace(/^\/+|\/+$/g, '')
   if (uploadTo !== undefined && !UPLOAD_TO.test(uploadTo)) throw new Error(`defineUpload ${name}: uploadTo must be folder names (letters, digits, _ -) joined by /`)
-  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage, uploadTo, ...(opts.public && { public: true }) }
+  if (opts.public && opts.private) throw new Error(`defineUpload ${name}: public and private are exclusive`)
+  const upload = { maxBytes: opts.maxBytes, types: opts.types, storage: opts.storage, uploadTo, ...(opts.public && { public: true }), ...(opts.private && { private: true }) }
   // the 5/min default yields to apps/<app>/rules.ts (defaultRules); an explicit opts.rate beats both
   const rules: UploadRules = { ...(opts.rate && { rate: opts.rate }), ...(opts.permissions && { permissions: opts.permissions }) }
   const def: ActionDef = defineAction(name, z.object({ file: z.record(z.unknown()) }), async (p, ctx): Promise<UploadedFile> =>
@@ -144,14 +148,42 @@ export async function receiveUpload(
   const counted = Readable.from((async function* () {
     for await (const b of guarded(head, it as AsyncIterator<Buffer>, maxBytes, source)) { size += b.length; yield b }
   })())
-  try { await storage.put(key, counted, { type: found.type, size: 0, ...(def.upload.public && { public: true }) }) } catch (e) { counted.destroy(); source.destroy(); throw e }
-  return { field, key, url: storage.url(key), type: found.type, size }
+  try { await storage.put(key, counted, { type: found.type, size: 0, ...(def.upload.public && { public: true }), ...(def.upload.private && { private: true }) }) } catch (e) { counted.destroy(); source.destroy(); throw e }
+  // a private file's url is signed for the uploader (1 h); pages call media.url(key, …) for later views
+  return { field, key, url: def.upload.private ? media.url(key, { route: meta.media?.route }) : storage.url(key), type: found.type, size }
 }
 
+// ---- private files: signed, expiring urls (TimestampSigner, salted with the key, so a token opens one file) ----
+const signer = (key: string) => new TimestampSigner({ salt: `tvine.media:${key}` })
+export const media = {
+  // expiresIn: seconds (default 1 h); user: only that signed-in user may open it
+  url(file: string | { key: string }, o: { expiresIn?: number; user?: TvineUser | string | number; route?: string } = {}): string {
+    const key = typeof file === 'string' ? file : file.key
+    if (!KEY_RE.test(key)) throw new Error(`media.url: bad storage key ${key}`)
+    const u = o.user === undefined ? '' : typeof o.user === 'object' ? String(o.user.id ?? '') : String(o.user)
+    if (typeof o.user === 'object' && !u) throw new Error('media.url: user has no id')
+    const t = signer(key).sign(`${u}|${Math.max(1, Math.floor(o.expiresIn ?? 3600))}`)
+    return `${o.route ?? loadedSettings()?.media?.route ?? '/media'}/${key}?t=${encodeURIComponent(t)}`
+  },
+  // the user id a token was bound to ('' = anyone holding the link), or null when it is bad / expired
+  verify(key: string, token: string): string | null {
+    try {
+      const v = signer(key).unsign(token)
+      const i = v.lastIndexOf('|')
+      signer(key).unsign(token, { maxAge: Number(v.slice(i + 1)) })
+      return v.slice(0, i)
+    } catch { return null }
+  },
+}
+
+export interface MediaHandlerOpts {
+  userOf?: (req: IncomingMessage) => Promise<TvineUser | undefined>   // for user-bound private urls
+  settings?: Settings                                                  // settings.media.auditAccess → audit row per private read
+}
 // connect-style GET handler for `${routePrefix}/<key>`; paths outside the prefix fall through.
-export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
+export function mediaHandler(storage: DiskStorage, routePrefix = '/media', opts: MediaHandlerOpts = {}) {
   return async (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
-    const path = (req.url ?? '').split('?')[0]!
+    const [path, query = ''] = (req.url ?? '').split('?') as [string, string?]
     if (path !== routePrefix && !path.startsWith(`${routePrefix}/`)) return next()
     const notFound = () => { res.statusCode = 404; res.setHeader('Cache-Control', 'no-store'); res.end() }
     if (req.method !== 'GET' && req.method !== 'HEAD') return notFound()
@@ -162,6 +194,14 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
       const file = join(storage.dir, key)
       const [info, st] = await Promise.all([readFile(join(storage.dir, `${key}.json`), 'utf8'), stat(file)])
       if (!st.isFile()) return notFound()
+      const priv = (JSON.parse(info) as { private?: boolean }).private
+      if (priv) {   // 404, not 403: a bad link does not confirm the file exists
+        const bound = media.verify(key, new URLSearchParams(query).get('t') ?? '')
+        if (bound === null) return notFound()
+        let uid: string | undefined
+        if (bound) { const u = await opts.userOf?.(req); uid = u?.isAuthenticated ? String(u.id) : undefined; if (uid !== bound) return notFound() }
+        if (opts.settings?.media.auditAccess) securityEvent('media_private_access', { key, userId: uid ?? null }, { settings: opts.settings, level: 'info' })
+      }
       // Success headers only once the file is really open: a failed open must give a clean 404.
       const ok = () => {
         res.statusCode = 200
@@ -170,7 +210,8 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
         res.setHeader('X-Content-Type-Options', 'nosniff')
         // a PDF downloads, never opens inline (security/headers.ts adds the sandbox CSP; this holds without it too)
         if (!m.type.startsWith('image/') && !res.hasHeader('Content-Disposition')) res.setHeader('Content-Disposition', 'attachment')
-        res.setHeader('Cache-Control', `${m.public ? 'public' : 'private'}, max-age=31536000, immutable`)
+        res.setHeader('Cache-Control', priv ? 'private, no-store' : `${m.public ? 'public' : 'private'}, max-age=31536000, immutable`)
+        if (priv) res.setHeader('Referrer-Policy', 'no-referrer')   // the signed url never leaks to a linked site
         res.setHeader('Content-Length', String(st.size))
       }
       if (req.method === 'HEAD' || st.size === 0) { ok(); return void res.end() }

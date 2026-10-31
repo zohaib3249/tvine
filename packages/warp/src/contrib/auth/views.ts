@@ -13,8 +13,11 @@ import {
   newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
 } from './backend.js'
 import { base32, sha256 } from './crypto.js'
-import { RecoveryCode, Token, Totp, User } from './models.js'
-import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
+import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
+import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
+import { checkNewDevice, securityNotice } from './notify.js'
+import { exportToMedia } from './privacy.js'
+import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validateNewPassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
 import { limiterFor } from '../../backends/index.js'
@@ -83,10 +86,11 @@ export const loginAction = defineAction('login', z.object({
   await t.succeed(username, ip)
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
+  await checkNewDevice(ctx.settings, row, ctx.request)
   return safeUser(await login(ctx, current))
 }, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
 
-export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { logout(ctx); return null }, { permissions: [notInTab] })
+export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab] })
 
 export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promise<SafeUser | null> => {
   const u: TvineUser = ctx.request.user
@@ -101,11 +105,13 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
     await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the current password is not correct', 'oldPassword')
   }
-  reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
+  reject(await validateNewPassword(newPassword, ctx.settings, row), 'newPassword')
   const fresh = await User.update(row.id, { password: await makePassword(newPassword, ctx.settings) })
   await revokeTokens(row.id)
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
   await login(ctx, fresh)
+  await dropOtherSessions(row.id, ctx.session)
+  securityNotice(ctx.settings, 'passwordChanged', row, ctx.request)
   return null
 }, { permissions: [isAuthenticated, denyAgents] })
 
@@ -135,13 +141,49 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   const id = userOfUid(uid)
   const row = id === undefined ? undefined : await User.get(id)
   if (!row?.isActive || !checkResetToken(ctx.settings, row, token)) throw bad()
-  reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
+  reject(await validateNewPassword(newPassword, ctx.settings, row), 'newPassword')
   // the guard: the update matches the hash the token was made for, so two concurrent uses cannot both win
   const n = await User.objects.filter({ id: row.id, password: row.password }).update({ password: await makePassword(newPassword, ctx.settings) })
   if (n !== 1) throw bad()
   await revokeTokens(row.id)
+  await dropOtherSessions(row.id)
+  securityNotice(ctx.settings, 'passwordChanged', row, ctx.request)
   return null
 }, { rate: { limit: 10, windowMs: 60_000 } })
+
+// ---- sessions (signed-in browsers / clients) ------------------------------------------------------------
+// the id is an opaque hash, never the sid; revoking signs that session out on its next request
+export const sessionsAction = defineAction('sessions', z.object({}), async (_p, ctx) => listSessions(Number(sessionOnly(ctx).id), ctx.session),
+  { permissions: [isAuthenticated], readOnly: true })
+
+export const revokeSession = defineAction('revokeSession', z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }), async ({ id }, ctx) => {
+  const u = sessionOnly(ctx)
+  const own = (await listSessions(Number(u.id), ctx.session)).find((s) => s.id === id)
+  if (!own) throw new DomainError('not_found', 'no such session')
+  if (own.current) { await forgetSession(ctx.session); logout(ctx) }
+  else await UserSession.objects.filter({ key: id, userId: Number(u.id) }).delete()
+  securityEvent('session_revoked', { userId: u.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return null
+}, { permissions: [isAuthenticated, notInTab] })
+
+export const logoutOthers = defineAction('logoutOthers', z.object({}), async (_p, ctx) => {
+  const u = sessionOnly(ctx)
+  const n = await dropOtherSessions(Number(u.id), ctx.session)
+  securityEvent('sessions_revoked', { userId: u.id, count: n }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return { revoked: n }
+}, { permissions: [isAuthenticated, notInTab] })
+
+// ---- privacy: my data ---------------------------------------------------------------------------------
+// a JSON file of everything the app holds on me (models opt in with Meta.personalData), as a private media file:
+// the answer and an email carry a signed link that only this user can open, for 24 h. A human confirms; twice an hour.
+export const exportMyData = defineAction('exportMyData', z.object({}), async (_p, ctx) => {
+  const u = sessionOnly(ctx)
+  const path = await exportToMedia(Number(u.id), ctx.settings)
+  const url = ctx.settings.siteUrl ? new URL(path, ctx.settings.siteUrl).href : path
+  if (u.email) onCommit(() => void sendMail({ subject: 'Your data export is ready', to: u.email!, message: `Hi ${u.username},\n\nDownload your data (signed in, within 24 hours):\n\n${url}\n` }, { background: true }).catch(() => undefined))
+  securityEvent('data_export', { userId: u.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return { url }
+}, { permissions: [isAuthenticated, denyAgents], rate: { limit: 2, windowMs: 3_600_000 }, confirm: { by: 'human' } })
 
 // ---- TOTP ----------------------------------------------------------------------------------------
 export const totpBegin = defineAction('totpBegin', z.object({ password: pw().optional() }), async ({ password }, ctx) => {
@@ -185,6 +227,7 @@ export const totpDisable = defineAction('totpDisable', z.object({ password: pw()
   }
   await Totp.objects.filter({ userId: row.id }).delete()
   await RecoveryCode.objects.filter({ userId: row.id }).delete()
+  securityNotice(ctx.settings, 'twoFactorDisabled', row, ctx.request)
   return null
 }, { permissions: [isAuthenticated, denyAgents] })
 
@@ -204,6 +247,7 @@ export const createToken = defineAction('createToken', z.object({
   const { token, key, digest } = newToken()
   const expiresAt = new Date(Date.now() + days * 86_400_000)
   await Token.create({ userId: Number(u.id), name, key, digest, scopes: [...new Set(scopes)], expiresAt })
+  securityNotice(ctx.settings, 'tokenCreated', u, ctx.request, `Token name: ${name}`)
   return { token, key, name, scopes: [...new Set(scopes)], expiresAt: expiresAt.toISOString() }   // the token: shown this once
 }, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 

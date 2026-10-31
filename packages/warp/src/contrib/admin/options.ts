@@ -6,7 +6,8 @@ import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, ActionDef } from '../../core/types.js'
 import type { Model } from '../../data/model.js'
 import type { QuerySet } from '../../data/queryset.js'
-import { isStaff, permCodename } from '../../security/permissions.js'
+import { permCodename } from '../../security/permissions.js'
+import { staffGuard } from './hardening.js'
 import type { UrlEntry } from '../../urls.js'
 import type { FieldMeta } from './meta.js'
 
@@ -61,7 +62,7 @@ export const isFilterClass = (v: unknown): v is ListFilterClass => typeof v === 
 export interface Labelled { model: AnyModel; key(): string; app(): string }
 async function modelPerm(ctx: Ctx, admin: Labelled, p: Perm): Promise<boolean> {
   const u = ctx.request.user
-  if (!isStaff({ user: u } as never)) return false
+  if (!(u.isStaff === true && u.isActive !== false)) return false   // the per-model check; staffGuard already ran on the action
   if (u.isSuperuser) return true
   return !!u.hasPerm && (await u.hasPerm(permCodename(admin.app(), p, admin.model.name)))
 }
@@ -189,7 +190,7 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
       if (!(await checkPerm(admin, ctx, opts.permission ?? 'view'))) throw new DomainError('forbidden', 'forbidden: not allowed')
       if (admin.agents === false && ctx.request.agent.is) throw new DomainError('forbidden', 'forbidden: not for agents')
       return fn.call(admin, params, ctx)
-    }, { permissions: [isStaff], ...(opts.readOnly ? { readOnly: true } : { confirm: (_p: unknown, ctx: ActionCtx) => (admin.agents === 'confirm' && ctx.request.agent.is ? { by: 'human' as const } : undefined) }) })
+    }, { permissions: [staffGuard], ...(opts.readOnly ? { readOnly: true } : { confirm: (_p: unknown, ctx: ActionCtx) => (admin.agents === 'confirm' && ctx.request.agent.is ? { by: 'human' as const } : undefined) }) })
     if (opts.title) (def as { title?: string }).title = opts.title
     return def
   }

@@ -72,3 +72,23 @@ export const RecoveryCode = defineModel('auth_recovery_code', {
   digest: field.text({ hidden: true }),
   usedAt: field.datetime({ optional: true }),
 })
+
+// a signed-in browser / client (auth.sessions): the session holds a random key, this row its sha256 (the id users
+// see; never the sid). Deleting the row signs that session out on its next request (memory or redis store alike).
+export const UserSession = defineModel('auth_session', {
+  id: field.id(),
+  user: field.fk(() => User, { index: true, onDelete: 'CASCADE' }),
+  key: field.text({ unique: true, hidden: true }),    // sha256 hex of the session's _auth_session_key
+  ip: field.text(),
+  userAgent: field.text(),                            // first 300 chars
+  createdAt: field.datetime({ auto: true }),
+  lastSeen: field.datetime(),
+})
+
+// devices a user signed in from before (security notifications: "new sign-in"): HMAC of UA + ip /24, never the raw pair
+export const KnownDevice = defineModel('auth_known_device', {
+  id: field.id(),
+  user: field.fk(() => User, { index: true, onDelete: 'CASCADE' }),
+  digest: field.text({ hidden: true }),
+  lastSeen: field.datetime(),
+}, { indexes: [{ fields: ['user', 'digest'], name: 'auth_known_device_uniq', unique: true }] })

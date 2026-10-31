@@ -8,7 +8,7 @@ import { discoverModels } from '../../data/migrate.js'
 import type { Model } from '../../data/model.js'
 import { relationOf } from '../../data/registry.js'
 import { include, path, type UrlEntry, type UrlPattern } from '../../urls.js'
-import { isStaff } from '../../security/permissions.js'
+import { staffGuard } from './hardening.js'
 import { isFilterClass, ModelAdmin, type InlineModelAdmin } from './options.js'
 
 type AnyModel = Model<any, any>
@@ -82,7 +82,7 @@ export class AdminSite {
         def.name = `admin.${app}_${model}_${e.name ?? def.name}`
         // a raw def (not this.view()) is staff-only like the rest of the admin; `public: true` on the def opts out
         const perms = def.rules?.permissions ?? []
-        if (!(def as { public?: boolean }).public && !perms.includes(isStaff)) def.rules = { ...def.rules, permissions: [isStaff, ...perms] }
+        if (!(def as { public?: boolean }).public && !perms.includes(staffGuard)) def.rules = { ...def.rules, permissions: [staffGuard, ...perms] }
         defs.push(def)
       }
     }

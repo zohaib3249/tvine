@@ -8,6 +8,11 @@ import { concrete, hasDefault, isAuto, keyOf, pkField, rowSchema, type Create, t
 import { defineChecked } from './registry.js'
 import { prefetch, related, type RelatedManager } from './related.js'
 import { checkIdent } from './sql/dialect.js'
+import { trackMethods } from './pending.js'
+
+// with or without await (pending.ts): every public call is tracked by the enclosing request / job / atomic()
+trackMethods(QuerySet.prototype as never, ['page', 'all', 'fetchAll', 'first', 'last', 'count', 'exists', 'aggregate', 'inBulk'], false)
+trackMethods(QuerySet.prototype as never, ['update', 'delete', 'getOrCreate', 'updateOrCreate', 'bulkCreate', 'bulkUpdate'], true)
 
 export interface Model<F extends Fields = Fields, T extends object = Row<F>> {
   readonly name: string
@@ -28,7 +33,8 @@ export const modelRegistry = (): Model<any, any>[] => [...registry.values()]   /
 
 export function defineModel<const F extends Fields>(name: string, fields: F, meta: ModelMeta = {}): Model<F> {
   const def = { name, fields, meta }
-  pkField(def)
+  const [pkName, pkF] = pkField(def)
+  for (const [n, f] of Object.entries(fields)) (f as { bind?: (m: string, n: string, pk: { name: string; kind: string }) => void }).bind?.(name, n, { name: pkF.columns(pkName)[0]!, kind: pkF.kind })
   checkMeta(name, fields, meta)
   for (const [n, f] of Object.entries(fields)) if (f.kind === 'money' && f.opts.searchable) throw new Error(`${name}.${n}: a money field cannot be searchable`)
   const schema = rowSchema(def)
@@ -82,8 +88,10 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
       return row
     },
     async delete(id) { await objects.filter({ id }).delete() },
-    related: (rel, id) => related(def, rel, id, atomic),
+    related: (rel, id) => { const m = related(def, rel, id, atomic); trackMethods(m as never, ['add', 'remove', 'set', 'clear'], true); return m },
   }
+  trackMethods(model as never, ['get'], false)
+  trackMethods(model as never, ['create', 'update', 'delete'], true)
   defineChecked(def, model)   // reverse-name clashes are a definition error (Django's system check)
   registry.set(name, model)
   return model
@@ -95,6 +103,13 @@ function checkMeta(name: string, fields: Fields, meta: ModelMeta): void {
     const x = fields[f]
     if (!x) throw new Error(`${name} Meta ${where}: unknown field "${f}"`)
     if (x.kind === 'm2m') throw new Error(`${name} Meta ${where}: "${f}" is a many-to-many field (no column)`)
+  }
+  for (const f of meta.personalData ?? []) {
+    has(f, 'personalData')
+    // erase's default 'anonymize' blanks a field: nullable, or text-like (''); anything else needs Meta.onErase
+    const x = fields[f]!
+    if ((meta.onErase ?? 'anonymize') === 'anonymize' && !x.opts.optional && !['text', 'email', 'slug', 'url', 'encrypted'].includes(x.kind))
+      throw new Error(`${name} Meta personalData: "${f}" (${x.kind}, not optional) cannot be anonymized: set Meta.onErase to 'delete' or a function`)
   }
   for (const [n, f] of Object.entries(fields)) {
     const od = f.opts.onDelete

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 import { env, fromDotenv, isProduction } from './env.js'
 import { LEVELS } from './log.js'
@@ -97,6 +98,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   metrics: { enabled: false, path: '/tvine/metrics', allowIps: [] },
   robots: { allow: [], disallow: [], extra: [] },
   installedApps: [],
+  encryption: { keys: [] },
 }
 
 const corsPolicy = z.object({
@@ -144,7 +146,7 @@ const schema: z.ZodType<Settings> = z.object({
   allowedHosts: z.array(z.string().regex(/^(\*|\.?[a-z0-9.-]+|\[[0-9a-f:.]+\])$/i, "a host name, '.example.com' (with subdomains), an [ipv6] or '*'")),
   debug: z.boolean(),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
-  media: z.object({ dir: z.string(), route: z.string() }),
+  media: z.object({ dir: z.string(), route: z.string(), auditAccess: z.boolean().optional() }),
   snapshotCache: z.object({ ttlMs: posInt, backend, redis: alias }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
@@ -193,6 +195,7 @@ const schema: z.ZodType<Settings> = z.object({
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
     theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }),
+    allowIps: z.array(z.string().refine(validCidr, 'an address or CIDR (e.g. 10.0.0.0/8)')).optional(), require2fa: z.boolean().optional(), idleMs: z.number().int().positive().optional(),
     dashboard: z.object({ widgets: z.array(z.string().max(100)).max(100), autoCharts: z.boolean() }),
     stats: z.object({ enabled: z.boolean(), retentionDays: z.number().int().min(1).max(3650), flushMs: z.number().int().min(1000) }) }),
   caches: z.record(alias, z.object({
@@ -209,6 +212,7 @@ const schema: z.ZodType<Settings> = z.object({
   robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
     sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
+  encryption: z.object({ keys: z.array(z.string().min(32, 'encryption.keys: each key at least 32 chars')).refine((k) => new Set(k).size === k.length, 'encryption.keys: duplicate key') }).strict(),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
     user: fn<(req: Request) => Promise<TvineUser | null>>().optional(),
@@ -221,8 +225,18 @@ const schema: z.ZodType<Settings> = z.object({
     objectPermission: fn<NonNullable<AuthSettings['objectPermission']>>().optional(),
     tokens: z.object({ defaultDays: z.number().positive(), maxDays: z.number().positive() }).partial().optional(),
     totp: z.object({ issuer: z.string() }).partial().optional(),
+    breachCheck: z.boolean().optional(),
+    notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
 }).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] }) as z.ZodType<Settings>
+
+// admin.allowIps entries must parse at boot (a typo must not silently lock everyone out, or let everyone in)
+function validCidr(e: string): boolean {
+  const [a, p, extra] = e.split('/'), v = isIP(a ?? '')
+  if (!v || extra !== undefined) return false
+  if (p === undefined) return true
+  try { new BlockList().addSubnet(a!, Number(p), v === 6 ? 'ipv6' : 'ipv4'); return /^\d{1,3}$/.test(p) } catch { return false }
+}
 
 const isPlain = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -261,12 +275,16 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
     merged.actionMiddleware = [...((rest.actionMiddleware as unknown[] | undefined) ?? []), ...action]
     merged.middleware = http.length || !action.length ? http : DEFAULT_MIDDLEWARE
   }
+  if ((rest as { encryption?: { keys?: unknown } }).encryption?.keys === undefined && env.has('TVINE_ENCRYPTION_KEYS')) merged.encryption = { keys: env.list('TVINE_ENCRYPTION_KEYS') }
   if (rest.allowedHosts === undefined && env.has('TVINE_ALLOWED_HOSTS')) merged.allowedHosts = env.list('TVINE_ALLOWED_HOSTS')
   // production: DEBUG only from the real environment, never from a .env file that shipped with the code
   const debugEnv = env.has('TVINE_DEBUG') && !(prod && fromDotenv.has('TVINE_DEBUG'))
   if (rest.debug === undefined) merged.debug = debugEnv ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
   // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
   if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
+  // settings.admin.allowIps also guards the panel's pages (the admin actions check it themselves: contrib/admin/hardening.ts)
+  const adminIps = (merged.admin as { allowIps?: string[]; path?: string } | undefined)
+  if (adminIps?.allowIps?.length && Array.isArray(merged.middleware)) merged.middleware = [...merged.middleware as unknown[], ['tvine.middleware.IpFilter', { paths: [adminIps.path ?? '/admin'], allow: adminIps.allowIps }]]
   const settings = schema.parse(merged)
   // secreview M2: a Secure cookie on Path=/ with no Domain is a __Host- cookie (a subdomain or http page cannot plant it)
   if (settings.session.secure && !settings.session.cookieName.startsWith('__')) settings.session.cookieName = `__Host-${settings.session.cookieName}`

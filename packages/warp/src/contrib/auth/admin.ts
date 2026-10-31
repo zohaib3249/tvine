@@ -4,13 +4,15 @@
 // (a hidden field: never in admin values); the add form sets the first one, the set-password view every later one.
 import { DomainError } from '../../core/errors.js'
 import { path } from '../../urls.js'
-import { ModelAdmin, type Ctx } from '../admin/options.js'
+import { adminAction, ModelAdmin, TabularInline, type Ctx } from '../admin/options.js'
+import { eraseData } from './privacy.js'
 import { site } from '../admin/sites.js'
 import { logAction } from '../admin/views.js'
 import { CHANGE } from '../admin/models.js'
-import { Group, User } from './models.js'
+import { Group, User, UserSession } from './models.js'
 import { setPassword } from './users.js'
 import { AuthUser, recentlyAuthenticated } from './backend.js'
+import { securityNotice } from './notify.js'
 
 type UserRow = typeof User extends { create(d: never): Promise<infer R> } ? R : never
 
@@ -25,7 +27,28 @@ function sudo(ctx: Ctx): void {
   if (!recentlyAuthenticated(ctx)) throw new DomainError('reauth_required', 'sign in again to change passwords or staff/superuser flags (sudo mode: 10 minutes)')
 }
 
+// the user's signed-in sessions, read-only; deleting a row signs that session out (staff with auth.delete_usersession)
+export class SessionInline extends TabularInline {
+  model = UserSession
+  fields = ['ip', 'userAgent', 'createdAt', 'lastSeen']
+  readonlyFields = ['ip', 'userAgent', 'createdAt', 'lastSeen']
+  extra = 0
+  verboseNamePlural = 'Sessions'
+  hasAddPermission() { return false }
+  hasChangePermission() { return false }
+}
+
+// GDPR erase (privacy.erase): anonymize the account and every opted-in model's personal data; audited
+export const erasePersonalData = adminAction({ name: 'erasePersonalData', description: 'Erase personal data of selected users', permissions: ['delete'], confirm: 'This anonymizes the selected accounts and erases their personal data. It cannot be undone.', humanOnly: true },
+  async (_a, ctx, _qs, pks) => {
+    sudo(ctx)
+    for (const id of pks) await eraseData(Number(id), { settings: ctx.settings, request: ctx.request })
+    return { message: `${pks.length} user(s) erased.`, level: 'success' }
+  })
+
 export class UserAdmin extends ModelAdmin<UserRow> {
+  inlines = [SessionInline]
+  actions = [erasePersonalData]
   // secreview-1 M1 (owner brief): no agents at all on accounts, stricter than secreview-3 M3's 'confirm'.
   // An app may opt in with agents = 'confirm' (an agent's change then needs the user) or true.
   agents: boolean | 'confirm' = false
@@ -48,7 +71,10 @@ export class UserAdmin extends ModelAdmin<UserRow> {
     // admin password change runs setPassword once (validators + passwordChanged: tokens revoked, own session kept)
     if (obj && 'password' in values) throw new DomainError('invalid_param', 'password: use the Change password form', 'password')
     if (SENSITIVE.some((k) => k in values && (!obj || values[k] !== (obj as Record<string, unknown>)[k]))) sudo(ctx)
-    return super.saveModel(ctx, obj, values)
+    const saved = await super.saveModel(ctx, obj, values)
+    const was = obj as { email?: string | null; username?: string } | undefined
+    if (was?.email && 'email' in values && values.email !== was.email) securityNotice(ctx.settings, 'emailChanged', { username: String(was.username), email: was.email }, ctx.request)   // to the OLD address
+    return saved
   }
 
   getUrls() {

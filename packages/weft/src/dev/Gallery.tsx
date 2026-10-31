@@ -8,6 +8,7 @@ import { getRegistry, type RegistryNode } from '../runtime/registry.client.js'
 import { newId, pageTools, withNav } from '../runtime/webmcp.js'
 import type { ActionHandle, HeadlessMap, Json, ParamSpec } from '../widget/types.js'
 import { signature } from '../widget/vocabulary.js'
+import { FIELD_KINDS } from '../forms/kinds.js'
 
 // core/widget-gallery.md: "admin can see all widgets". DEV ONLY: WeftRoot imports this module behind a
 // `process.env.NODE_ENV !== 'production'` branch, so production bundles never contain it (test/gallery.test.tsx
@@ -175,7 +176,7 @@ function count(nodes: DevNode[], into = new Map<string, number>()): Map<string, 
 
 function Gallery({ onClose }: { onClose: () => void }) {
   const tree = useTree()
-  const [tab, setTab] = useState<'page' | 'builtins'>('page')
+  const [tab, setTab] = useState<'page' | 'builtins' | 'inputs'>('page')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<string>()
   const [box, setBox] = useState<DOMRect>()
@@ -209,6 +210,7 @@ function Gallery({ onClose }: { onClose: () => void }) {
           <b>Widgets</b>
           <button style={S.btn} onClick={() => setTab('page')} aria-pressed={tab === 'page'}>This page ({[...kinds.values()].reduce((a, b) => a + b, 0)})</button>
           <button style={S.btn} onClick={() => setTab('builtins')} aria-pressed={tab === 'builtins'}>Built-ins ({BUILTINS.length})</button>
+          <button style={S.btn} onClick={() => setTab('inputs')} aria-pressed={tab === 'inputs'}>Inputs ({FIELD_KINDS.length})</button>
           <span style={{ flex: 1 }} />
           <button style={S.btn} onClick={onClose} aria-label="Close (Alt+Shift+W)">×</button>
         </div>
@@ -221,6 +223,13 @@ function Gallery({ onClose }: { onClose: () => void }) {
             <div style={S.body}>{tree.map((n) => row(n, 0))}</div>
             {selected && <TryIt key={selected.id} node={selected} />}
           </>
+        ) : tab === 'inputs' ? (
+          <div style={S.body}>
+            <div style={S.mute}>@tvine/weft/forms field kinds · every field also has set / clear</div>
+            {FIELD_KINDS.map(([k, w, v]) => (
+              <div key={k}><span style={{ color: C.acc }}>{k}</span> {w}{v && <span style={S.mute}> · {v}</span>}</div>
+            ))}
+          </div>
         ) : (
           <div style={S.body}>
             {BUILTINS.map((b) => (

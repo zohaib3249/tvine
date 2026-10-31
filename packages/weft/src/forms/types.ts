@@ -5,6 +5,9 @@ import type { ComponentType } from 'react'
 export type FieldKind =
   | 'text' | 'textarea' | 'email' | 'url' | 'slug' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'datetime' | 'time'
   | 'duration' | 'uuid' | 'json' | 'choice' | 'fk' | 'm2m' | 'file' | 'image' | 'password' | 'rich'
+  // inputs pack (forms.md): agent controls per kind are listed in forms.md
+  | 'color' | 'range' | 'phone' | 'search' | 'tags' | 'checkboxes' | 'switch' | 'segmented' | 'rating' | 'otp' | 'markdown' | 'code'
+  | 'daterange' | 'month' | 'week' | 'country' | 'address' | 'keyvalue' | 'list' | 'signature' | 'currency' | 'percent' | 'ip' | 'slugAuto'
 
 export interface FieldMeta {
   name: string; label: string; help?: string; kind: FieldKind
@@ -13,6 +16,14 @@ export interface FieldMeta {
   max?: number; min?: number; maxLength?: number; decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes: number }
+  step?: number                 // range / percent
+  palette?: string[]            // color: preset swatches
+  language?: string             // code: json | js | sql | html | css
+  from?: string                 // slugAuto: the field it is built from (Django prepopulated_fields)
+  of?: Partial<FieldMeta>       // list: the item kind (default text)
+  free?: boolean                // tags with choices: free text allowed too
+  humanOnly?: boolean           // any kind: locked for agents (the ORM field's humanOnly; signature defaults to true, false exposes `clear`)
+  allowRemoteImages?: boolean   // rich: keep http(s) images (default: same-site media paths only)
 }
 
 export interface InlineMeta {
@@ -38,6 +49,7 @@ export interface FieldWidgetProps {
   id: string; name: string; invalid: boolean; describedBy?: string; readOnly: boolean
   search?: Search
   model?: string   // 'app.model' (registry lookups)
+  uploadImage?: (file: File) => Promise<string>   // rich: the image button uploads and inserts the returned URL
 }
 export type FieldWidget = ComponentType<FieldWidgetProps>
 

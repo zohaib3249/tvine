@@ -12,7 +12,7 @@ import { installedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
 import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
-import { boundaryCheck, boundaryReport } from './cli/boundary.js'
+import { boundaryCheck, boundaryReport, unawaitedReads } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import type { Settings } from './core/types.js'
@@ -59,7 +59,9 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
-  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)`
+  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
+  privacy export|erase <user>   tvine.auth: a user's data as JSON (--output file) / anonymize it (--yes)
+  encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -83,6 +85,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
   tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
   audit: { options: { days: str }, args: [1, 1] },
+  encryption: { options: {}, args: [1, 1] },
+  privacy: { options: { output: str, yes: bool }, args: [2, 2] },
 }
 
 class Usage extends Error {}
@@ -191,6 +195,39 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         try { io.out(`deleted ${await pruneAudit(days)} audit row(s) older than ${days} day(s)`) } finally { await connections.closeAll() }
         return undefined
       }
+      case 'encryption': {
+        if (args[0] !== 'rotate') throw new Usage('usage: tvine encryption rotate')
+        const settings = await loadSettings()
+        connections.configure(settings)
+        const { rotateEncryption } = await import('./security/rotate.js')
+        try {
+          const models = Object.values(await discoverModels(apps, { installed: settings.installedApps })).flat()
+          io.out(`re-encrypted ${await rotateEncryption(models, io.out)} row(s) with the newest key`)
+        } finally { await connections.closeAll() }
+        return 0
+      }
+      case 'privacy': {
+        const [what, username] = args as [string, string]
+        if (what !== 'export' && what !== 'erase') throw new Usage('usage: tvine privacy export|erase <username>')
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.auth')) throw new Usage("tvine.auth is not installed: add 'tvine.auth' to settings.installedApps")
+        connections.configure(settings)
+        try {
+          await discoverModels(apps, { installed: settings.installedApps })   // every model registered (Meta.personalData)
+          const { User } = await import('./contrib/auth/models.js')
+          const { exportData, eraseData } = await import('./contrib/auth/privacy.js')
+          const u = await User.objects.filter({ username }).first()
+          if (!u) throw new Usage(`no user named ${username}`)
+          if (what === 'export') {
+            const json = JSON.stringify(await exportData(u.id), null, 2)
+            if (o.output) { writeFileSync(o.output as string, json + '\n', { mode: 0o600 }); io.out(`wrote ${o.output}`) } else io.out(json)
+          } else {
+            if (!o.yes) throw new Usage('erase cannot be undone: pass --yes')
+            io.out(`erased user ${u.id}: ${JSON.stringify(await eraseData(u.id, { settings }))}`)
+          }
+        } finally { await connections.closeAll() }
+        return 0
+      }
       case 'inspect': {
         const port = o.port === undefined ? 7357 : Number(o.port)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
@@ -234,6 +271,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM${level === 'warn' ? ' (settings.frontend.boundary = warn)' : ''}`)
           if (level === 'error') return 1
         }
+        for (const l of unawaitedReads(apps)) io.err(`tvine check: warning: ORM read without await (a Promise, not rows): ${l}`)
         const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
         if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)

@@ -12,6 +12,7 @@ import { Paginator } from '../data/paginator.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
 import { hasDefault, isAuto, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
+import { refuseHumanOnly } from '../data/fields/inputs.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
 
@@ -494,6 +495,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       },
       create: async (v, raw, ctx) => {
         const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
+        refuseHumanOnly(model.fields, raw as Record<string, unknown>, !!ctx.request?.agent?.is)
         ctx.params = validate(schema, raw, false, readOnly)
         return out(v, ctx, await v.performCreate(ctx.params, ctx))
       },
@@ -503,6 +505,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
         const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
         const data = validate(schema.partial(), rest, false, readOnly)
         const obj = await v.getObject(ctx)
+        refuseHumanOnly(model.fields, rest, !!ctx.request?.agent?.is, obj as Record<string, unknown>)
         return out(v, ctx, await v.performUpdate(obj, data, ctx))
       },
       delete: async (v, raw, ctx) => {
