@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import type { Settings, Permission, Middleware, TvineUser, Request } from './core/types.js'
+import type { AuthSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
 
 // Canonical shape: docs/design/conventions/settings.md. Validated at boot.
 type Fn = (...args: never[]) => unknown
@@ -64,6 +64,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     credentials: false, maxAge: 600, routes: [],
   },
   compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
+  tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000 },
+  installedApps: [],
 }
 
 const corsPolicy = z.object({
@@ -124,8 +126,20 @@ const schema: z.ZodType<Settings> = z.object({
   }),
   cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),
   compression: z.object({ enabled: z.boolean(), threshold: posInt, brotli: z.boolean(), gzipLevel: z.number().int().min(1).max(9), brotliQuality: z.number().int().min(0).max(11) }),
+  tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt }),
+  installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
-  auth: z.object({ user: fn<(req: Request) => Promise<TvineUser | null>>().optional() }).optional(),
+  auth: z.object({
+    user: fn<(req: Request) => Promise<TvineUser | null>>().optional(),
+    hashers: z.array(z.object({ algorithm: z.string(), encode: fn<PasswordHasher['encode']>(), verify: fn<PasswordHasher['verify']>(), mustUpdate: fn<PasswordHasher['mustUpdate']>() })).min(1).optional(),
+    validators: z.array(fn<PasswordValidator>()).optional(),
+    login: z.object({ maxFailures: z.number().int().positive(), accountMaxFailures: z.number().int().positive(), ipMaxFailures: z.number().int().positive(), windowMs: z.number().positive(), lockoutMs: z.number().positive() }).partial().optional(),
+    resetTimeoutMs: z.number().positive().optional(),
+    sendPasswordReset: fn<NonNullable<AuthSettings['sendPasswordReset']>>().optional(),
+    objectPermission: fn<NonNullable<AuthSettings['objectPermission']>>().optional(),
+    tokens: z.object({ defaultDays: z.number().positive(), maxDays: z.number().positive() }).partial().optional(),
+    totp: z.object({ issuer: z.string() }).partial().optional(),
+  }).strict().optional(),
 })
 
 const isPlain = (v: unknown): v is Record<string, unknown> =>

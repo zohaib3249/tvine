@@ -67,3 +67,13 @@ export function makeApi(t: Transport): Api {
 }
 
 export const network = (e: unknown): ApiResult => ({ ok: false, code: 'internal', reason: 'network', message: e instanceof Error ? e.message : String(e) })
+
+// tvine.auth's safe user (auth.me): never the password hash or a session id.
+export interface CurrentUser { id: string; username: string; email: string | null; isStaff: boolean; isSuperuser: boolean }
+
+// currentUser() over a transport: auth.me through the same api path as every other call (never the ORM).
+// null when signed out, when tvine.auth is not installed, or on any error.
+export const currentUserVia = (t: Transport) => async (): Promise<CurrentUser | null> => {
+  const r = await t('auth.me', {}, undefined)
+  return r.ok ? (r.data as CurrentUser | null) : null
+}

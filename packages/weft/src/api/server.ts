@@ -3,9 +3,11 @@
 // signed x-tvine-forward header (HMAC, TVINE_SECRET, 30 s). Same pipeline either way.
 import 'server-only'
 import { createHmac } from 'node:crypto'
-import { makeApi, network, type ApiOpts, type ApiResult, type Transport } from './core.js'
+import { cache } from 'react'
+import { currentUserVia, makeApi, network, type ApiOpts, type ApiResult, type Transport } from './core.js'
 
 export * from './core.js'
+export { UserProvider, useUser } from './user.js'
 
 const API = Symbol.for('tvine.api')
 type InProc = (call: { id: string; params: unknown; bind?: string; cmdId?: string }) => Promise<ApiResult>
@@ -72,3 +74,6 @@ export const serverTransport: Transport = (id, params, opts) => {
 }
 
 export const api = makeApi(serverTransport)
+
+// The request's signed-in user (tvine.auth) for server components: auth.me, deduped per render (React cache).
+export const currentUser = cache(currentUserVia(serverTransport))

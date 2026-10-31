@@ -14,11 +14,12 @@ export { ANONYMOUS } from './core/types.js'
 export type {
   Sid, Rev, NodeId, ActionId, Node, ActionRef, Link, Snapshot, Command, Event, ErrCode, ChannelLayer,
   ReadonlyHeaders, TvineUser, UploadedFile, Request, Session, ActionCtx, PermissionCtx, Permission,
-  Middleware, ActionDef, ActionRules, Settings, Paginated,
+  Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
 export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
-export { allowAny, denyAgents, deniesAgents, humanOnly, isAuthenticated, allOf, anyOf } from './security/permissions.js'
+export { allowAny, denyAgents, deniesAgents, humanOnly, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf } from './security/permissions.js'
+export { authenticate, authBackend, cycleSession, setAuthBackend, type AuthBackend } from './core/auth.js'
 export {
   createAgentServer, currentRequest, currentSession, formDispatcher, loadSettings, type PageAccess, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,
   type FormSource, type NextApp, type NextFactory,

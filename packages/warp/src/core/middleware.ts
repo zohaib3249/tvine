@@ -1,7 +1,6 @@
 // core/middleware — dev extension points (docs/design/conventions/middleware-hooks.md).
 // Middleware wraps dispatch after the security steps; hooks observe, never block.
-import { readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { installedApps } from './apps.js'
 import { APP_RE, appModule, importApp } from './actions.js'
 import type { Command, ErrCode, Event, Middleware, Sid } from './types.js'
 
@@ -40,11 +39,10 @@ export class Hooks {
 }
 
 // apps/<app>/middleware.ts `export default [...]`, keyed by app, apps in sorted order.
-export async function discoverMiddleware(appsDir: string): Promise<Map<string, Middleware[]>> {
+export async function discoverMiddleware(appsDir: string, installed?: readonly string[]): Promise<Map<string, Middleware[]>> {
   const out = new Map<string, Middleware[]>()
-  for (const app of (await readdir(appsDir)).sort()) {
-    if (!(await stat(join(appsDir, app)).catch(() => null))?.isDirectory()) continue
-    const file = appModule(join(appsDir, app), 'middleware')
+  for (const { label: app, dir } of installedApps(appsDir, installed)) {
+    const file = appModule(dir, 'middleware')
     if (!file) continue
     if (!APP_RE.test(app)) throw new Error(`${file}: folder name "${app}" must match ${APP_RE}`)
     const list: unknown = (await importApp(file)).default
@@ -55,19 +53,38 @@ export async function discoverMiddleware(appsDir: string): Promise<Map<string, M
 }
 
 // apps/<app>/hooks.ts: every exported function is a receiver named after its hook (`export function command(e) {…}`),
-// registered at boot like Django signal receivers connected in AppConfig.ready().
-export async function discoverHooks(appsDir: string): Promise<[HookName, (e: never) => unknown][]> {
+// registered at boot like Django signal receivers connected in AppConfig.ready(). Two more names are app
+// lifecycle receivers, collected by appSignals(): `ready(server)` (AppConfig.ready) and `postMigrate(e)`.
+export async function discoverHooks(appsDir: string, installed?: readonly string[]): Promise<[HookName, (e: never) => unknown][]> {
   const out: [HookName, (e: never) => unknown][] = []
-  for (const app of (await readdir(appsDir)).sort()) {
-    if (!(await stat(join(appsDir, app)).catch(() => null))?.isDirectory()) continue
-    const file = appModule(join(appsDir, app), 'hooks')
+  for (const [name, fn] of await hookExports(appsDir, installed)) if (!SIGNALS.has(name)) out.push([name as HookName, fn])
+  return out
+}
+
+const SIGNALS = new Set(['ready', 'postMigrate'])
+async function hookExports(appsDir: string, installed?: readonly string[]): Promise<[string, (e: never) => unknown, string][]> {
+  const out: [string, (e: never) => unknown, string][] = []
+  for (const { label, dir } of installedApps(appsDir, installed)) {
+    const file = appModule(dir, 'hooks')
     if (!file) continue
     for (const [name, fn] of Object.entries(await importApp(file))) {
       if (typeof fn !== 'function') continue   // shared constants are fine; an exported function must be a receiver
-      if (!HOOK_NAMES.includes(name as HookName)) throw new Error(`${file}: "${name}" is not a hook (${HOOK_NAMES.join(', ')}); export one function per hook name`)
-      out.push([name as HookName, fn as (e: never) => unknown])
+      if (!HOOK_NAMES.includes(name as HookName) && !SIGNALS.has(name)) throw new Error(`${file}: "${name}" is not a hook (${[...HOOK_NAMES, ...SIGNALS].join(', ')}); export one function per hook name`)
+      out.push([name, fn as (e: never) => unknown, label])
     }
   }
+  return out
+}
+
+// App lifecycle receivers in installed-app order, each tagged with its app label. Awaited by the caller:
+// ready(server) at boot before the server serves; postMigrate({ app, models, applied }) after `tvine migrate`.
+export interface AppSignals {
+  ready: { app: string; fn: (server: never) => unknown }[]
+  postMigrate: { app: string; fn: (e: never) => unknown }[]
+}
+export async function appSignals(appsDir: string, installed?: readonly string[]): Promise<AppSignals> {
+  const out: AppSignals = { ready: [], postMigrate: [] }
+  for (const [name, fn, app] of await hookExports(appsDir, installed)) if (SIGNALS.has(name)) out[name as keyof AppSignals].push({ app, fn })
   return out
 }
 

@@ -1,27 +1,27 @@
 // tvine generate: tvine-api.d.ts — the ApiManifest @tvine/weft/api is typed by. Only type queries into the
 // app's own apps/<app>/views (erased imports: the FE/DB boundary still holds).
-import { readdir, stat } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
+import { relative, sep } from 'node:path'
 import { APP_RE, appModule, importApp, isActionDef } from '../core/actions.js'
+import { installedApps } from '../core/apps.js'
 import { discover } from '../views/discover.js'
 import { isViewClass, viewActions } from '../views/generic.js'
 
 const GENERATED = new Set<string>(['list', 'get', 'create', 'update', 'delete'])
 export const API_DTS = 'tvine-api.d.ts'
 
-export async function generateApiTypes(root: string, appsDir: string): Promise<string> {
-  await discover(appsDir)   // same validation as boot (duplicate ids, bad folders) and FBV ids get qualified
+export async function generateApiTypes(root: string, appsDir: string, installed?: readonly string[]): Promise<string> {
+  await discover(appsDir, { installed })   // same validation as boot (duplicate ids, bad folders) and FBV ids get qualified
   const types: string[] = [], apps: string[] = []
-  for (const app of (await readdir(appsDir)).sort()) {
-    const dir = join(appsDir, app)
-    if (!(await stat(dir)).isDirectory() || !APP_RE.test(app)) continue
+  for (const { label: app, dir, contrib } of installedApps(appsDir, installed)) {
+    if (!APP_RE.test(app)) continue
     const views = appModule(dir, 'views')
     if (!views) continue
     const mod = await importApp(views)
     const T = app[0]!.toUpperCase() + app.slice(1).replace(/_(\w)/g, (_, c: string) => c.toUpperCase())
-    // .js resolves to the .ts source under both moduleResolution bundler (Next) and nodenext
+    // .js resolves to the .ts source under both moduleResolution bundler (Next) and nodenext; a contrib app's
+    // views through the package (exports "./contrib/*")
     const rel = relative(root, views).split(sep).join('/').replace(/\.ts$/, '.js').replace(/\.mts$/, '.mjs')
-    const spec = rel.startsWith('../') ? rel : `./${rel}`
+    const spec = contrib ? `@tvine/warp/contrib/${app}/views` : rel.startsWith('../') ? rel : `./${rel}`
     types.push(`type ${T} = typeof import('${spec}')`)
     // the same naming as discovery: a view action name used by several classes becomes <Class>.<name>
     const fromViews: [exp: string, name: string][] = []
