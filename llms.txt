@@ -1,0 +1,31 @@
+# Tvine
+
+> Tvine is an agent-native, full-stack TypeScript web framework. It is Django for TypeScript (Warp backend: models, ORM, migrations, auth, admin, middleware, tasks) plus Next.js pages (Weft UI) in one process, and every backend action is at once a typed `api.*` call, a REST/HTTP endpoint and an MCP tool, so AI agents can read and drive the app. The npm package is `tvinejs`; code imports it and the CLI runs it as `tvine` (`npx tvinejs startproject mysite`, then `pnpm tvine dev`).
+
+## Start here
+
+- [AGENTS.md (AI guide)](https://github.com/zohaib3249/tvine/blob/main/packages/tvine/AGENTS.md): layout, commands, copy-paste recipes and rules for building a Tvine project; also written into every new project
+- [Full docs in one file](https://github.com/zohaib3249/tvine/blob/main/llms-full.txt): the AI guide plus every guide below, concatenated
+- [README](https://github.com/zohaib3249/tvine/blob/main/README.md): what Tvine is, feature map
+- [Guides index](https://github.com/zohaib3249/tvine/blob/main/docs/README.md): the table of guides
+
+## Guides
+
+- [Installation](https://github.com/zohaib3249/tvine/blob/main/docs/installation.md): install, startproject, getting the tvine command
+- [Getting started](https://github.com/zohaib3249/tvine/blob/main/docs/getting-started.md): tutorial, a notes app with model, views, admin, page, task, MCP
+- [Settings and environment](https://github.com/zohaib3249/tvine/blob/main/docs/settings-and-env.md): settings keys, middleware catalog, logging, env vars, .env
+- [Models and ORM](https://github.com/zohaib3249/tvine/blob/main/docs/models-and-orm.md): fields, QuerySets, await rules, transactions, migrations, fixtures
+- [Views, URLs and api.*](https://github.com/zohaib3249/tvine/blob/main/docs/views-urls-api.md): actions, generic views, @action, rules, urls.ts, the typed client
+- [Frontend (Weft)](https://github.com/zohaib3249/tvine/blob/main/docs/frontend-weft.md): widgets, forms and input kinds, HumanOnly, confirm prompts
+- [Agents and MCP](https://github.com/zohaib3249/tvine/blob/main/docs/agents-and-mcp.md): MCP setup, tools, read_page/ui/do, tab control, WebMCP, inspector
+- [Admin](https://github.com/zohaib3249/tvine/blob/main/docs/admin.md): ModelAdmin options, widgets, dashboard, charts, system pages
+- [Auth and security](https://github.com/zohaib3249/tvine/blob/main/docs/auth-and-security.md): users, custom user model, backends, permissions, tokens, 2FA, CSP/CORS, audit
+- [Tasks, cache, email](https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md): background tasks, cron, cache, email
+- [Testing](https://github.com/zohaib3249/tvine/blob/main/docs/testing.md): test client and helpers
+- [CLI](https://github.com/zohaib3249/tvine/blob/main/docs/cli.md): every tvine command
+- [Deploy](https://github.com/zohaib3249/tvine/blob/main/docs/deploy.md): production checklist, proxies, Redis, Docker
+
+## Optional
+
+- [Example app](https://github.com/zohaib3249/tvine/blob/main/examples/notes): the finished notes app from the tutorial
+- [Releasing](https://github.com/zohaib3249/tvine/blob/main/docs/releasing.md): publishing a new version (maintainers)

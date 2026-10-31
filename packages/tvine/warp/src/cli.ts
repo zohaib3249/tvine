@@ -79,7 +79,8 @@ Jobs
   audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
 
 Tools
-  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (dev only)`
+  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (dev only)
+  docs [--ai [--path]]          the guides' URL; --ai: the AI-assistant guide (AGENTS.md), --path: its file path`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -92,6 +93,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
   dev: { options: { port: str, host: str }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
+  docs: { options: { ai: bool, path: bool }, args: [0, 0] },
   check: { options: {}, args: [0, 0] },
   routes: { options: {}, args: [0, 0] },
   show_urls: { options: {}, args: [0, 0] },
@@ -212,6 +214,11 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         io.out(['', 'next steps:', `  cd ${relativeTo(r.dir)}`, ...(o['no-install'] ? [`  ${pm} install`] : []),
           `  ${x} tvine migrate`, `  ${x} tvine createsuperuser`, `  ${x} tvine dev          # http://localhost:3000`,
           `  ${x} tvine startapp blog`].join('\n'))
+        return 0
+      }
+      case 'docs': {
+        const guide = fileURLToPath(new URL('../../AGENTS.md', import.meta.url))   // packages/tvine/AGENTS.md (from src or dist)
+        io.out(!o.ai ? 'https://github.com/zohaib3249/tvine/blob/main/docs/README.md' : o.path ? guide : readFileSync(guide, 'utf8'))
         return 0
       }
       case 'startapp': {
