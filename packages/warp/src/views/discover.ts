@@ -26,6 +26,10 @@ export async function discover(appsDir: string, defaults: { rate?: Rate; install
         catch (e) { throw new Error(`${views} export ${exp}: ${(e as Error).message}`) }
       }
     }
+    // a contrib app's discovery hook (tvine.admin: apps/*/admin.ts getUrls() views): more defs, registered here
+    if (typeof mod.discoverViews === 'function') {
+      for (const d of await (mod.discoverViews as (o: { appsDir: string; installed: readonly string[] }) => Promise<ActionDef[]>)({ appsDir, installed: defaults.installed ?? [] })) found.push([`discoverViews:${d.name}`, d])
+    }
     // generic-views.md: a view action name used by several classes becomes <Class>.<name>
     const viewNames = found.filter(([e]) => isViewClass(mod[e])).map(([, d]) => d.id)
     for (const [exp, d] of found) {

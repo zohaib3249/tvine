@@ -77,6 +77,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   },
   compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
   tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
+  admin: { path: '/admin', theme: { dark: 'auto' } },
   installedApps: [],
 }
 
@@ -151,6 +152,8 @@ const schema: z.ZodType<Settings> = z.object({
   compression: z.object({ enabled: z.boolean(), threshold: posInt, brotli: z.boolean(), gzipLevel: z.number().int().min(1).max(9), brotliQuality: z.number().int().min(0).max(11) }),
   tasks: z.object({ leaseMs: z.number().int().min(1000), pollMs: z.number().int().min(10), relayMs: z.number().int().min(10), graceMs: posInt, resultTtlMs: posInt,
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
+  admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
+    theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }) }),
   installedApps: z.array(z.string().regex(/^tvine\.[a-z][a-z0-9_]*$/, 'built-in apps are named tvine.<name> (project apps under apps/ need no listing)')),
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({

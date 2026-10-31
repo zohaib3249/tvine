@@ -250,6 +250,8 @@ export interface Settings {
   // uses; file / durable: the file broker's tasks.db path and power-cut durability; claimBatch: jobs per claim
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
+  // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
+  admin: { path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' } }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings

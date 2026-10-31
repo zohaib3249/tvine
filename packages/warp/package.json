@@ -39,6 +39,10 @@
       "types": "./dist/contrib/tasks/index.d.ts",
       "import": "./dist/contrib/tasks/index.js"
     },
+    "./contrib/admin": {
+      "types": "./dist/contrib/admin/index.d.ts",
+      "import": "./dist/contrib/admin/index.js"
+    },
     "./contrib/*": {
       "types": "./dist/contrib/*.d.ts",
       "import": "./dist/contrib/*.js"
