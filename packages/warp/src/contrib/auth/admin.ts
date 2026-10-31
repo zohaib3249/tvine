@@ -9,7 +9,7 @@ import { site } from '../admin/sites.js'
 import { logAction } from '../admin/views.js'
 import { CHANGE } from '../admin/models.js'
 import { Group, User } from './models.js'
-import { setPassword } from './users.js'
+import { passwordChanged, setPassword } from './users.js'
 
 type UserRow = typeof User extends { create(d: never): Promise<infer R> } ? R : never
 
@@ -29,7 +29,9 @@ export class UserAdmin extends ModelAdmin<UserRow> {
 
   async saveModel(ctx: Ctx, obj: UserRow | undefined, values: Record<string, unknown>): Promise<UserRow> {
     if (!obj && typeof values.password !== 'string') throw new DomainError('invalid_param', 'password: This field is required.', 'password')
-    return super.saveModel(ctx, obj, values)
+    const row = await super.saveModel(ctx, obj, values)
+    if (obj && typeof values.password === 'string') await passwordChanged(row as never, ctx)   // tokens revoked, own session kept
+    return row
   }
 
   getUrls() {
@@ -41,7 +43,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
     if (!Number.isInteger(id) || typeof pw !== 'string' || !pw) throw new DomainError('invalid_param', 'password: This field is required.', 'password')
     const u = await this.getObject(ctx, id)
     if (!u) throw new DomainError('not_found', 'user not found')
-    await setPassword(id, pw, { settings: ctx.settings })
+    await setPassword(id, pw, { ctx })
     await logAction(ctx, this.key(), id, this.str(u as never), CHANGE, [{ changed: { fields: ['Password'] } }])
     return { ok: true }
   }

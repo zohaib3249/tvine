@@ -15,7 +15,7 @@ import { modelNamed, referencesTo } from '../../data/registry.js'
 import { isStaff } from '../../security/permissions.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
-import { makePassword } from '../auth/passwords.js'
+import { makePassword, validatePassword } from '../auth/passwords.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
 import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
 import {
@@ -145,10 +145,15 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
 }
 // Django ModelChoiceField: an fk / m2m pk must be a row that exists and that this user can see (the related admin's
 // getQueryset, like autocomplete; the model's rows when it has no admin)
-async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clean>>): Promise<void> {
+async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clean>>, obj?: Row): Promise<void> {
   for (const [n, f] of Object.entries(a.model.fields as Fields)) {
     // a password field (any model): stored through the auth hasher (settings.auth.hashers[0]), never as typed
-    if (isPassword(n, f) && typeof c.data[f.key(n)] === 'string') c.data[f.key(n)] = await makePassword(c.data[f.key(n)], ctx.settings)
+    // and checked by settings.auth.passwordValidators first (Django's admin forms run them too)
+    if (isPassword(n, f) && typeof c.data[f.key(n)] === 'string') {
+      const problems = validatePassword(c.data[f.key(n)], ctx.settings, { ...obj, ...c.data })
+      if (problems.length) c.errors[n] = problems.join(' ')
+      else c.data[f.key(n)] = await makePassword(c.data[f.key(n)], ctx.settings)
+    }
     if (f.kind !== 'fk' && f.kind !== 'm2m') continue
     const v = f.kind === 'm2m' ? c.m2m[n] : c.data[f.key(n)]
     if (v == null || c.errors[n]) continue
@@ -428,7 +433,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
       }
       if (!(await (existing ? i.hasChangePermission(ctx, parent) : i.hasAddPermission(ctx, parent)))) throw forbidden()
       const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk), existing ?? undefined)
-      await cleanChoices(i, ctx, c)
+      await cleanChoices(i, ctx, c, existing ?? undefined)
       if (Object.keys(c.errors).length) throw fieldErrors(c.errors, at)
       const row = existing ? await i.model.update(existing.id, c.data) : await i.model.create({ ...c.data, [fkKey]: parent.id })
       for (const [m, ids] of Object.entries(c.m2m)) await i.model.related(m, row.id).set(ids as (string | number)[])
@@ -597,7 +602,7 @@ async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) 
 async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
   await storeFiles(a, ctx, p, stored)
   const c = clean(a, p.values, creating, undefined, obj)
-  await cleanChoices(a, ctx, c)
+  await cleanChoices(a, ctx, c, obj)
   if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
   const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
   for (const [n, ids] of Object.entries(c.m2m)) await a.model.related(n, row.id).set(ids as (string | number)[])
@@ -712,7 +717,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     if (!obj) { errors[`rows.${i}.pk`] = 'Not found.'; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
     const c = clean(a, r.values, false, a.listEditable, obj)
-    await cleanChoices(a, ctx, c)
+    await cleanChoices(a, ctx, c, obj)
     for (const [f, m] of Object.entries(c.errors)) errors[`rows.${i}.${f}`] = m
     if (!Object.keys(c.errors).length) work.push({ obj, c })
   }
