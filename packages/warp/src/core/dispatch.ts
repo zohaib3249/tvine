@@ -5,6 +5,7 @@ import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { MemoryChannelLayer } from './channels.js'
+import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
 import { siteRedirect } from './redirect.js'
 import { ev, isTerminal } from './events.js'
@@ -151,7 +152,8 @@ function cookieOf(r: Request, s: Settings): string | undefined {
 }
 
 // Next's server-action check, kept for every path into dispatch: a browser Origin must match the host.
-// No Origin (curl, SDKs, MCP clients) passes. ponytail: no allowedOrigins list yet; add with settings when needed.
+// No Origin (curl, SDKs, MCP clients) passes. A foreign Origin passes only where settings.cors opted it in
+// for this endpoint + method (core/cors-match corsAllows); the human <Form> path never.
 // the public host of the request (X-Forwarded-Host only through trusted proxies)
 const hostOf = (r: Request, s: Settings) => ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase() || undefined
 
@@ -159,7 +161,9 @@ export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
   const host = hostOf(r, s)
-  try { return new URL(origin).host !== host } catch { return true }
+  let same: boolean
+  try { same = new URL(origin).host === host } catch { return true }
+  return !same && !corsAllows(r, s, origin)
 }
 
 // One command at a time per sid: rev bumps and session.data writes never interleave. The queue depth

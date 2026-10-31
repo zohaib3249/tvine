@@ -210,6 +210,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ? (req, res) => { void startNext().then((n) => n.handle(req, res)).catch(fail(res)) }
     : (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found') }
 
+  // the paths this server itself answers (embedded mode hands everything else to the host app)
+  const mediaRoot = settings.media.route.replace(/\/$/, '')
+  const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
+    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
     let unhook = () => {}
@@ -226,20 +230,26 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
-      if (cors.preflight(req, res)) return
-      const corsPlan = cors.request(req)
+      // embedded: CORS only for paths this server answers; the host app's own paths are the host's business
+      const ours = !done || ownPath(pathOf(req))
+      if (ours && cors.preflight(req, res)) return
+      const corsPlan = ours ? cors.request(req) : undefined
       const plan = sec.begin(req, httpsOf(req, settings))
       weakIfNoneMatch(req)
-      unhook = hookResponse(req, res, {
-        compression: settings.compression,
-        onHeaders: () => {
-          sec.apply(res, plan)
-          if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
-            for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
-            addVary(res, 'Origin')
-          }
-        },
-      })
+      // a real node response only (a test double without header methods is passed through untouched)
+      if (typeof res.getHeader === 'function') {
+        unhook = hookResponse(req, res, {
+          compression: settings.compression,
+          onHeaders: () => {
+            sec.apply(res, plan)
+            if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
+              for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
+              if (corsPlan.dropSetCookie) res.removeHeader('set-cookie')   // no cookie went in: none comes back
+              addVary(res, 'Origin')
+            }
+          },
+        })
+      }
       step()
     } catch (e) { fail(res)(e) }
   }

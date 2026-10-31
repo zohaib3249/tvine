@@ -116,7 +116,7 @@ export interface Request {
   }
   files: UploadedFile[]                 // media uploads (empty unless multipart)
   user: TvineUser                      // ALWAYS present; anonymous = ANONYMOUS
-  raw?: IncomingMessage                 // escape hatch, http transport only
+  raw?: IncomingMessage                 // escape hatch: http + api (browser) transports
 }
 
 export interface Session {
