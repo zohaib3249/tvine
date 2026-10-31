@@ -13,6 +13,7 @@ export interface WorkerOpts {
   queues?: string[] | '*'            // default every queue
   concurrency?: number               // default 10
   leaseMs?: number; pollMs?: number; graceMs?: number   // default settings.tasks
+  claimBatch?: number                // jobs per claim (default settings.tasks.claimBatch)
   broker?: Broker
   log?: Log
 }
@@ -36,10 +37,13 @@ export class Worker {
   readonly concurrency: number
   private broker: Broker
   private log: Log
-  private leaseMs: number; private pollMs: number; private graceMs: number
+  private leaseMs: number; private pollMs: number; private graceMs: number; private claimBatch: number
   private running = new Map<string, Running>()
   private timers: NodeJS.Timeout[] = []
   private beatTimer?: NodeJS.Timeout
+  private dueTimer?: NodeJS.Timeout   // the next delayed job / rate-limit slot
+  private dueAt = Infinity
+  private offWake?: () => void
   private stopping = false
   private ticking = false
   private again = false
@@ -58,6 +62,7 @@ export class Worker {
     this.leaseMs = o.leaseMs ?? config.tasks.leaseMs
     this.pollMs = o.pollMs ?? config.tasks.pollMs
     this.graceMs = o.graceMs ?? config.tasks.graceMs
+    this.claimBatch = Math.min(100, Math.max(1, o.claimBatch ?? config.tasks.claimBatch ?? 100))
   }
 
   get busy(): number { return this.running.size }
@@ -72,12 +77,15 @@ export class Worker {
       this.timers.push(t)
     }
     if (this.concurrency > 0) {
-      every(this.pollMs, () => this.tick())
+      // a broker that pushes wake-ups (file: fs.watch, redis: pub/sub, memory: events) also runs the safety poll;
+      // the db broker is polled every pollMs
+      if (this.broker.onWake) this.offWake = this.broker.onWake(this.onEnqueued)
+      else every(this.pollMs, () => this.tick())
       bus.on('enqueued', this.onEnqueued)
     }
     this.beatTimer = setInterval(() => { this.heartbeat().catch((e) => this.log('error', 'worker.heartbeat', { worker: this.name, error: errText(e) })) }, Math.max(100, Math.floor(this.leaseMs / 3)))
     every(this.leaseMs, () => this.reap())
-    every(CLEAN_MS, () => this.broker.cleanup(Date.now()))
+    every(CLEAN_MS, () => this.cleanup())
     await this.reap()
     void this.tick()
   }
@@ -87,6 +95,8 @@ export class Worker {
     if (this.stopping) return
     this.stopping = true
     bus.off('enqueued', this.onEnqueued)
+    this.offWake?.()
+    clearTimeout(this.dueTimer)
     for (const t of this.timers.splice(0)) clearInterval(t)
     const deadline = Date.now() + graceMs
     while (this.running.size && Date.now() < deadline) {
@@ -114,15 +124,27 @@ export class Worker {
         this.again = false
         const free = this.concurrency - this.running.size
         if (free <= 0) break
-        const { token, jobs } = await this.broker.claim({ worker: this.name, queues: this.queues, n: Math.min(free, 100), leaseMs: this.leaseMs, skipTasks: this.overLimit() })
+        const n = Math.min(free, this.claimBatch), skipTasks = this.overLimit()
+        const { token, jobs, nextAt } = await this.broker.claim({ worker: this.name, queues: this.queues, n, leaseMs: this.leaseMs, skipTasks })
+        if (nextAt !== undefined) this.due(nextAt)
+        if (skipTasks.length) this.due(this.limitFrees())
         if (this.stopping) {   // stop() began during the claim: hand these straight back
           for (const j of jobs) await this.broker.requeue(j.id, token, { runAt: Date.now(), refund: true })
           return
         }
         for (const j of jobs) this.launch(j, token)
-        if (jobs.length === free) this.again = true
+        if (jobs.length === n) this.again = true
       } while (this.again && !this.stopping)
     } finally { this.ticking = false }
+  }
+
+  // wake for the earliest known future moment (a delayed job's runAt, a rate-limit slot freeing)
+  private due(at: number): void {
+    if (this.stopping || !(at < this.dueAt)) return
+    clearTimeout(this.dueTimer)
+    this.dueAt = at
+    this.dueTimer = setTimeout(() => { this.dueAt = Infinity; void this.tick() }, Math.max(0, Math.min(at - Date.now() + 1, 2 ** 31 - 1)))
+    this.dueTimer.unref()
   }
 
   private launch(job: JobRow, token: string): void {
@@ -286,6 +308,16 @@ export class Worker {
     }
     return out
   }
+  private limitFrees(): number {
+    let at = Infinity
+    for (const id of this.rates.keys()) {
+      const t = taskById(id)
+      if (!t?.opts.rateLimit) continue
+      const { hits, limit, windowMs } = this.hits(t)
+      if (hits.length >= limit) at = Math.min(at, hits[0]! + windowMs)
+    }
+    return at
+  }
   private take(task: Task): number {
     if (!task.opts.rateLimit) return 0
     const { hits, limit, windowMs } = this.hits(task)
@@ -327,7 +359,10 @@ export class Worker {
     return n
   }
 
-  cleanup(now = Date.now()): Promise<void> { return this.broker.cleanup(now) }
+  // result TTL + housekeeping; a chord a crashed member left half-fired (redis) gets its callback rebuilt here
+  cleanup(now = Date.now()): Promise<void> {
+    return this.broker.cleanup(now, { callback: (sig, results, parent) => this.link(parent, () => followUp(sig, results, parent, { groupId: null })) })
+  }
 }
 
 // an Error class (any function with a prototype) matches by instanceof; an arrow function is a predicate. dontRetryOn wins.

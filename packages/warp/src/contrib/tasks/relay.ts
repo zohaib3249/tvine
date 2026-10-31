@@ -3,8 +3,8 @@
 // docs/design/contrib/tasks.md §Results, §Enqueueing, §Ops.
 import type { ServerCtx } from '../../core/dispatch.js'
 import type { Event } from '../../core/types.js'
-import { broker, bus, type QueueStats } from './broker.js'
-import { FINAL, Outbox, type JobRow } from './models.js'
+import { broker, bus, type Moved, type QueueStats } from './broker.js'
+import { FINAL, Outbox } from './models.js'
 import { push, tasks, type Payload } from './task.js'
 
 export class ProgressRelay {
@@ -14,7 +14,7 @@ export class ProgressRelay {
   start(): void { this.off = broker().watch((j) => this.send(j), { minMs: this.everyMs }) }
   stop(): void { this.off?.() }
 
-  private send(j: JobRow): void {
+  private send(j: Moved): void {
     const s = j.sid ? this.server.sessions.peek({ sid: j.sid }) : undefined
     if (!s) return   // another web process's session, or gone
     // a final status bumps the rev (the page may show what the job changed); progress keeps it
