@@ -13,7 +13,8 @@ import {
   newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
 } from './backend.js'
 import { base32, sha256 } from './crypto.js'
-import { RecoveryCode, Token, Totp, User } from './models.js'
+import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
+import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
 import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
@@ -86,7 +87,7 @@ export const loginAction = defineAction('login', z.object({
   return safeUser(await login(ctx, current))
 }, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
 
-export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { logout(ctx); return null }, { permissions: [notInTab] })
+export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab] })
 
 export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promise<SafeUser | null> => {
   const u: TvineUser = ctx.request.user
@@ -106,6 +107,7 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
   await revokeTokens(row.id)
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
   await login(ctx, fresh)
+  await dropOtherSessions(row.id, ctx.session)
   return null
 }, { permissions: [isAuthenticated, denyAgents] })
 
@@ -140,8 +142,31 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   const n = await User.objects.filter({ id: row.id, password: row.password }).update({ password: await makePassword(newPassword, ctx.settings) })
   if (n !== 1) throw bad()
   await revokeTokens(row.id)
+  await dropOtherSessions(row.id)
   return null
 }, { rate: { limit: 10, windowMs: 60_000 } })
+
+// ---- sessions (signed-in browsers / clients) ------------------------------------------------------------
+// the id is an opaque hash, never the sid; revoking signs that session out on its next request
+export const sessionsAction = defineAction('sessions', z.object({}), async (_p, ctx) => listSessions(Number(sessionOnly(ctx).id), ctx.session),
+  { permissions: [isAuthenticated], readOnly: true })
+
+export const revokeSession = defineAction('revokeSession', z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }), async ({ id }, ctx) => {
+  const u = sessionOnly(ctx)
+  const own = (await listSessions(Number(u.id), ctx.session)).find((s) => s.id === id)
+  if (!own) throw new DomainError('not_found', 'no such session')
+  if (own.current) { await forgetSession(ctx.session); logout(ctx) }
+  else await UserSession.objects.filter({ key: id, userId: Number(u.id) }).delete()
+  securityEvent('session_revoked', { userId: u.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return null
+}, { permissions: [isAuthenticated, notInTab] })
+
+export const logoutOthers = defineAction('logoutOthers', z.object({}), async (_p, ctx) => {
+  const u = sessionOnly(ctx)
+  const n = await dropOtherSessions(Number(u.id), ctx.session)
+  securityEvent('sessions_revoked', { userId: u.id, count: n }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return { revoked: n }
+}, { permissions: [isAuthenticated, notInTab] })
 
 // ---- TOTP ----------------------------------------------------------------------------------------
 export const totpBegin = defineAction('totpBegin', z.object({ password: pw().optional() }), async ({ password }, ctx) => {

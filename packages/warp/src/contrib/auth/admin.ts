@@ -4,11 +4,11 @@
 // (a hidden field: never in admin values); the add form sets the first one, the set-password view every later one.
 import { DomainError } from '../../core/errors.js'
 import { path } from '../../urls.js'
-import { ModelAdmin, type Ctx } from '../admin/options.js'
+import { ModelAdmin, TabularInline, type Ctx } from '../admin/options.js'
 import { site } from '../admin/sites.js'
 import { logAction } from '../admin/views.js'
 import { CHANGE } from '../admin/models.js'
-import { Group, User } from './models.js'
+import { Group, User, UserSession } from './models.js'
 import { setPassword } from './users.js'
 import { AuthUser, recentlyAuthenticated } from './backend.js'
 
@@ -25,7 +25,19 @@ function sudo(ctx: Ctx): void {
   if (!recentlyAuthenticated(ctx)) throw new DomainError('reauth_required', 'sign in again to change passwords or staff/superuser flags (sudo mode: 10 minutes)')
 }
 
+// the user's signed-in sessions, read-only; deleting a row signs that session out (staff with auth.delete_usersession)
+export class SessionInline extends TabularInline {
+  model = UserSession
+  fields = ['ip', 'userAgent', 'createdAt', 'lastSeen']
+  readonlyFields = ['ip', 'userAgent', 'createdAt', 'lastSeen']
+  extra = 0
+  verboseNamePlural = 'Sessions'
+  hasAddPermission() { return false }
+  hasChangePermission() { return false }
+}
+
 export class UserAdmin extends ModelAdmin<UserRow> {
+  inlines = [SessionInline]
   // secreview-1 M1 (owner brief): no agents at all on accounts, stricter than secreview-3 M3's 'confirm'.
   // An app may opt in with agents = 'confirm' (an agent's change then needs the user) or true.
   agents: boolean | 'confirm' = false
