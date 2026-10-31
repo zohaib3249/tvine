@@ -218,7 +218,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
   const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
-  const base = { ...DEFAULTS, session: { ...DEFAULTS.session, secure: prod }, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const base = { ...DEFAULTS, session: { ...DEFAULTS.session, secure: process.env.TVINE_SESSION_SECURE !== undefined ? process.env.TVINE_SESSION_SECURE === '1' : prod }, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   // every named cache (not only `default`) is completed from the cache defaults
   if (isPlain(merged.caches)) merged.caches = Object.fromEntries(Object.entries(merged.caches).map(([k, c]) => [k, { ...CACHE_DEFAULTS, ...(c as object) }]))
