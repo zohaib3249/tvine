@@ -12,7 +12,7 @@ export interface NewUser { username: string; email?: string | null; password?: s
 
 export async function createUser(u: NewUser, o: { settings?: Settings; validate?: boolean } = {}): Promise<UserRow> {
   const s = o.settings ?? NO_SETTINGS
-  const username = u.username.trim()
+  const username = u.username.normalize('NFKC').trim()   // Django normalize_username
   if (!username) throw new DomainError('invalid_param', 'a username is required', 'username')
   if (u.password != null && o.validate !== false) {
     const problems = validatePassword(u.password, s, { username, email: u.email ?? '' })

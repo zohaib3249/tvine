@@ -1,6 +1,7 @@
 // core/dispatch — the single mutation path (docs/design/server/core-dispatch.md). Every command
 // (HTTP, MCP, channel, WebMCP, human <Form>) runs this pipeline; first failure → one `err` event.
 import type { ActionManifest } from './actions.js'
+import { redactSecrets } from './redact.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { MemoryChannelLayer } from './channels.js'
 import { DomainError } from './errors.js'
@@ -82,7 +83,14 @@ function emitHooks(server: ServerCtx, cmd: Command, sid: Sid | undefined, events
   const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
   if (!hooks.has('command') && !(err && hooks.has('error'))) return
   let copy: { cmd: Command; events: Event[] }
-  try { copy = deepFreeze(structuredClone({ cmd, events })) }
+  // hooks never see credentials: secret-named params redacted; a secretResult action's result blanked (one-time secrets)
+  const secretResult = !!server.actions.get(cmd.action)?.rules?.secretResult
+  try {
+    const c = structuredClone({ cmd, events })
+    c.cmd.params = redactSecrets(c.cmd.params) as Command['params']
+    c.events = c.events.map((e) => (e.kind === 'ok' && secretResult && e.result !== undefined ? { ...e, result: '[redacted]' } : e))
+    copy = deepFreeze(c)
+  }
   catch (e) { server.log('error', 'hook payload not cloneable; hooks skipped', { action: cmd.action, error: errStr(e) }); return }
   setImmediate(() => {
     hooks.emit('command', { cmd: copy.cmd, action: cmd.action, status: err?.code ?? 'ok', sid, events: copy.events, ms })

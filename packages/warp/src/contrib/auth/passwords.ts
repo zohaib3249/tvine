@@ -45,6 +45,7 @@ export function scryptHasher(o: { N?: number; r?: number; p?: number } = {}): Pa
 // Django's format: pbkdf2_sha256$<iterations>$<salt>$<hash b64> (hashes migrated from Django verify as-is)
 export function pbkdf2Hasher(o: { iterations?: number } = {}): PasswordHasher {
   const iterations = o.iterations ?? 600_000
+  if (!Number.isInteger(iterations) || iterations < 100_000) throw new Error('pbkdf2Hasher: iterations must be >= 100000 (OWASP 2023: 600000 for sha256)')
   const run = (pw: string, salt: string, it: number) =>
     new Promise<Buffer>((ok, bad) => pbkdf2(pw, salt, it, 32, 'sha256', (e, k) => (e ? bad(e) : ok(k))))
   const parse = (enc: string) => {

@@ -1,50 +1,68 @@
-// Login throttling + lockout (docs/design/contrib/auth.md §3). Three tiers over one fixed window of failures:
-// (username, ip) pair, username from any ip, ip for any username. Keyed by the lower-cased name AS TYPED, so an
-// unknown name locks exactly like a real one (no enumeration). The pair tier means one attacker ip cannot lock
-// a victim out; the account tier still stops a distributed guess.
+// Login throttling + lockout (docs/design/contrib/auth.md §3). Failures in a fixed window, three tiers:
+// - pair (username, ip): hard lock after maxFailures — one attacker cannot keep guessing one account;
+// - ip: hard lock after ipMaxFailures — one attacker cannot spray many accounts;
+// - account (username from any ip): after accountMaxFailures the account is "under attack": every pair that
+//   has failed in the window is refused, but a pair with NO failures still gets its try. A distributed attack
+//   gets one guess per new ip (/64); the victim, from an ip that never failed, can still sign in (no lockout DoS).
+// Keys use the NFKC lower-cased name AS TYPED (unknown names lock exactly like real ones: no enumeration) and
+// ips grouped like the rate limiter (IPv6 by /64, so rotating addresses inside a /64 does not reset anything).
 // ponytail: in-process (single process v1, like every limiter); a shared store comes with Redis (BACKLOG #12)
 import type { Settings } from '../../core/types.js'
+import { ipKey } from '../../security/ratelimit.js'
 
 interface Entry { count: number; since: number; lockedUntil: number }
-const CAP = 100_000
+export interface ThrottleConfig { maxFailures: number; accountMaxFailures: number; ipMaxFailures: number; windowMs: number; lockoutMs: number }
+
+export const normName = (u: string) => u.normalize('NFKC').trim().toLowerCase()
 
 export class LoginThrottle {
   private m = new Map<string, Entry>()   // insertion order = LRU
-  constructor(private c: { maxFailures: number; accountMaxFailures: number; ipMaxFailures: number; windowMs: number; lockoutMs: number }) {}
+  constructor(private c: ThrottleConfig, private cap = 100_000) {}
 
-  private keys(user: string, ip: string): [string, number][] {
-    const u = user.trim().toLowerCase()
-    return [[`p\0${u}\0${ip}`, this.c.maxFailures], [`u\0${u}`, this.c.accountMaxFailures], [`i\0${ip}`, this.c.ipMaxFailures]]
+  private keys(user: string, ip: string) {
+    const u = normName(user), i = ipKey(ip)
+    return { pair: `p\0${u}\0${i}`, acct: `u\0${u}`, ip: `i\0${i}` }
+  }
+  private live(k: string, now: number): Entry | undefined {
+    const e = this.m.get(k)
+    return e && (e.lockedUntil > now || now - e.since <= this.c.windowMs) ? e : undefined
   }
 
-  // ms until any tier unlocks; 0 = free
+  // ms until this (user, ip) may try again; 0 = free
   locked(user: string, ip: string, now = Date.now()): number {
+    const k = this.keys(user, ip)
+    const pair = this.live(k.pair, now), acct = this.live(k.acct, now), byIp = this.live(k.ip, now)
     let wait = 0
-    for (const [k] of this.keys(user, ip)) {
-      const e = this.m.get(k)
-      if (e && e.lockedUntil > now) wait = Math.max(wait, e.lockedUntil - now)
-    }
+    for (const e of [pair, byIp]) if (e && e.lockedUntil > now) wait = Math.max(wait, e.lockedUntil - now)
+    const pairFailed = !!pair && (pair.count > 0 || pair.lockedUntil > now)
+    if (acct && acct.lockedUntil > now && pairFailed) wait = Math.max(wait, acct.lockedUntil - now)
     return wait
   }
 
   fail(user: string, ip: string, now = Date.now()): void {
-    for (const [k, max] of this.keys(user, ip)) {
-      let e = this.m.get(k)
-      if (!e || now - e.since > this.c.windowMs) e = { count: 0, since: now, lockedUntil: 0 }
+    const k = this.keys(user, ip)
+    for (const [key, max] of [[k.pair, this.c.maxFailures], [k.acct, this.c.accountMaxFailures], [k.ip, this.c.ipMaxFailures]] as const) {
+      let e = this.m.get(key)
+      if (!e || (e.lockedUntil <= now && now - e.since > this.c.windowMs)) e = { count: 0, since: now, lockedUntil: 0 }
       e.count++
-      if (e.count >= max) { e.lockedUntil = now + this.c.lockoutMs; e.count = 0; e.since = now }
-      this.m.delete(k); this.m.set(k, e)
-      while (this.m.size > CAP) this.m.delete(this.m.keys().next().value as string)
+      if (e.count >= max) e.lockedUntil = Math.max(e.lockedUntil, now + this.c.lockoutMs)
+      this.m.delete(key); this.m.set(key, e)
     }
+    this.evict(now)
   }
 
-  // a correct login clears this pair (and the account's count); the ip tier keeps counting other names
-  succeed(user: string, ip: string): void {
-    const [[pair], [acct]] = this.keys(user, ip)
-    this.m.delete(pair!)
-    const e = this.m.get(acct!)
-    if (e && e.lockedUntil === 0) this.m.delete(acct!)
+  // a correct sign-in clears its pair; the account and ip tiers keep counting (an attack elsewhere goes on)
+  succeed(user: string, ip: string): void { this.m.delete(this.keys(user, ip).pair) }
+
+  // oldest first, but a running lock is never dropped (eviction must not be a way to unlock)
+  private evict(now: number): void {
+    if (this.m.size <= this.cap) return
+    for (const [k, e] of this.m) {
+      if (this.m.size <= this.cap) return
+      if (e.lockedUntil <= now) this.m.delete(k)
+    }
   }
+  get size(): number { return this.m.size }
 }
 
 const throttles = new WeakMap<Settings, LoginThrottle>()

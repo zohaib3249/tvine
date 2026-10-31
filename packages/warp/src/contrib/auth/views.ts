@@ -8,12 +8,17 @@ import { onCommit } from '../../data/engine.js'
 import { humanOnly, isAuthenticated } from '../../security/permissions.js'
 import {
   AuthUser, checkResetToken, checkSecondFactor, hasSecondFactor, INVALID, login, logout, makeResetToken, newRecoveryCodes,
-  newToken, newTotpSecret, normCode, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
+  newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
 } from './backend.js'
 import { base32, sha256 } from './crypto.js'
 import { RecoveryCode, Token, Totp, User } from './models.js'
 import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
+import { RateLimiter } from '../../security/ratelimit.js'
+import type { Settings } from '../../core/types.js'
+
+const resetRates = new WeakMap<Settings, RateLimiter>()
+const resetRate = (s: Settings) => { let r = resetRates.get(s); if (!r) resetRates.set(s, (r = new RateLimiter({ limit: 3, windowMs: 3_600_000 }))); return r }
 
 const pw = () => z.string().min(1).max(MAX_PASSWORD)
 const me = (ctx: ActionCtx) => ctx.request.user as AuthUser
@@ -29,6 +34,20 @@ const reject = (problems: string[], field: string) => {
   if (problems.length) throw new DomainError('invalid_param', problems.join(' '), field)
 }
 
+// sudo mode for secret-minting actions: a fresh login, or the current password now (throttled like login)
+async function reauth(ctx: ActionCtx, u: AuthUser, password: string | undefined): Promise<void> {
+  if (password === undefined) {
+    if (recentlyAuthenticated(ctx)) return
+    throw new DomainError('reauth_required', 'confirm your password (send password) to do this', 'password')
+  }
+  locked(ctx, u.username)
+  const row = (await User.get(Number(u.id)))!
+  if (!(await checkPassword(password, row.password, ctx.settings)).ok) {
+    throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
+    throw new DomainError('invalid_credentials', 'the password is not correct', 'password')
+  }
+}
+
 function locked(ctx: ActionCtx, username: string): void {
   if (throttleOf(ctx.settings).locked(username, ctx.request.ip)) throw new DomainError('locked', 'too many failed attempts; try again later')
 }
@@ -40,7 +59,7 @@ export const loginAction = defineAction('login', z.object({
 }), async ({ username, password, otp }, ctx): Promise<SafeUser> => {
   const t = throttleOf(ctx.settings), ip = ctx.request.ip
   locked(ctx, username)
-  const row = await User.objects.filter({ username }).first()
+  const row = await User.objects.filter({ username: username.normalize('NFKC') }).first()
   const { ok, upgrade } = row?.isActive ? await checkPassword(password, row.password, ctx.settings) : { ok: await dummyCheck(password, ctx.settings), upgrade: false }
   if (!row || !ok) { t.fail(username, ip); throw INVALID() }
   if (await hasSecondFactor(row.id)) {
@@ -69,6 +88,7 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
   }
   reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
   const fresh = await User.update(row.id, { password: await makePassword(newPassword, ctx.settings) })
+  await revokeTokens(row.id)
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
   await login(ctx, fresh)
   return null
@@ -77,7 +97,12 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
 // Always ok: the answer (and its timing: sending happens after commit, not awaited) never says whether the email exists.
 export const requestPasswordReset = defineAction('requestPasswordReset', z.object({ email: z.string().email().max(254) }), async ({ email }, ctx) => {
   const send = ctx.settings.auth?.sendPasswordReset
-  const rows = (await User.objects.filter({ email, isActive: true }).all()).filter((r) => r.password && !r.password.startsWith('!'))
+  const want = email.normalize('NFKC').trim().toLowerCase()
+  // per-email cap (3/hour): silently nothing more — the answer stays the same, so it says nothing either
+  if (!resetRate(ctx.settings).check({ sid: `reset:${want}` }).ok) return null
+  // case-insensitive (Django get_users: email__iexact): contains narrows in SQL, the exact match is here
+  const rows = (await User.objects.filter([{ field: 'email', op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
+    .filter((r) => r.email?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
   if (!rows.length) return null
   const out = rows.map((r) => ({ user: { id: String(r.id), username: r.username, email: r.email! }, email: r.email!, uid: uidOf(r), token: makeResetToken(ctx.settings, r), request: ctx.request }))
   onCommit(() => {
@@ -96,34 +121,36 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   // the guard: the update matches the hash the token was made for, so two concurrent uses cannot both win
   const n = await User.objects.filter({ id: row.id, password: row.password }).update({ password: await makePassword(newPassword, ctx.settings) })
   if (n !== 1) throw bad()
+  await revokeTokens(row.id)
   return null
 }, { rate: { limit: 10, windowMs: 60_000 } })
 
 // ---- TOTP ----------------------------------------------------------------------------------------
-export const totpBegin = defineAction('totpBegin', z.object({}), async (_p, ctx) => {
+export const totpBegin = defineAction('totpBegin', z.object({ password: pw().optional() }), async ({ password }, ctx) => {
   const u = sessionOnly(ctx)
+  await reauth(ctx, u, password)
   const id = Number(u.id)
   const existing = await Totp.objects.filter({ userId: id }).first()
   if (existing?.confirmed) throw new DomainError('totp_enabled', 'two-factor is already on; disable it first')
-  const { raw, sealed } = newTotpSecret(ctx.settings)
+  const { raw, sealed } = newTotpSecret(ctx.settings, id)
   if (existing) await Totp.update(existing.id, { secret: sealed, lastStep: 0 })
   else await Totp.create({ userId: id, secret: sealed })
   const issuer = ctx.settings.auth?.totp?.issuer ?? ctx.settings.site.name
   return { secret: base32(raw), uri: totpUri(raw, issuer, u.username) }   // shown this once
-}, { permissions: [isAuthenticated, humanOnly] })
+}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
 
 export const totpConfirm = defineAction('totpConfirm', z.object({ otp: z.string().max(10) }), async ({ otp }, ctx) => {
   const u = sessionOnly(ctx)
   const t = await Totp.objects.filter({ userId: Number(u.id) }).first()
   if (!t || t.confirmed) throw new DomainError('totp_not_pending', 'start two-factor setup first')
-  const step = totpStep(ctx.settings, t.secret, t.lastStep, otp)
+  const step = totpStep(ctx.settings, t, otp)
   if (step === undefined) throw new DomainError('invalid_credentials', 'that code is not valid', 'otp')
   await Totp.update(t.id, { confirmed: true, lastStep: step })
   await RecoveryCode.objects.filter({ userId: t.userId }).delete()
   const codes = newRecoveryCodes()
   for (const c of codes) await RecoveryCode.create({ userId: t.userId, digest: sha256(normCode(c)) })
   return { recoveryCodes: codes }
-}, { permissions: [isAuthenticated, humanOnly] })
+}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
 
 export const totpDisable = defineAction('totpDisable', z.object({ password: pw() }), async ({ password }, ctx) => {
   const u = sessionOnly(ctx)
@@ -144,8 +171,10 @@ export const createToken = defineAction('createToken', z.object({
   name: z.string().min(1).max(100),
   scopes: z.array(z.string().regex(SCOPE, "a scope is '*', 'read', '<app>.*' or '<app>.<action>'")).min(1).max(50),
   expiresInDays: z.number().int().positive().optional(),
-}), async ({ name, scopes, expiresInDays }, ctx) => {
+  password: pw().optional(),
+}), async ({ name, scopes, expiresInDays, password }, ctx) => {
   const u = sessionOnly(ctx)
+  await reauth(ctx, u, password)
   const max = ctx.settings.auth?.tokens?.maxDays ?? 365
   const days = expiresInDays ?? ctx.settings.auth?.tokens?.defaultDays ?? 90
   if (days > max) throw new DomainError('invalid_param', `a token lives at most ${max} days`, 'expiresInDays')
@@ -153,7 +182,7 @@ export const createToken = defineAction('createToken', z.object({
   const expiresAt = new Date(Date.now() + days * 86_400_000)
   await Token.create({ userId: Number(u.id), name, key, digest, scopes: [...new Set(scopes)], expiresAt })
   return { token, key, name, scopes: [...new Set(scopes)], expiresAt: expiresAt.toISOString() }   // the token: shown this once
-}, { permissions: [isAuthenticated, humanOnly] })
+}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
 
 export const listTokens = defineAction('listTokens', z.object({}), async (_p, ctx) =>
   (await Token.objects.filter({ userId: Number(me(ctx).id), revoked: false }).order('-createdAt').all(200)).map((t) => ({
@@ -162,7 +191,7 @@ export const listTokens = defineAction('listTokens', z.object({}), async (_p, ct
   })), { permissions: [isAuthenticated], readOnly: true })
 
 export const revokeToken = defineAction('revokeToken', z.object({ key: z.string().max(20) }), async ({ key }, ctx) => {
-  const n = await Token.objects.filter({ userId: Number(me(ctx).id), key, revoked: false }).update({ revoked: true })
+  const n = await Token.objects.filter({ userId: Number(sessionOnly(ctx).id), key, revoked: false }).update({ revoked: true })
   if (!n) throw new DomainError('not_found', 'no such token')
   return null
 }, { permissions: [isAuthenticated] })

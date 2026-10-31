@@ -73,7 +73,10 @@ export async function boundaryCheck(root: string): Promise<Violation[]> {
             // a dynamic import()/require() gets the whole module: flagged like `import *`
             const bad = imp.kind === 'import-statement' ? warpNames(join(root, cur)).filter((n) => n === '*' || DATA_API.has(n)) : [`${imp.kind}`]
             if (bad.length) { found = { file: start, chain: chainTo(cur), what: `@tvine/warp data API (${bad.join(', ')})` }; break }
-          } else if (imp.path.startsWith('@tvine/warp/migrations')) { found = { file: start, chain: chainTo(cur), what: imp.path }; break }
+          } else if (/^@tvine\/warp\/(migrations|auth|contrib)(\/|$)/.test(imp.path)) {
+            // built-in apps' models / ORM (tvine.auth's User, …): esbuild drops type-only imports, so any import left is a runtime one
+            found = { file: start, chain: chainTo(cur), what: imp.path }; break
+          }
           continue
         }
         if (prev.has(imp.path)) continue

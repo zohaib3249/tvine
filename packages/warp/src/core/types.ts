@@ -165,6 +165,7 @@ export interface ActionRules {
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
+  secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 

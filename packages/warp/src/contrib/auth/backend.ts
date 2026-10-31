@@ -11,7 +11,7 @@ import { Group, GroupPermission, Permission, RecoveryCode, Token, Totp, User, Us
 export type UserRow = NonNullable<Awaited<ReturnType<typeof User.get>>>
 export interface SafeUser { id: string; username: string; email: string | null; isStaff: boolean; isSuperuser: boolean }
 
-export const SESSION_USER = '_auth_user_id', SESSION_HASH = '_auth_user_hash'
+export const SESSION_USER = '_auth_user_id', SESSION_HASH = '_auth_user_hash', SESSION_AT = '_auth_login_at'
 
 // one generic error per failure class; never which part was wrong
 export const INVALID = () => new DomainError('invalid_credentials', 'invalid username or password')
@@ -80,6 +80,9 @@ export class AuthUser implements TvineUser {
     return true
   }
 
+  // the BYO convention (request.user.claims) carries the same flags, so code written against either reads them
+  get claims(): Record<string, unknown> { return { username: this.username, email: this.email, isStaff: this.isStaff, isSuperuser: this.isSuperuser, isActive: this.isActive } }
+
   toJSON(): SafeUser { return safeUser(this) }
 }
 
@@ -101,7 +104,11 @@ export async function sessionUser(settings: Settings, session: Session): Promise
 
 // After a successful credential check, in the handler: bind, rotate (fixation), stamp lastLogin.
 export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
+  // Django login(): another user's session data (a cart, a draft) never carries over to this user
+  const prev = ctx.session.data.get(SESSION_USER)
+  if (prev !== undefined && prev !== String(row.id)) ctx.session.data.clear()
   ctx.session.data.set(SESSION_USER, String(row.id))
+  ctx.session.data.set(SESSION_AT, Date.now())
   ctx.session.data.set(SESSION_HASH, sessionHash(ctx.settings, row.password))
   cycleSession(ctx)
   const fresh = await User.update(row.id, { lastLogin: new Date() })
@@ -111,6 +118,16 @@ export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
 }
 
 // Django logout(): flush everything, new sid
+// sudo mode: a password typed in this session within RECENT_MS (login, change, or the action's own `password` param)
+export const RECENT_MS = 10 * 60_000
+export const recentlyAuthenticated = (ctx: ActionCtx, now = Date.now()) => {
+  const at = ctx.session.data.get(SESSION_AT)
+  return typeof at === 'number' && now - at <= RECENT_MS && now >= at
+}
+
+// every token of a user stops working (password reset / change: a token made by an attacker dies with it)
+export const revokeTokens = (userId: number) => Token.objects.filter({ userId, revoked: false }).update({ revoked: true })
+
 export function logout(ctx: ActionCtx): void {
   ctx.session.data.clear()
   cycleSession(ctx)
@@ -173,17 +190,19 @@ export function checkResetToken(s: Settings, r: UserRow, token: string, now = Da
 
 // ---- TOTP (RFC 6238) ----------------------------------------------------------------------------------
 const STEP_MS = 30_000
-export function newTotpSecret(s: Settings): { raw: Buffer; sealed: string } {
+export const totpAad = (userId: number | string) => `auth_totp:${userId}`
+export function newTotpSecret(s: Settings, userId: number): { raw: Buffer; sealed: string } {
   const raw = randomBytes(20)
-  return { raw, sealed: seal(s, 'totp', raw) }
+  return { raw, sealed: seal(s, 'totp', raw, totpAad(userId)) }
 }
 export const totpUri = (raw: Buffer, issuer: string, username: string) =>
   `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(username)}?secret=${base32(raw)}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`
 
 // the matched step (> lastStep: a code is good once), or undefined; ±1 step of clock drift
-export function totpStep(s: Settings, sealed: string, lastStep: number, code: string, now = Date.now()): number | undefined {
+export function totpStep(s: Settings, t: { secret: string; lastStep: number; userId: number | string }, code: string, now = Date.now()): number | undefined {
+  const { lastStep } = t
   if (!/^\d{6}$/.test(code)) return undefined
-  const raw = unseal(s, 'totp', sealed)
+  const raw = unseal(s, 'totp', t.secret, totpAad(t.userId))
   if (!raw) return undefined
   const step = Math.floor(now / STEP_MS)
   let hit: number | undefined
@@ -199,7 +218,7 @@ export const newRecoveryCodes = (n = 10) => Array.from({ length: n }, () => { co
 export async function checkSecondFactor(s: Settings, userId: number, otp: string): Promise<boolean> {
   const t = await Totp.objects.filter({ userId: userId }).first()
   if (!t?.confirmed) return true
-  const step = totpStep(s, t.secret, t.lastStep, otp.trim())
+  const step = totpStep(s, t, otp.trim())
   if (step !== undefined) {
     // the guard: only one concurrent use of a step wins (the update matches lastStep as it was read)
     return (await Totp.objects.filter({ id: t.id, lastStep: t.lastStep }).update({ lastStep: step })) === 1

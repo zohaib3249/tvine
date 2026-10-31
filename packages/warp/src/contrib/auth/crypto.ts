@@ -22,18 +22,21 @@ export const macOk = (settings: Settings, purpose: string, data: string, given: 
   keys(settings).map((k) => same(createHmac('sha256', derive(k, purpose)).update(data).digest('base64url'), given)).includes(true)
 
 // AES-256-GCM: v1.<iv>.<tag>.<ciphertext> (base64url)
-export function seal(settings: Settings, purpose: string, plain: Buffer): string {
+// aad: what the ciphertext is bound to (a user id): a sealed value copied onto another row does not open
+export function seal(settings: Settings, purpose: string, plain: Buffer, aad = ''): string {
   const iv = randomBytes(12), c = createCipheriv('aes-256-gcm', derive(keys(settings)[0]!, purpose), iv)
+  c.setAAD(Buffer.from(aad))
   const ct = Buffer.concat([c.update(plain), c.final()])
   return ['v1', iv, c.getAuthTag(), ct].map((x) => (typeof x === 'string' ? x : x.toString('base64url'))).join('.')
 }
-export function unseal(settings: Settings, purpose: string, sealed: string): Buffer | undefined {
+export function unseal(settings: Settings, purpose: string, sealed: string, aad = ''): Buffer | undefined {
   const [v, iv, tag, ct] = sealed.split('.')
   if (v !== 'v1' || !iv || !tag || ct === undefined) return undefined
   for (const k of keys(settings)) {
     try {
       const d = createDecipheriv('aes-256-gcm', derive(k, purpose), Buffer.from(iv, 'base64url'))
       d.setAuthTag(Buffer.from(tag, 'base64url'))
+      d.setAAD(Buffer.from(aad))
       return Buffer.concat([d.update(Buffer.from(ct, 'base64url')), d.final()])
     } catch { /* next key */ }
   }
