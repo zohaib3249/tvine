@@ -334,6 +334,7 @@ export interface AuthSettings {
   objectPermission?: (user: TvineUser, perm: string, obj: unknown) => boolean | Promise<boolean>
   tokens?: { defaultDays?: number; maxDays?: number }
   totp?: { issuer?: string }
+  breachCheck?: boolean                // new passwords are checked against Have I Been Pwned (k-anonymity), off by default
   // security notices by mail (contrib/auth/notify.ts); each defaults to on when settings.email.backend is not 'dummy'
   notify?: { newLogin?: boolean; passwordChanged?: boolean; twoFactorDisabled?: boolean; tokenCreated?: boolean; emailChanged?: boolean }
 }

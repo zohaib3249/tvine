@@ -1,6 +1,8 @@
 // Password hashing + validation (docs/design/contrib/auth.md §2). Hashers are pluggable (settings.auth.hashers,
 // first = preferred); every encoded hash names its algorithm and carries its own parameters.
-import { pbkdf2, randomBytes, scrypt, type ScryptOptions } from 'node:crypto'
+import { createHash, pbkdf2, randomBytes, scrypt, type ScryptOptions } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { gunzipSync } from 'node:zlib'
 import type { PasswordHasher, PasswordValidator, Settings } from '../../core/types.js'
 import { same } from './crypto.js'
 
@@ -104,19 +106,38 @@ export const minLength = (n = 8): PasswordValidator => (pw) =>
 
 export const numericPassword = (): PasswordValidator => (pw) => (/^\d+$/.test(pw) ? ['This password is entirely numeric.'] : [])
 
-// Django's top-of-list common passwords (the full 20k list is a later data file; pass your own with `list`).
-const COMMON = `123456 password 12345678 qwerty 123456789 12345 1234 111111 1234567 dragon 123123 baseball abc123 football
-monkey letmein 696969 shadow master 666666 qwertyuiop 123321 mustang 1234567890 michael 654321 superman 1qaz2wsx 7777777
-121212 000000 qazwsx 123qwe killer trustno1 jordan jennifer zxcvbnm asdfgh hunter buster soccer harley batman andrew
-tigger sunshine iloveyou 2000 charlie robert thomas hockey ranger daniel starwars klaster 112233 george computer michelle
-jessica pepper 1111 zxcvbn 555555 11111111 131313 freedom 777777 pass maggie 159753 aaaaaa ginger princess joshua cheese
-amanda summer love ashley nicole chelsea biteme matthew access yankees 987654321 dallas austin thunder taylor matrix
-mobilemail mom monitor monitoring montana moon moscow welcome welcome1 password1 password123 admin admin123 changeme
-passw0rd p@ssw0rd qwerty123 letmein1 abcd1234 1q2w3e4r 1q2w3e4r5t zaq12wsx secret login guest root default test test123`
-  .split(/\s+/)
-export const commonPassword = (list: Iterable<string> = COMMON): PasswordValidator => {
-  const set = new Set([...list].map((p) => p.trim().toLowerCase()))
-  return (pw) => (set.has(pw.trim().toLowerCase()) ? ['This password is too common.'] : [])
+// Django's common-passwords list (20k entries, ~80 KB gzipped, BSD; packages/warp/data), read on first use.
+// The same path resolves from src/ and dist/.
+let common: Set<string> | undefined
+const COMMON_FILE = new URL('../../../data/common-passwords.txt.gz', import.meta.url)
+const commonList = () => (common ??= new Set(gunzipSync(readFileSync(COMMON_FILE)).toString('utf8').split('\n').map((p) => p.trim().toLowerCase()).filter(Boolean)))
+export const commonPassword = (list?: Iterable<string>): PasswordValidator => {
+  const own = list && new Set([...list].map((p) => p.trim().toLowerCase()))
+  return (pw) => ((own ?? commonList()).has(pw.trim().toLowerCase()) ? ['This password is too common.'] : [])
+}
+
+// Have I Been Pwned range API (k-anonymity: only the first 5 hex chars of the SHA-1 leave the server), through safeFetch.
+// Off by default: settings.auth.breachCheck = true. A network failure never blocks a password (fails open, logged).
+export async function pwnedCount(pw: string, fetcher: (url: string) => Promise<Response> = defaultFetch): Promise<number> {
+  const h = createHash('sha1').update(pw).digest('hex').toUpperCase()
+  const res = await fetcher(`https://api.pwnedpasswords.com/range/${h.slice(0, 5)}`)
+  if (!res.ok) throw new Error(`pwnedpasswords: HTTP ${res.status}`)
+  for (const line of (await res.text()).split('\n')) {
+    const [suffix, n] = line.trim().split(':')
+    if (suffix === h.slice(5)) return Number(n) || 0
+  }
+  return 0
+}
+const defaultFetch = async (url: string) => (await import('../../security/safe-fetch.js')).safeFetch(url, { allowHosts: ['api.pwnedpasswords.com'], timeoutMs: 3000, maxBytes: 2_000_000, headers: { 'add-padding': 'true' } })
+
+// validators, then (settings.auth.breachCheck) the breach check: what every password-setting flow runs
+export async function validateNewPassword(pw: string, s: Settings, user?: Record<string, unknown>): Promise<string[]> {
+  const problems = validatePassword(pw, s, user)
+  if (problems.length || !s.auth?.breachCheck) return problems
+  try {
+    if ((await pwnedCount(pw)) > 0) return ['This password has appeared in a data breach. Choose a different one.']
+  } catch (e) { console.error(JSON.stringify({ level: 'warn', msg: 'tvine.auth: breach check unavailable', error: (e as Error).message })) }
+  return []
 }
 
 // Django UserAttributeSimilarityValidator: SequenceMatcher.quick_ratio (multiset character overlap) of the

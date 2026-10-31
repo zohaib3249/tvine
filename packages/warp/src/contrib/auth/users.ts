@@ -4,7 +4,7 @@
 import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, Settings } from '../../core/types.js'
 import { Group, GroupPermission, Permission, User, UserGroup, UserPermission } from './models.js'
-import { makePassword, UNUSABLE, validatePassword } from './passwords.js'
+import { makePassword, UNUSABLE, validateNewPassword, validatePassword } from './passwords.js'
 import { revokeTokens, SESSION_USER, updateSessionAuthHash, type UserRow } from './backend.js'
 import { dropOtherSessions } from './sessions.js'
 import { securityNotice } from './notify.js'
@@ -35,7 +35,7 @@ export async function setPassword(userId: number, raw: string, o: { settings?: S
   const row = await User.get(userId)
   if (!row) throw new DomainError('not_found', 'no such user')
   if (o.validate !== false) {
-    const problems = validatePassword(raw, s, row)
+    const problems = await validateNewPassword(raw, s, row)
     if (problems.length) throw new DomainError('invalid_param', problems.join(' '), 'password')
   }
   await passwordChanged(await User.update(userId, { password: await makePassword(raw, s) }), o.ctx)

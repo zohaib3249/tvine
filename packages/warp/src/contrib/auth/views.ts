@@ -17,7 +17,7 @@ import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
 import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
 import { checkNewDevice, securityNotice } from './notify.js'
 import { exportToMedia } from './privacy.js'
-import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
+import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validateNewPassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
 import { limiterFor } from '../../backends/index.js'
@@ -105,7 +105,7 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
     await throttleOf(ctx.settings).fail(u.username, ctx.request.ip)
     throw new DomainError('invalid_credentials', 'the current password is not correct', 'oldPassword')
   }
-  reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
+  reject(await validateNewPassword(newPassword, ctx.settings, row), 'newPassword')
   const fresh = await User.update(row.id, { password: await makePassword(newPassword, ctx.settings) })
   await revokeTokens(row.id)
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
@@ -141,7 +141,7 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   const id = userOfUid(uid)
   const row = id === undefined ? undefined : await User.get(id)
   if (!row?.isActive || !checkResetToken(ctx.settings, row, token)) throw bad()
-  reject(validatePassword(newPassword, ctx.settings, row), 'newPassword')
+  reject(await validateNewPassword(newPassword, ctx.settings, row), 'newPassword')
   // the guard: the update matches the hash the token was made for, so two concurrent uses cannot both win
   const n = await User.objects.filter({ id: row.id, password: row.password }).update({ password: await makePassword(newPassword, ctx.settings) })
   if (n !== 1) throw bad()
