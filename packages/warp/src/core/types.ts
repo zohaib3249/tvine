@@ -179,6 +179,7 @@ export interface ActionRules {
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
   secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanOnly?: true | string         // widgets/human-only.md: dispatch refuses every agent-marked request (human_only); no typed MCP tool
+  audit?: boolean                   // false = never write a tvine.audit row for this action (settings.audit)
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 
@@ -245,7 +246,9 @@ export interface Settings {
   // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
-  audit: boolean                    // v1.1
+  // tvine.audit (BACKLOG #1): one row per audited command, written in the command's transaction. actions: 'writes' =
+  // every non-readOnly action, 'all' = reads too; redact: extra param names blanked (secret-looking names always are)
+  audit: { enabled: boolean; actions: 'writes' | 'all'; retentionDays: number; redact: string[] }
   security: { headers: SecurityHeaders }
   cors: CorsSettings                // default closed: no routes
   compression: CompressionSettings

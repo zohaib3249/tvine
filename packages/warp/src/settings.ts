@@ -57,7 +57,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   logging: 'json',
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
-  audit: false,
+  audit: { enabled: false, actions: 'writes', retentionDays: 90, redact: [] },
   security: {
     headers: {
       enabled: true,
@@ -130,7 +130,7 @@ const schema: z.ZodType<Settings> = z.object({
   logging: z.enum(['json', 'pretty', 'none']),
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
-  audit: z.boolean(),
+  audit: z.object({ enabled: z.boolean(), actions: z.enum(['writes', 'all']), retentionDays: z.number().int().positive(), redact: z.array(z.string()) }),
   security: z.object({
     headers: z.object({
       enabled: z.boolean(),
@@ -167,7 +167,7 @@ const schema: z.ZodType<Settings> = z.object({
     tokens: z.object({ defaultDays: z.number().positive(), maxDays: z.number().positive() }).partial().optional(),
     totp: z.object({ issuer: z.string() }).partial().optional(),
   }).strict().optional(),
-})
+}).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] }) as z.ZodType<Settings>
 
 const isPlain = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)

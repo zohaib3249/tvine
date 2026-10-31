@@ -6,6 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { broker as current, bus, type Broker, type Final } from './broker.js'
 import type { JobRow } from './models.js'
 import { config, followUp, parseRate, Retry, taskById, type SigJSON, type Task, type TaskCtx } from './task.js'
+import { auditSinkSet, sidHash, writeAudit, type AuditRow } from '../../core/audit.js'
+import { redactSecrets } from '../../core/redact.js'
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 export interface WorkerOpts {
@@ -244,6 +246,7 @@ export class Worker {
       callback: (sig, results) => this.link(job, () => followUp(sig, results, job, { groupId: null })),
     })
     if (ok) this.log('info', 'job.ok', { worker: this.name, jobId: job.id, task: job.task, attempt: job.attempts, ms })
+    if (ok) await auditJob(job, ms)
     else this.log('warn', 'job.lost', { worker: this.name, jobId: job.id, task: job.task, ms })
   }
 
@@ -267,6 +270,7 @@ export class Worker {
     }
     this.log('error', 'job.dead', base)
     await this.final(r, 'dead', { error: errText(e) })
+    await auditJob(job, Date.now() - (job.startedAt ?? Date.now()), 'dead')
   }
 
   private async final(r: Running, status: Final, o: { error?: string }): Promise<void> {
@@ -380,4 +384,12 @@ export function backoff(b: Task['opts']['retryBackoff'], attempt: number, rnd: (
   const { baseMs = 1000, maxMs = 600_000, jitter = true } = b ?? {}
   const d = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt - 1))
   return jitter ? Math.round(d / 2 + rnd() * (d / 2)) : d
+}
+
+// tvine.audit (core/audit.ts): a finished job is one row, via 'job', as the user who enqueued it. Never fails the job.
+async function auditJob(job: JobRow, ms: number, code?: string): Promise<void> {
+  if (!auditSinkSet()) return
+  const row: AuditRow = { userId: job.userId ?? null, via: 'job', agent: null, agentVerified: false, action: `task:${job.task}`, outcome: code ? 'error' : 'ok',
+    code: code ?? null, params: redactSecrets(job.args ?? null), ip: '', sidHash: sidHash(job.sid ?? undefined), ms: Math.round(ms), requestId: job.id, cmdId: null }
+  await writeAudit(row).catch(() => undefined)
 }

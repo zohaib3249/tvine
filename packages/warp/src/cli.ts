@@ -54,7 +54,8 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
-        | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)`
+        | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
+  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
@@ -77,6 +78,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   changepassword: { options: {}, args: [1, 1] },
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
   tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
+  audit: { options: { days: str }, args: [1, 1] },
 }
 
 class Usage extends Error {}
@@ -165,6 +167,18 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'tasks': {
         const { tasksCommand } = await import('./contrib/tasks/cli.js')
         return await tasksCommand(apps, await loadSettings(), args, o, io)
+      }
+      case 'audit': {
+        if (args[0] !== 'prune') throw new Usage('usage: tvine audit prune [--days n]')
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.audit')) throw new Usage("tvine.audit is not installed: add 'tvine.audit' to settings.installedApps")
+        const days = o.days === undefined ? settings.audit.retentionDays : Number(o.days)
+        if (!Number.isInteger(days) || days < 0) throw new Usage('--days must be an integer >= 0')
+        const { connections } = await import('./data/db.js')
+        connections.configure(settings)
+        const { pruneAudit } = await import('./contrib/audit/prune.js')
+        try { io.out(`deleted ${await pruneAudit(days)} audit row(s) older than ${days} day(s)`) } finally { await connections.closeAll() }
+        return undefined
       }
       case 'inspect': {
         const port = o.port === undefined ? 7357 : Number(o.port)

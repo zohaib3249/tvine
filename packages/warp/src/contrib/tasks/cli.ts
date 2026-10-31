@@ -30,6 +30,8 @@ async function boot(apps: string, settings: Settings, cmd: string) {
   if (!settings.installedApps.includes('tvine.tasks')) throw new Error("tvine.tasks is not installed: add 'tvine.tasks' to settings.installedApps")
   if (settings.tasks.broker === 'memory' && cmd !== 'bench') throw new Error(MEMORY)
   configureTasks(settings.tasks)
+  // tvine.audit: jobs write audit rows (via 'job') and the prune task reads the retention
+  if (settings.audit.enabled) (await import('../audit/prune.js')).installSink(settings)
   connections.configure(settings)
   configureRedis(settings)
   return discoverTasks(apps, settings.installedApps)

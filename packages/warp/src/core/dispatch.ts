@@ -3,6 +3,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
+import { audited, auditRow, writeAudit } from './audit.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -112,9 +113,24 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
   if (opts.snapshot === false) quiet.add(request)
   if (opts.render && server.actions.get(cmd.action)?.rules?.readOnly) renderRead.add(request)
   const t0 = performance.now()
-  const { sid, events } = await run(cmd, server, request)
+  const hold: Hold = { req: request }
+  const { sid, events } = await run(cmd, server, request, hold)
+  await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
   yield* events
+}
+
+// ---- audit (BACKLOG #1, core/audit.ts) ------------------------------------------------------
+// A committed command's row is written INSIDE its transaction (execute → hold.audit); a refused or failed attempt
+// gets its own short write here, after the rollback. Noise (no session, rate limits, stale state) is not audited.
+const AUDIT_ERRS = new Set(['domain', 'invalid_param', 'human_only', 'stale_bind', 'internal'])
+async function auditFailure(server: ServerCtx, cmd: Command, sid: Sid | undefined, events: Event[], hold: Hold, ms: number): Promise<void> {
+  const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
+  if (!err || hold.audited || !AUDIT_ERRS.has(err.code) || !audited(server.settings, server.actions.get(cmd.action))) return
+  const { $confirm: _, ...params } = cmd.params ?? {}
+  const code = err.reason && err.reason !== err.code ? `${err.code}:${err.reason}` : err.code
+  try { await writeAudit(auditRow(server.settings, { action: cmd.action, params, request: hold.req!, sid, cmdId: cmd.cmdId, ms, code })) }
+  catch (e) { server.log('error', 'audit write failed', { action: cmd.action, error: errStr(e) }) }
 }
 
 // Hooks fire once run() settled (an ok is always after its commit), on a frozen copy: a hook can alter
@@ -241,7 +257,7 @@ function redirectUrl(e: unknown): string | undefined {
 // ---- pipeline ------------------------------------------------------------------------------
 type Ran = { sid: Sid | undefined; events: Event[] }   // sid: the session the command resolved to (for hooks)
 
-async function run(cmd: Command, server: ServerCtx, request: Request): Promise<Ran> {
+async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold): Promise<Ran> {
   const { settings, sessions } = server
   const peeked = async () => (await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }))?.sid
   if (crossOrigin(request, settings)) return { sid: await peeked(), events: [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })] }
@@ -267,6 +283,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   const original = request
   request = await asAgent(cmd, server, request, sid)
   if (request !== original) aliasRequest(request, original)   // a rotation in the pipeline reaches the transport's request too
+  hold.req = request
   // 4.1 humanOnly (widgets/human-only.md): THE security guard, before replay / in-flight dedupe, so an agent reusing a
   // human's cmdId gets human_only, never the stored result. Every agent-marked request (MCP tools, `do`, agent HTTP,
   // the tab agent mark/tail, WebMCP agentCmd) is refused; only a human's own request runs it. No rule or hook overrides it.
@@ -274,7 +291,6 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   if (ho && request.agent.is) {
     return { sid, events: [ev.err('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : cmd.action}); ask the user to do it`, { reason: 'human_only' })] }
   }
-  const hold: Hold = {}
   // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
   const locked = (fn: () => Promise<Event[]>) => serial(sid, () => sessions.lock(sid, fn).catch((e: unknown) => {
     if (e instanceof SessionBusy) return [rateLimited(1000)]
@@ -342,10 +358,13 @@ async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snap
   }
 }
 
-type Hold = { settled?: Promise<unknown> }   // the handler's own promise, which may outlive the timeout
+// settled: the handler's own promise, which may outlive the timeout. req: the request as dispatched (agent-marked).
+// audit: writes the audit row inside the handler's transaction; audited: it did
+type Hold = { settled?: Promise<unknown>; req?: Request; audit?: () => Promise<void>; audited?: boolean }
 
 async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string, hold: Hold): Promise<Event[]> {
   const { settings } = server, { sid } = session
+  const t0 = performance.now()
   // C1: resolved before the queue; while it waited, a login/logout may have rotated this session away (or it
   // expired). Refuse without any sid or snapshot: the new sid belongs to whoever ran the rotating command.
   if (!(await server.sessions.isLive(session))) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
@@ -404,7 +423,12 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       const input = { ...cmd.params, ...bound }
       const params = def.rawParams ? input : validate(def.schema, input)
       // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
+      if (audited(settings, def)) {
+        const { $confirm: _, ...raw } = cmd.params ?? {}
+        hold.audit = () => writeAudit(auditRow(settings, { action: def.id, params: raw, request, sid, cmdId: cmd.cmdId, ms: performance.now() - t0 }))
+      }
       const out = await execute(def, params, ctx, server, hold)
+      hold.audited = !!hold.audit
       // 9. committed: apply staged session data, bump rev, flush channel events
       session.data = staged.data
       // session fixation (cycleSession, e.g. login): rotate FIRST, so the new data (a login) is only ever saved
@@ -495,12 +519,16 @@ type Outcome = { result: unknown } | { goto: string }
 async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
-    try { return { result: await scope.run(ctx, () => def.run(params, ctx)) } }
+    let out: Outcome
+    try { out = { result: await scope.run(ctx, () => def.run(params, ctx)) } }
     catch (e) {
       const url = redirectUrl(e)
       if (url === undefined) throw e
-      return { goto: siteRedirect(url, { base: `http://${hostOf(ctx.request, server.settings) ?? 'tvine.local'}`, hosts: [hostOf(ctx.request, server.settings) ?? 'tvine.local'], route: server.route }) }   // goto commits; a refused one rolls back
+      out = { goto: siteRedirect(url, { base: `http://${hostOf(ctx.request, server.settings) ?? 'tvine.local'}`, hosts: [hostOf(ctx.request, server.settings) ?? 'tvine.local'], route: server.route }) }   // goto commits; a refused one rolls back
     }
+    // the audit row joins the handler's transaction: a rollback leaves none (a failed write fails the command)
+    if (hold.audit) await hold.audit()
+    return out
   }
   // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing
   const tx = server.settings.db.atomicRequests && !def.rules?.readOnly && def.rules?.atomic !== false
