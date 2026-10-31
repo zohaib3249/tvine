@@ -42,3 +42,13 @@ export const staffGuard: Permission = async (ctx) => {
   }
   return true
 }
+
+// the admin's live channel groups (transport/channel.ts): admin:live = staffGuard, admin:logs = staffGuard + superuser.
+// Checked on a copy of the session: an open stream must not count as admin use (idleMs keeps running).
+export async function adminGroupAllowed(group: string, ctx: Parameters<Permission>[0]): Promise<boolean> {
+  const session = { ...ctx.session, data: new Map(ctx.session.data) }
+  try {
+    if (!(await staffGuard({ ...ctx, session }))) return false
+  } catch { return false }   // reauth_required / two_factor_required
+  return group !== 'admin:logs' || (ctx.user.isSuperuser === true && ctx.user.isActive !== false)
+}

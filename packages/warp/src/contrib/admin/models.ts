@@ -25,3 +25,18 @@ export const AdminPref = defineModel('admin_pref', {
   value: field.json(),
   updatedAt: field.datetime({ auto: true }),
 }, { unique: [['userId', 'key']] })
+
+// dashboard rollups (stats.ts): one row per (hour, process, metric key, dims). Each process rewrites its own rows for
+// the current hour on every flush, so rows add up across servers and survive restarts. dims hold low-cardinality
+// labels only (route patterns, registered action ids, SQL fingerprints without values); hist = latency buckets (ms).
+export const AdminStat = defineModel('admin_stat', {
+  id: field.id(),
+  bucket: field.datetime({ index: true }),
+  node: field.text(),
+  key: field.text({ index: true }),
+  dims: field.json(),
+  count: field.int(),
+  sum: field.float(),
+  max: field.float(),
+  hist: field.json(),
+})

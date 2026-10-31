@@ -13,7 +13,12 @@ import { isFilterClass, ModelAdmin, type InlineModelAdmin } from './options.js'
 
 type AnyModel = Model<any, any>
 export interface AdminPage { path: string; title: string; icon?: string; section?: string; component: string; permission?: string }
-export interface AdminWidget { id: string; title: string; size: 'sm' | 'md' | 'lg'; data: ActionDef; component?: string; permission?: string }
+// data: an action (the UI calls it), or a function the dashboard runs through admin.widget with the chosen range
+// (return ChartData, { value, previous? } or { columns, rows }). type picks the renderer; refreshMs = its auto-refresh.
+export interface AdminWidget {
+  id: string; title: string; size: 'sm' | 'md' | 'lg' | 'xl'; data?: ActionDef | ((ctx: any, p: { range?: unknown }) => unknown)
+  type?: 'line' | 'area' | 'bar' | 'stacked' | 'donut' | 'stat' | 'table' | 'custom'; refreshMs?: number; component?: string; permission?: string
+}
 
 export class AlreadyRegistered extends Error { name = 'AlreadyRegistered' }
 export class NotRegistered extends Error { name = 'NotRegistered' }

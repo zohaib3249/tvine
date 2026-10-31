@@ -10,9 +10,12 @@ export type Route =
   | { name: 'history'; model: string; pk: string }
   | { name: 'url'; model: string; url: string; args: Record<string, string> }
   | { name: 'page'; path: string }
+  | { name: 'system'; page: SystemPage }
   | { name: 'notFound' }
 
 export type Query = Record<string, string>
+export const SYSTEM = ['health', 'traffic', 'metrics', 'agents', 'queries', 'jobs', 'logs', 'security'] as const
+export type SystemPage = (typeof SYSTEM)[number]
 type Urls = { name: string; path: string }[]
 
 // <int:id>/refund/ → regex with named groups (Django path converters).
@@ -24,6 +27,8 @@ export function parse(segments: string[], o: { pages?: { path: string }[]; urls?
   const page = o.pages?.find((p) => p.path.replace(/^\/|\/$/g, '') === joined)
   if (page && s.length) return { name: 'page', path: page.path }
   if (s.length === 0) return { name: 'index' }
+  // the System section wins over an app labelled 'system' only for its six page names
+  if (s.length === 2 && s[0] === 'system' && (SYSTEM as readonly string[]).includes(s[1])) return { name: 'system', page: s[1] as SystemPage }
   if (s.length === 1) return { name: 'app', app: s[0] }
   const model = `${s[0]}.${s[1]}`
   const rest = s.slice(2)
@@ -49,6 +54,7 @@ export function href(base: string, r: Route, q?: Query): string {
     case 'add': return modelPath(base, r.model) + 'add/'
     case 'change': case 'delete': case 'history': return `${modelPath(base, r.model)}${enc(r.pk)}/${r.name}/`
     case 'page': return `${base}/${r.path.replace(/^\/|\/$/g, '')}/`
+    case 'system': return `${base}/system/${r.page}/`
     case 'url': return modelPath(base, r.model) + qs
   }
 }

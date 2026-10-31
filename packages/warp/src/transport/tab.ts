@@ -9,7 +9,8 @@
 // without a CORS preflight we never answer), and its cookie session must own the tabId. tabId, requestId and
 // cmdId are 128-bit random. The agent's declared name is never verified and always shown as such.
 import { isProduction } from '../env.js'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { sidHash } from '../core/audit.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp, forwardedHostOf } from '../core/request.js'
@@ -53,7 +54,8 @@ interface Tab { id: string; sid: Sid; doc: string; send?: Frame; gone?: ReturnTy
 interface Ask { id: string; agentSid: Sid; name: string; exp: number; code: string; codeExp: number; approveUrl: string; tabId?: string }
 interface Held { tabId: string; name: string; since: number; used: number }
 
-const token = () => randomBytes(16).toString('base64url')   // 128 bit
+const token = () => randomBytes(16).toString('base64url')
+const hashId = (s: string) => createHash('sha256').update(`tab:${s}`).digest('hex').slice(0, 16)   // 128 bit
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 const newCode = () => [...randomBytes(8)].map((b) => CROCKFORD[b & 31]).join('')
 // what the human types: case-insensitive, dashes/spaces ignored, Crockford look-alikes folded
@@ -68,6 +70,7 @@ export class TabHub {
   private asks = new Map<string, Ask>()                  // requestId → open request
   private held = new Map<Sid, Held>()                    // agent sid → the tab it controls
   private notes = new Map<Sid, { reason: string; at: number }>()
+  private moved = new Map<Sid, Sid>()                    // rotated sid → the sid its in-flight count was copied to
   private busy = new Map<Sid, number>()                  // session sid → forwarded commands running in its tabs
   private tail = new Map<Sid, number>()                  // session sid → stays agent until (after its last command)
   private fails = new Map<string, { n: number; until: number }>()   // ip → wrong pairing codes
@@ -93,7 +96,7 @@ export class TabHub {
     // dropped (expired), never re-keyed: whoever held the old sid's stream must not reach the new session.
     this.unrotate = server.sessions.onRotate((from, to) => {
       const b = this.busy.get(from), t = this.tail.get(from)
-      if (b) this.busy.set(to, (this.busy.get(to) ?? 0) + b)
+      if (b) { this.busy.set(to, (this.busy.get(to) ?? 0) + b); this.moved.set(from, to) }   // unbusy(from) settles `to` too
       if (t !== undefined) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, t))
       if (b) this.tail.set(to, Math.max(this.tail.get(to) ?? 0, Date.now() + TAB_LIMITS.driftMs))   // its in-flight count stays on the old key
       if (b || t !== undefined) void this.share(to)
@@ -105,6 +108,20 @@ export class TabHub {
   close(): void { clearInterval(this.timer); this.unwatch(); this.unrotate(); for (const t of [...this.tabs.values()]) this.drop(t) }
 
   get size(): number { return this.tabs.size }   // metrics: connected tabs
+  // tvine.admin's Agents page: the tabs an agent controls now. ids are hashes (never a tab token or a sid).
+  controlled(): { id: string; session: string; since: number; agent: string; used: number }[] {
+    const out = []
+    for (const [agentSid, h] of this.held) {
+      const t = this.tabs.get(h.tabId)
+      if (t) out.push({ id: hashId(t.id), session: sidHash(agentSid)!, since: h.since, agent: h.name, used: h.used })
+    }
+    return out
+  }
+  // the admin's Stop: the same release as the human's Stop pill
+  revoke(id: string): boolean {
+    for (const t of this.tabs.values()) if (t.agent && hashId(t.id) === id) { this.release(t, 'human', 'not_connected'); return true }
+    return false
+  }
   get on(): boolean { return this.server.settings.agent?.inTab !== 'off' }
 
   // ---- tab lifecycle (channel.ts) -----------------------------------------------------------
@@ -232,8 +249,15 @@ export class TabHub {
     return t !== undefined && t > Date.now()
   }
   private unbusy(sid: Sid): void {
-    const n = (this.busy.get(sid) ?? 1) - 1
-    if (n > 0) this.busy.set(sid, n); else this.busy.delete(sid)
+    // a command that started before a login rotation answers on the old sid: its count was copied to the new sid
+    // (onRotate), so the new one comes down too, along the rotation chain
+    for (let k: Sid | undefined = sid, hops = 0; k !== undefined && hops < 8; hops++) {
+      const n = (this.busy.get(k) ?? 1) - 1
+      if (n > 0) this.busy.set(k, n); else this.busy.delete(k)
+      const next = this.moved.get(k)
+      if (n <= 0) this.moved.delete(k)
+      k = next
+    }
   }
   // this server's marking of `sid`, published: busy → until the command's answer could still come (cmdMs + drift);
   // else the tail. Only the server holding the session's tabs writes it (tabs are pinned to their stream).

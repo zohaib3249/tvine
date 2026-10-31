@@ -119,6 +119,14 @@ export type InlineClass = new () => InlineModelAdmin
 export interface ListParams { q?: string; filters?: Record<string, string>; ordering?: string[]; page?: number; pageSize?: number; all?: boolean }
 export interface AdminView { def: ActionDef; title?: string }
 
+// one chart of a model (charts.ts): a time series of `aggregate(field)` on the date field, or a breakdown `by` a
+// choice / boolean / foreign-key field (top N). type 'stat' = the total over the range with the previous period.
+export interface ChartSpec {
+  id?: string; title?: string
+  type: 'line' | 'area' | 'bar' | 'stacked' | 'donut' | 'stat' | 'table'
+  aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string; by?: string; date?: string
+  range?: '24h' | '7d' | '30d' | '90d' | '1y'; size?: 'sm' | 'md' | 'lg' | 'xl'; dashboard?: boolean
+}
 export class ModelAdmin<T extends object = any> extends BaseAdmin {
   listDisplay: (string | ((obj: T) => unknown))[] = ['__str__']
   listDisplayLinks: string[] | null = null
@@ -141,6 +149,8 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
   // false: agent-marked requests are refused for this model (owner ruling); 'confirm': an agent's writes answer
   // confirm_required by 'human' (the user must do it) — the default for auth.User / auth.Group (secreview-3 M3)
   agents: boolean | 'confirm' = true
+  // dashboard + changelist charts (charts.ts): null = the automatic ones from the fields, false = none, or your own list
+  charts: ChartSpec[] | false | null = null
 
   // Django get_object: undefined = not found (or outside getQueryset)
   async getObject(ctx: Ctx, pk: string | number): Promise<T | undefined> {

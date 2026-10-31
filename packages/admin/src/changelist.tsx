@@ -5,6 +5,7 @@ import { safeHref } from '@tvine/weft/forms'
 import { href, listParams, queryOf, toggleSort, urlFor } from './routes.js'
 import type { ActionMeta, ActionResult, DeletePreview, Display, Facet, FilterMeta, ListResult, ModelMeta, Row } from './types.js'
 import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
+import { ChartStrip } from './dashboard.js'
 import { DeleteTree } from './pages.js'
 
 // A list cell as Django shows it: choice labels (get_FOO_display), money with its currency, local dates.
@@ -64,6 +65,7 @@ export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: List
           {modelUrls.map((u) => <a key={u.name} href={urlFor(base, meta.key, u.path, {})} agentId={`url-${u.name}`} onClick={(e) => { e.preventDefault(); navigate(urlFor(base, meta.key, u.path, {})) }} className="tva-btn">{u.title}</a>)}
           {meta.perms.add && <a href={href(base, { name: 'add', model: meta.key })} agentId="add" onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'add', model: meta.key })) }} className="tva-btn tva-btn-primary"><Icon name="plus" />Add {meta.name}</a>}
         </div>
+        <ChartStrip model={meta.key} filters={p.filters} />
 
         <div className="flex gap-5">
           <div className="min-w-0 flex-1">

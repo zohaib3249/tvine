@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ChannelLayer, Event, Settings } from '../core/types.js'
+import type { ChannelLayer, Event, Session, Settings } from '../core/types.js'
 import type { SessionStore } from '../core/session.js'
 import { clientIp, isLocalRequest } from '../core/request.js'
 import { ev } from '../core/events.js'
@@ -22,7 +22,12 @@ export interface ChannelDeps {
   clock?: Clock
   watchInspector?: () => () => void   // called per open inspector stream; returns its release (the feed refcount)
   tabs?: TabHub                       // transport/tab: `?tab=` cookie streams become controllable tabs
+  // tvine.admin's live groups (`?group=admin:live|admin:logs`): may this cookie session's user join? (server.ts)
+  // ip = the client's address (request.ip rules); re-asked every ADMIN_RECHECK_MS while the stream is open
+  groupAllowed?: (group: string, session: Session, ip: string) => Promise<boolean>
 }
+const ADMIN_GROUPS = new Set(['admin:live', 'admin:logs'])
+const ADMIN_RECHECK_MS = 10_000
 
 
 // The inspector rule (dev surfaces only): socket loopback (never X-Forwarded-For), no proxy header (a local reverse
@@ -71,6 +76,12 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
     const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && cookieSession
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
+    const wanted = url.searchParams.get('group')
+    const adminGroup = wanted !== null && ADMIN_GROUPS.has(wanted) ? wanted : undefined
+    // an admin group: cookie sessions only (the panel), and only for a user the gate lets in
+    const realIp = clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy)
+    const allowed = async (s: Session | undefined) => { try { return !!s && !!deps.groupAllowed && await deps.groupAllowed(adminGroup!, s, realIp) } catch { return false } }
+    if (adminGroup && !(cookieSession && await allowed(session))) return json(403, ev.err('domain', 'forbidden'))
     const sid = session?.sid ?? ''
     // I3: a stream authenticated by the httpOnly cookie never carries the sid (page script, XSS included, must
     // not learn it); an agent's sid-keyed stream already knows its own sid.
@@ -79,7 +90,7 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
 
     if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) { metrics.inc('tvine_ratelimit_hits_total', { scope: 'sse' }); return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid) }   // I3: never the cookie session's sid
 
-    const group = channels.group(inspector ? 'inspector' : `sid:${sid}`)
+    const group = channels.group(inspector ? 'inspector' : adminGroup ?? `sid:${sid}`)
     req.socket.setTimeout(0) // SSE is exempt from request timeouts
     req.socket.setKeepAlive(true, 30_000) // reap half-open sockets
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
@@ -91,6 +102,8 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
       : e.kind === 'snapshot' ? { ...e, snapshot: { ...e.snapshot, sid: '' } }
       : e.kind === 'err' && e.snapshot ? { ...e, snapshot: { ...e.snapshot, sid: '' } } : e
     const frame = (ev0: Event, id?: number) => {
+      // admin groups carry their own small payloads (contrib/admin/hooks.ts): `event: admin`, the payload as JSON
+      if (adminGroup) { if (ev0.kind === 'patch') res.write(`${id !== undefined ? `id: ${id}\n` : ''}event: admin\ndata: ${JSON.stringify(ev0.changes)}\n\n`); return }
       const e = hide(ev0)
       res.write(`${id !== undefined ? `id: ${id}\n` : ''}event: ${e.kind}\ndata: ${render([e], 'json', settings, { ctx: ctx() }).replace(/\n/g, '')}\n\n`)
       if (res.writableLength > MAX_BUF) close()
@@ -141,6 +154,13 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     for (const r of queued) live(r.e, r.seq)
     if (inspector && deps.watchInspector && !closed) release = deps.watchInspector()
 
+    // an admin group re-checks its user (staff / superuser, allowIps, 2FA, idle) and ends when it no longer passes
+    let recheck: unknown
+    if (adminGroup) recheck = clock.setInterval(() => {
+      void lookup(sessions.peek).then(async (s) => { if (!closed && !(await allowed(s))) close(true) }, () => { /* store hiccup: next round */ })
+    }, ADMIN_RECHECK_MS)
+    const untimer = unsub
+    unsub = () => { untimer(); if (recheck !== undefined) clock.clearInterval(recheck) }
     timer = clock.setInterval(() => {
       if (closed) return
       // Expiry doesn't notify subscribers (core-session): poll here and end the stream.

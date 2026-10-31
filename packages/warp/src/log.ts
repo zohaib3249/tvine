@@ -14,6 +14,8 @@ export type LogHandler =
   // rotating file: past maxBytes (or at the first write of a new day with `daily`) the file moves to .1, .2 … keep
   | { type: 'file'; path: string; level?: Level; format?: LogFormat; maxBytes?: number; daily?: boolean; keep?: number }
   | { type: 'custom'; level?: Level; write: (r: LogRecord) => void }
+  // in-memory ring (tvine.admin's live log tail): the last `size` records (default 2000), already redacted like every record
+  | { type: 'memory'; level?: Level; size?: number }
 export interface LoggingConfig {
   level: Level
   format: LogFormat
@@ -111,12 +113,37 @@ function emit(name: string, level: Level, msg: string, fields: Record<string, un
     if (h.level && RANK[level] < RANK[h.level]) continue
     try {
       if (h.type === 'custom') h.write(r)
+      else if (h.type === 'memory') ring.push(r, h.size)
       else if (h.type === 'file') writeFile(h, render(r, h.format ?? cfg.format), s.files)
       else if (h.stream === 'stdout') console.log(render(r, h.format ?? cfg.format))
       else if (h.stream === 'stderr') console.error(render(r, h.format ?? cfg.format))
       else console[level](render(r, h.format ?? cfg.format))   // default: console.debug/info/warn/error
     } catch { /* a broken handler never breaks the caller */ }
   }
+}
+
+// the memory handler's ring: one per process (globalThis), with listeners for a live tail
+export interface MemoryRecord extends LogRecord { seq: number }
+const RING_KEY = Symbol.for('tvine.logRing')
+const ring = ((globalThis as { [RING_KEY]?: MemoryRing })[RING_KEY] ??= new (class MemoryRing {
+  buf: MemoryRecord[] = []
+  seq = 0
+  subs = new Set<(r: MemoryRecord) => void>()
+  push(r: LogRecord, size = 2000): void {
+    const m = { ...r, seq: ++this.seq } as MemoryRecord
+    this.buf.push(m)
+    if (this.buf.length > Math.max(1, size)) this.buf.splice(0, this.buf.length - size)
+    for (const f of [...this.subs]) { try { f(m) } catch { /* a listener never breaks logging */ } }
+  }
+})())
+type MemoryRing = { buf: MemoryRecord[]; seq: number; subs: Set<(r: MemoryRecord) => void>; push(r: LogRecord, size?: number): void }
+export const memoryLog = {
+  records: (): readonly MemoryRecord[] => ring.buf,
+  subscribe: (fn: (r: MemoryRecord) => void): (() => void) => { ring.subs.add(fn); return () => { ring.subs.delete(fn) } },
+  enabled: (): boolean => state().cfg.handlers.some((h) => h.type === 'memory'),
+  capacity: (): number => (state().cfg.handlers.find((h) => h.type === 'memory') as { size?: number } | undefined)?.size ?? 2000,
+  // tvine.admin: add the ring when logging is on and none is configured (logging 'none' stays off)
+  ensure(): void { const c = state().cfg; if (c.handlers.length && !c.handlers.some((h) => h.type === 'memory')) c.handlers.push({ type: 'memory' }) },
 }
 
 export function getLogger(name: string, bound: Record<string, unknown> = {}): Logger {

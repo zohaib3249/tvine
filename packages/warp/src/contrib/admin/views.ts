@@ -181,8 +181,8 @@ const fieldErrors = (errors: Record<string, string>, prefix = ''): DomainError =
 }
 
 // ---- changelist ---------------------------------------------------------------------------------------
-type Spec = { name: string; label: string; kind: 'choice' | 'boolean' | 'date' | 'related' | 'custom'; cls?: ListFilterClass; field?: string }
-function filterSpecs(a: ModelAdmin): Spec[] {
+export type Spec = { name: string; label: string; kind: 'choice' | 'boolean' | 'date' | 'related' | 'custom'; cls?: ListFilterClass; field?: string }
+export function filterSpecs(a: ModelAdmin): Spec[] {
   return a.listFilter.map((f): Spec => {
     if (isFilterClass(f)) { const i = new f(); return { name: i.parameterName, label: i.title || labelOf(i.parameterName), kind: 'custom', cls: f } }
     const k = a.model.fields[f]!.kind
@@ -190,7 +190,7 @@ function filterSpecs(a: ModelAdmin): Spec[] {
   })
 }
 const DATE_CHOICES: [string, string][] = [['today', 'Today'], ['past7', 'Past 7 days'], ['month', 'This month'], ['year', 'This year']]
-async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, string][]> {
+export async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, string][]> {
   if (s.cls) return (await new s.cls().lookups(ctx, a)).map(([v, l]) => [String(v), String(l)])
   const f = a.model.fields[s.field!]!
   const nulls: [string, string][] = f.opts.optional ? [['null', s.kind === 'date' ? 'No date' : 'Unknown']] : []
@@ -294,7 +294,7 @@ function columns(a: ModelAdmin): Col[] {
   })
 }
 
-async function changelistQs(a: ModelAdmin, ctx: Ctx, p: ListParams, skip?: string): Promise<QuerySet<any>> {
+export async function changelistQs(a: ModelAdmin, ctx: Ctx, p: ListParams, skip?: string): Promise<QuerySet<any>> {
   let qs = applySearch(a, scoped(a, ctx), p.q ?? '')
   const specs = filterSpecs(a)
   const filters = p.filters ?? {}
@@ -479,7 +479,7 @@ export const siteAction = defineAction('site', z.object({}), async (_p, ctx) => 
   const may = async (p?: string) => !p || !!u.isSuperuser || (!!u.hasPerm && (await u.hasPerm(p)))
   const pages = [], widgets = []
   for (const p of site.pages) if (await may(p.permission)) pages.push(p)
-  for (const w of site.widgets) if (await may(w.permission)) widgets.push({ id: w.id, title: w.title, size: w.size, data: w.data.id, ...(w.component && { component: w.component }) })
+  for (const w of site.widgets) if (await may(w.permission)) widgets.push({ id: w.id, title: w.title, size: w.size, ...(w.data && { data: typeof w.data === 'function' ? { id: 'admin.widget', params: { id: w.id } } : w.data.id }), ...(w.type && { type: w.type }), ...(w.component && { component: w.component }) })
   const s = ctx.settings.admin
   return {
     header: site.siteHeader, title: s.title ?? site.siteTitle, indexTitle: site.indexTitle, siteUrl: site.siteUrl, path: s.path, theme: s.theme,
@@ -786,3 +786,8 @@ export const prefs = defineAction('prefs', z.object({ key: z.string().regex(/^[\
   }
   return Object.fromEntries((await mine.all(PREF_KEYS)).map((r) => [r.key, r.value]))
 }, staff)
+
+// dashboard + system pages (charts.ts, dashboard.ts, system.ts): registered here so discovery finds them as admin.*
+export { chart, charts } from './charts.js'
+export * from './system.js'
+export { dashboard, widget } from './dashboard.js'

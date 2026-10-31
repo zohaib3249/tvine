@@ -2,13 +2,15 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api as browserApi } from '@tvine/weft/api'
 import { Dialog, Drawer, Menu, Toaster, toast } from '@tvine/weft/widgets'
-import { caller, keyOf, loadRoute, type Call, type RouteData } from './data.js'
+import { caller, keyOf, loadRoute, loadSite, type Call, type RouteData } from './data.js'
 import { href, parse, type Query, type Route } from './routes.js'
 import type { ModelMeta, Site, User } from './types.js'
 import { AdminCtx, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
 import { Changelist } from './changelist.js'
 import { ChangeForm } from './form.js'
-import { AppIndex, Dashboard, DeleteView, HistoryView, Login, PasswordChange } from './pages.js'
+import { AppIndex, DeleteView, HistoryView, Login, PasswordChange } from './pages.js'
+import { Dashboard } from './dashboard.js'
+import { SystemView, systemPagesFor } from './system.js'
 
 export type AdminAppProps = {
   base?: string; site?: Site; user?: User | null; segments: string[]; query: Query
@@ -22,6 +24,22 @@ export function AdminApp(p: AdminAppProps) {
   const call = useMemo<Call>(() => caller(p.api ?? browserApi), [p.api])
   const base = (p.base ?? '/admin').replace(/\/$/, '')
   const [site, setSite] = useState(p.site)
+  const [siteError, setSiteError] = useState(p.error)
+  const tries = useRef(0)
+  const [user, setUser] = useState(p.user ?? null)
+  useEffect(() => {
+    if (site || !retryable(siteError)) return
+    const wait = Math.min(30_000, Math.max((siteError as { retryAfterMs?: number }).retryAfterMs ?? 0, 2000 * 2 ** tries.current++)) + 250   // back-off
+    toast({ title: 'The server is busy', description: `Retrying in ${Math.ceil(wait / 1000)} s…` })
+    const t = setTimeout(() => { void loadSite(call).then((r) => { if (r.site) { setSite(r.site); setUser(r.user ?? null) } setSiteError(r.error) }) }, wait)
+    return () => clearTimeout(t)
+  }, [site, siteError, call])
+  // auth.me can fail on its own (a rate limit) while admin.site answered: retry once
+  useEffect(() => {
+    if (!site || user) return
+    const t = setTimeout(() => void call('auth.me').then((r) => { if (r.ok && r.data) setUser(r.data as User) }), 2000)
+    return () => clearTimeout(t)
+  }, [site])   // eslint-disable-line react-hooks/exhaustive-deps
   const [loc, setLoc] = useState({ segments: p.segments, query: p.query })
   const [data, setData] = useState<RouteData | undefined>(p.initial)
   const [tick, setTick] = useState(0)
@@ -80,7 +98,7 @@ export function AdminApp(p: AdminAppProps) {
   }, [p.user?.id])
 
   const ctx: Ctx = {
-    call, site: site!, user: p.user ?? null, base, route, query: loc.query, navigate, prefs,
+    call, site: site!, user, base, route, query: loc.query, navigate, prefs,
     setQuery: (q, o) => navigate(href(base, route, q), o),
     setDirty: (d) => { dirty.current = d },
     refresh: () => setTick((t) => t + 1),
@@ -102,7 +120,9 @@ export function AdminApp(p: AdminAppProps) {
   const root = (body: ReactNode) => <div className={cx('tva', slotClass('shell'))} data-theme={theme} style={style}>{body}<Toaster name="toasts" label="Notifications" /></div>
 
   if (!site) {
-    return root(<Login error={p.error} user={p.user ?? null} call={call} onDone={() => location.reload()} />)
+    // Login only when the API says who you are is the problem; a rate limit or an outage retries with back-off
+    if (retryable(siteError)) return root(<Retrying error={siteError!} />)
+    return root(<Login error={siteError} user={user ?? null} call={call} onDone={() => location.reload()} />)
   }
 
   return (
@@ -120,7 +140,7 @@ export function AdminApp(p: AdminAppProps) {
             <main id="tva-main" className={cx('min-h-0 flex-1 overflow-auto', slotClass('main'))}>
               <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
                 <Crumbs meta={data?.meta} obj={data?.obj?.display} />
-                <View route={route} data={data?.key === keyOf(route, loc.query) ? data : undefined} />
+                <div key={JSON.stringify(route)} className="tva-page-enter"><View route={route} data={data?.key === keyOf(route, loc.query) ? data : undefined} /></div>
               </div>
             </main>
           </div>
@@ -151,15 +171,16 @@ function Brand() {
 }
 
 export function Nav({ id, onPick }: { id: string; onPick?: () => void }) {
-  const { site, base, route, navigate } = useAdmin()
+  const { site, base, route, navigate, user } = useAdmin()
   const [q, setQ] = useState('')
-  const cur = 'model' in route ? route.model : route.name === 'page' ? `page:${route.path}` : route.name === 'app' ? `app:${route.app}` : 'home'
+  const match = (s: string) => s.toLowerCase().includes(q.toLowerCase())
+  const cur = 'model' in route ? route.model : route.name === 'page' ? `page:${route.path}` : route.name === 'app' ? `app:${route.app}` : route.name === 'system' ? `system:${route.page}` : 'home'
+  const sys = systemPagesFor(user).filter((x) => match(x.title))
   const link = (to: string, label: string, agentId: string, active: boolean, icon: string) => (
     <a href={to} agentId={agentId} aria-current={active ? 'page' : undefined} className="tva-nav-link" onClick={(e) => { e.preventDefault(); onPick?.(); navigate(to) }}>
       <Icon name={icon} /><span className="truncate">{label}</span>
     </a>
   )
-  const match = (s: string) => s.toLowerCase().includes(q.toLowerCase())
   const sections = new Map<string, NonNullable<Site['pages']>>()
   for (const pg of site.pages ?? []) sections.set(pg.section ?? 'Pages', [...(sections.get(pg.section ?? 'Pages') ?? []), pg])
   return (
@@ -183,6 +204,12 @@ export function Nav({ id, onPick }: { id: string; onPick?: () => void }) {
           {pages.filter((pg) => match(pg.title)).map((pg) => <div key={pg.path}>{link(href(base, { name: 'page', path: pg.path }), pg.title, `page-${pg.path.replace(/\W+/g, '-').replace(/^-|-$/g, '')}`, cur === `page:${pg.path}`, pg.icon ?? 'file')}</div>)}
         </div>
       ))}
+      {sys.length > 0 && (
+        <div>
+          <p className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted">System</p>
+          {sys.map((x) => <div key={x.page}>{link(href(base, { name: 'system', page: x.page }), x.title, `system-${x.page}`, cur === `system:${x.page}`, x.icon)}</div>)}
+        </div>
+      )}
     </Region>
   )
 }
@@ -235,6 +262,7 @@ function Crumbs({ meta, obj }: { meta?: ModelMeta; obj?: string }) {
     if (route.name === 'url') items.push([meta?.urls?.find((u) => u.name === route.url)?.title ?? route.url])
   } else if (route.name === 'app') items.push([site.apps.find((a) => a.label === route.app)?.name ?? route.app])
   else if (route.name === 'page') items.push([site.pages?.find((pg) => pg.path === route.path)?.title ?? route.path])
+  else if (route.name === 'system') items.push(['System'], [route.page.charAt(0).toUpperCase() + route.page.slice(1)])
   return (
     <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap items-center gap-1 text-[13px] text-muted">
       {items.map(([label, to], i) => (
@@ -271,6 +299,7 @@ function View({ route, data }: { route: Route; data?: RouteData }) {
   }
   if (route.name === 'notFound') return <Empty title="Page not found" icon="search">This admin page does not exist.</Empty>
   if (route.name === 'index') return <Dashboard data={data} />
+  if (route.name === 'system') return <SystemView page={route.page} />
   if (route.name === 'app') return <AppIndex app={route.app} />
   if (!data) return <div className="tva-card"><Skeleton rows={8} /></div>
   if (!data.meta) return data.error ? <ErrorBox error={data.error} /> : <Skeleton />
@@ -289,7 +318,7 @@ function View({ route, data }: { route: Route; data?: RouteData }) {
 // ---- ⌘K command palette -------------------------------------------------------------------------------------------
 type Cmd = { id: string; label: string; hint: string; icon: string; run(): void }
 function Palette({ onTheme }: { onTheme(): void }) {
-  const { site, base, navigate, prefs, call } = useAdmin()
+  const { site, base, navigate, prefs, call, user } = useAdmin()
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
   const [hi, setHi] = useState(0)
@@ -307,6 +336,7 @@ function Palette({ onTheme }: { onTheme(): void }) {
       if (m.perms.add) out.push({ id: `add:${m.key}`, label: `Add ${m.name}`, hint: 'Action', icon: 'plus', run: go(href(base, { name: 'add', model: m.key })) })
     }
     for (const pg of site.pages ?? []) out.push({ id: `page:${pg.path}`, label: pg.title, hint: pg.section ?? 'Page', icon: pg.icon ?? 'file', run: go(href(base, { name: 'page', path: pg.path })) })
+    for (const x of systemPagesFor(user)) out.push({ id: `system:${x.page}`, label: x.title, hint: 'System', icon: x.icon, run: go(href(base, { name: 'system', page: x.page })) })
     for (const r of prefs.get<{ model: string; pk: string; display: string }[]>('recent', [])) {
       out.push({ id: `recent:${r.model}:${r.pk}`, label: r.display, hint: `Recent · ${r.model}`, icon: 'clock', run: go(href(base, { name: 'change', model: r.model, pk: r.pk })) })
     }
@@ -370,3 +400,16 @@ function Shortcuts() {
 }
 
 export { toast }
+
+// a failure worth retrying (never a Login screen): rate limits, a network error, a server error
+export const retryable = (e?: { code: string; reason?: string }) => !!e && (e.code === 'rate_limited' || e.code === 'internal' || e.reason === 'network')
+function Retrying({ error }: { error: { code: string; message: string } }) {
+  return (
+    <div role="status" className="grid h-full place-items-center p-6">
+      <div className="tva-card max-w-sm p-6 text-center">
+        <p className="font-semibold">{error.code === 'rate_limited' ? 'Too many requests right now' : 'The server did not answer'}</p>
+        <p className="mt-1 text-muted">Trying again automatically…</p>
+      </div>
+    </div>
+  )
+}

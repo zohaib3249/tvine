@@ -295,7 +295,12 @@ export interface Settings {
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
   // allowIps: addresses / CIDRs that may use the admin (panel + actions); require2fa: staff need TOTP; idleMs: staff idle timeout
-  admin: { path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }; allowIps?: string[]; require2fa?: boolean; idleMs?: number }
+  admin: {
+    path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }; allowIps?: string[]; require2fa?: boolean; idleMs?: number
+    // dashboard: widget ids in display order (others follow) + the automatic per-model charts; stats: the hourly rollups
+    dashboard: { widgets: string[]; autoCharts: boolean }
+    stats: { enabled: boolean; retentionDays: number; flushMs: number }
+  }
   // BACKLOG #9: Prometheus text at `path`, off by default. Guard: a bearer `token`, or the client ip in `allowIps`;
   // neither set = loopback only. Never listed in agent discovery.
   metrics: { enabled: boolean; path: string; token?: string; allowIps: string[] }

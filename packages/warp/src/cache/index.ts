@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import type { ActionCtx, ActionDef, CacheSettings, Settings } from '../core/types.js'
 import { getRedis, redisKey } from '../redis/index.js'
 import { CACHE_DEFAULTS } from '../settings.js'
-import { metrics } from '../core/metrics.js'
+import { metrics, statTap, stats } from '../core/metrics.js'
 
 type Timeout = number | null | undefined
 
@@ -211,6 +211,7 @@ export class Cache {
   private async unpack(s: string | undefined): Promise<{ hit: boolean; v?: unknown }> {
     const r = await this.unpacked(s)
     metrics.inc(r.hit ? 'tvine_cache_hits_total' : 'tvine_cache_misses_total', { cache: this.alias })
+    if (stats.tap) statTap({ k: 'cache', alias: this.alias, hit: r.hit })
     return r
   }
   private async unpacked(s: string | undefined): Promise<{ hit: boolean; v?: unknown }> {
