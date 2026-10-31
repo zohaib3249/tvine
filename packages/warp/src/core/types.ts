@@ -263,7 +263,7 @@ export interface Settings {
   allowedHosts: string[]            // Django ALLOWED_HOSTS ('*', '.example.com'); required in production
   debug: boolean                    // Django DEBUG: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
-  media: { dir: string; route: string }
+  media: { dir: string; route: string; auditAccess?: boolean }   // auditAccess: an audit row per private-file read
   snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {

@@ -68,11 +68,12 @@ const security = getLogger('tvine.security')
 export function securityEvent(event: string, fields: Record<string, unknown>, o: { settings?: Settings; request?: Request; sid?: string; level?: 'info' | 'warn'; audit?: boolean } = {}): void {
   const r = o.request
   const f = { event, ...(r && { ip: r.ip, requestId: r.id, path: r.path, userId: r.user.isAuthenticated ? r.user.id ?? null : null, via: viaOf(r) }), ...(o.sid && { sidHash: sidHash(o.sid) }), ...fields }
-  security[o.level ?? (event === 'login_ok' ? 'info' : 'warn')](event, f)
+  const level = o.level ?? (event === 'login_ok' ? 'info' : 'warn')
+  security[level](event, f)
   if (o.audit === false || !o.settings?.audit.enabled || !slot.write) return
   const row: AuditRow = {
     userId: f.userId == null ? null : String(f.userId), via: r ? viaOf(r) : 'human', agent: r?.agent.is ? (r.agent.client ?? null) : null,
-    agentVerified: !!r?.agent.verified, action: `security.${event}`, outcome: event === 'login_ok' ? 'ok' : 'error', code: event,
+    agentVerified: !!r?.agent.verified, action: `security.${event}`, outcome: level === 'info' ? 'ok' : 'error', code: event,
     params: redactParams(o.settings, fields), ip: String(f.ip ?? ''), sidHash: sidHash(o.sid), ms: 0, requestId: String(f.requestId ?? ''), cmdId: null,
   }
   void outsideAtomic(() => writeAudit(row)).catch((e: unknown) => security.error('audit write failed', { event, error: String(e) }))

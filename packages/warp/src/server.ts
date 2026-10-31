@@ -238,7 +238,6 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
   const channel = channelTransport({ sessions: ctx.sessions, channels: ctx.channels, settings, isDev, watchInspector: feed?.watch, tabs })
   const mcp = mcpHandler(ctx, { route, tabs })
-  const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route)
   const fail = (res: ServerResponse) => (e: unknown) => {
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
@@ -247,15 +246,16 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const sec = securityHeaders(settings, { isDev })
   const cors = corsLayer(settings)
   // settings.middleware (Django MIDDLEWARE): only the listed ones run, around every request, outermost first
-  const mws: HttpMiddleware[] = buildMiddleware(settings.middleware, { settings, debug: isDev, production: isProduction(), sec, cors,
-    userOf: async (req) => {
-      const cookie = String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
-      const session = cookie === undefined ? undefined : await ctx.sessions.peek({ cookie })
-      if (!session) return undefined
-      const request = await buildRequest({ req, route: pathOf(req), isAgent: false }, settings)
-      await authenticate(settings, request, session)
-      return request.user
-    } })
+  const userOf = async (req: IncomingMessage) => {
+    const cookie = String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
+    const session = cookie === undefined ? undefined : await ctx.sessions.peek({ cookie })
+    if (!session) return undefined
+    const request = await buildRequest({ req, route: pathOf(req), isAgent: false }, settings)
+    await authenticate(settings, request, session)
+    return request.user
+  }
+  const media = mediaHandler(new DiskStorage(settings.media.dir, settings.media.route), settings.media.route, { userOf, settings })
+  const mws: HttpMiddleware[] = buildMiddleware(settings.middleware, { settings, debug: isDev, production: isProduction(), sec, cors, userOf })
   ctx.middleware = mws
   const reqLog = getLogger('tvine.request')
   const chain: Handler[] = [

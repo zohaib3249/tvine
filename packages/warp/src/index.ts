@@ -22,7 +22,7 @@ export type {
   Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
-export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
+export { defineUpload, DiskStorage, media, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
 export { allowAny, denyAgents, deniesAgents, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf } from './security/permissions.js'
 export { authenticate, authBackend, cycleSession, setAuthBackend, type AuthBackend } from './core/auth.js'
 export {

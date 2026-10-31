@@ -145,7 +145,7 @@ const schema: z.ZodType<Settings> = z.object({
   allowedHosts: z.array(z.string().regex(/^(\*|\.?[a-z0-9.-]+|\[[0-9a-f:.]+\])$/i, "a host name, '.example.com' (with subdomains), an [ipv6] or '*'")),
   debug: z.boolean(),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
-  media: z.object({ dir: z.string(), route: z.string() }),
+  media: z.object({ dir: z.string(), route: z.string(), auditAccess: z.boolean().optional() }),
   snapshotCache: z.object({ ttlMs: posInt, backend, redis: alias }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
