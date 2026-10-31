@@ -28,7 +28,8 @@ export const modelRegistry = (): Model<any, any>[] => [...registry.values()]   /
 
 export function defineModel<const F extends Fields>(name: string, fields: F, meta: ModelMeta = {}): Model<F> {
   const def = { name, fields, meta }
-  pkField(def)
+  const [pkName, pkF] = pkField(def)
+  for (const [n, f] of Object.entries(fields)) (f as { bind?: (m: string, n: string, pk: { name: string; kind: string }) => void }).bind?.(name, n, { name: pkF.columns(pkName)[0]!, kind: pkF.kind })
   checkMeta(name, fields, meta)
   for (const [n, f] of Object.entries(fields)) if (f.kind === 'money' && f.opts.searchable) throw new Error(`${name}.${n}: a money field cannot be searchable`)
   const schema = rowSchema(def)

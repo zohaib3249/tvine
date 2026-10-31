@@ -29,7 +29,7 @@ export class Table {
     return this.entries.flatMap(([n, f]) => {
       const k = f.key(n)
       if (!(k in data) || data[k] === undefined) return []
-      const vals = named(this.name, n, () => f.toDb(data[k], d))
+      const vals = named(this.name, n, () => (f.toDb as RowToDb)(data[k], d, { pk: data[pkKey(this)] }))
       return f.columns(n).map((c, i): [string, unknown] => [c, vals[i]])
     })
   }
@@ -67,7 +67,7 @@ export class Table {
         if (!(k in r)) throw new DomainError('invalid_param', `bulkUpdate: a ${this.name} row has no ${k}`, field)
         const ok = f.schema().safeParse(r[k])
         if (!ok.success) throw new DomainError('invalid_param', `${this.name}.${field}: ${ok.error.issues[0].message}`, field)
-        return named(this.name, field, () => f.toDb(ok.data, d))
+        return named(this.name, field, () => (f.toDb as RowToDb)(ok.data, d, { pk: r[pf.key(pk)] }))
       })
       f.columns(field).forEach((c, ci) => {
         const v = (x: unknown): Expr => (d.name === 'postgres' ? { t: 'cast', e: param(x), to: { db: types[ci] } } : param(x))
@@ -110,7 +110,7 @@ export class Table {
       }
       const r = f.schema().safeParse(v)
       if (!r.success) throw new DomainError('invalid_param', `${this.name}.${field}: ${r.error.issues[0].message}`, field)
-      const vals = named(this.name, field, () => f.toDb(r.data, d))
+      const vals = named(this.name, field, () => (f.toDb as RowToDb)(r.data, d, { pk: onePk(this, ws, q) }))
       f.columns(field).forEach((cn, i) => set.push([cn, param(vals[i])]))
     }
     if (!set.length) return undefined
@@ -136,6 +136,15 @@ export class Table {
 }
 
 // a field's own value error (a datetime out of the db's range) names the model field
+// encrypted fields with bindRow bind the row's pk: known from the row (insert, bulkUpdate) or a where of exactly `pk = x`
+type RowToDb = (v: unknown, d: Dialect, row: { pk?: unknown }) => unknown[]
+const pkKey = (t: Table) => { const [n, f] = pkField(t); return f.key(n) }
+function onePk(t: Table, ws: Where[], q?: QNode[]): unknown {
+  if (q?.length || ws.length !== 1) return undefined
+  const w = ws[0]!, [n, f] = pkField(t)
+  return w.op === 'eq' && (w.field === n || w.field === f.key(n)) ? w.value : undefined
+}
+
 function named<R>(model: string, field: string, fn: () => R): R {
   try { return fn() } catch (e) {
     if (e instanceof DomainError && e.code === 'invalid_param' && !e.field) throw new DomainError(e.code, `${model}.${field}: ${e.message}`, field)
