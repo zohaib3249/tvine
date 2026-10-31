@@ -10,7 +10,7 @@ export type Call = (id: string, params?: unknown) => Promise<ApiResult<any>>
 // between users). Any call that is not a read may change perms or filter choices, so it drops the cache; a schema change
 // means a server restart, which the next page load picks up.
 const READS = new Set(['admin.site', 'admin.list', 'admin.get', 'admin.deletePreview', 'admin.history', 'admin.autocomplete', 'admin.search', 'admin.recent', 'auth.me', 'admin.dashboard', 'admin.chart', 'admin.charts', 'admin.widget', 'admin.prefs',
-  'admin.system.health', 'admin.system.logs', 'admin.system.agents', 'admin.system.metrics', 'admin.system.jobs', 'admin.system.security', 'admin.system.traffic', 'admin.system.queries'])
+  'admin.system.health', 'admin.system.logs', 'admin.system.agents', 'admin.system.metrics', 'admin.system.jobs', 'admin.system.security', 'admin.system.traffic', 'admin.system.queries', 'admin.system.search', 'admin.system.pages'])
 export const caller = (api: unknown): Call => {
   const metas = new Map<string, Promise<ApiResult<any>>>()
   return (id, params) => {

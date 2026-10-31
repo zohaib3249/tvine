@@ -3,7 +3,7 @@
 // changelist chart strip (admin.charts / admin.chart for one model, following the list's filters).
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { CustomComponent } from './app.js'
-import { ChartCard, ChartSkeleton, ChartTable, Stat, isChartData, statOf, type ChartData, type ChartType } from './charts.js'
+import { ChartCard, ChartSkeleton, ChartTable, DataTable, Stat, tableState, type StatTable, isChartData, statOf, type ChartData, type ChartType } from './charts.js'
 import { DEFAULT_RANGE, loadDashboard, loadWidgets, type DashboardData, type DashWidget, type Layout, type Range, type RouteData, type Size } from './data.js'
 export { DEFAULT_RANGE, loadDashboard, loadWidgets, type DashboardData, type DashWidget, type Layout, type Range, type Size }
 import { LivePill, useLive } from './live.js'
@@ -162,7 +162,7 @@ function WidgetCard({ w, v, loading, edit }: { w: DashWidget; v: unknown; loadin
   }
   const s = w.type === 'stat' ? statOf(v) : undefined
   return (
-    <Region id={`widget:${w.id}`} label={w.title} state={s ? { value: s.value, previous: s.previous ?? null } : { loading: v === undefined }} className="tva-card tva-lift flex h-full min-w-0 flex-col p-4">
+    <Region id={`widget:${w.id}`} label={w.title} state={s ? { value: s.value, previous: s.previous ?? null } : tableOf(v) ? tableState(tableOf(v)) : { loading: v === undefined }} className="tva-card tva-lift flex h-full min-w-0 flex-col p-4">
       <div className="mb-2 flex items-start gap-2"><h2 className="flex-1 truncate text-[13px] font-semibold text-muted">{w.title}</h2>{edit}</div>
       <div className={cx('min-h-0 flex-1 transition-opacity', loading && v !== undefined && 'opacity-60')}>
         {err ? <p role="alert" className="text-sm text-danger">{err}</p>
@@ -170,21 +170,17 @@ function WidgetCard({ w, v, loading, edit }: { w: DashWidget; v: unknown; loadin
           : v === undefined ? <ChartSkeleton type="stat" />
           : s ? <Stat s={s} label={w.title} />
           : w.type === 'activity' ? <Activity rows={(Array.isArray(v) ? v : []) as Recent[]} />
-          : w.type === 'table' && v && typeof v === 'object' && 'columns' in v ? <PlainTable t={v as { columns: string[]; rows: (string | number)[][] }} />
+          : w.type === 'table' && v && typeof v === 'object' && 'columns' in v ? <PlainTable t={v as StatTable} />
           : chart ? <ChartTable d={chart} /> : <WidgetData v={v} />}
       </div>
     </Region>
   )
 }
 
-function PlainTable({ t }: { t: { columns: string[]; rows: (string | number)[][] } }) {
+const tableOf = (v: unknown) => (v && typeof v === 'object' && 'columns' in v && 'rows' in v ? v as StatTable : undefined)
+function PlainTable({ t }: { t: StatTable }) {
   if (!t.rows.length) return <p className="text-sm text-muted">Nothing yet.</p>
-  return (
-    <div className="overflow-x-auto"><table className="w-full text-[13px]">
-      <thead><tr>{t.columns.map((c) => <th key={c} className="tva-th">{c}</th>)}</tr></thead>
-      <tbody>{t.rows.map((r, i) => <tr key={i} className="tva-row">{r.map((c, j) => <td key={j} className={cx('tva-td', typeof c === 'number' && 'text-right')}>{typeof c === 'number' ? c.toLocaleString() : c}</td>)}</tr>)}</tbody>
-    </table></div>
-  )
+  return <div className="overflow-x-auto"><DataTable t={t} /></div>
 }
 
 type Recent = Pick<LogEntry, 'id' | 'actionTime' | 'actionFlag' | 'action' | 'objectRepr' | 'changeMessage'> & { model: string; pk: string }

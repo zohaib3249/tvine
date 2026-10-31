@@ -14,7 +14,7 @@ export type Route =
   | { name: 'notFound' }
 
 export type Query = Record<string, string>
-export const SYSTEM = ['health', 'traffic', 'metrics', 'agents', 'queries', 'jobs', 'logs', 'security'] as const
+export const SYSTEM = ['health', 'traffic', 'metrics', 'agents', 'search', 'pages', 'queries', 'jobs', 'logs', 'security'] as const
 export type SystemPage = (typeof SYSTEM)[number]
 type Urls = { name: string; path: string }[]
 

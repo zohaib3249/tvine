@@ -14,7 +14,7 @@ import type { QuerySet } from '../../data/queryset.js'
 import { modelNamed, referencesTo } from '../../data/registry.js'
 import { staffGuard } from './hardening.js'
 import { scoped as scopedBy } from '../../security/scope.js'
-import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
+import { DiskStorage, filePartsOf, media, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
 import { refuseHumanOnly } from '../../data/fields/inputs.js'
 import { makePassword, validatePassword } from '../auth/passwords.js'
@@ -111,6 +111,15 @@ async function withChoices(a: Base, ctx: Ctx, fields: Record<string, FieldMeta>)
 }
 
 // stored row → form values (never a hidden field, so never a password hash)
+// a file / image column (a storage key, or an absolute url) → { key, name, url }: the form shows the file's name, a
+// thumbnail and a link that opens it (a signed media.url, so private files open too; forms never send it back)
+export function fileRef(v: string, ctx: Ctx): { key: string; name: string; url?: string } {
+  if (/^https?:\/\//i.test(v)) {
+    try { const u = new URL(v); return { key: v, name: `${u.host}${u.pathname}`.slice(0, 120), url: v } } catch { return { key: v, name: v.slice(0, 120) } }
+  }
+  const name = v.split('/').pop()!, id = ctx.request.user.id
+  try { return { key: v, name, url: media.url(v, { route: ctx.settings.media.route, ...(id != null && id !== '' && { user: String(id) }) }) } } catch { return { key: v, name } }
+}
 async function valuesOf(a: Base, ctx: Ctx, obj: Row): Promise<Row> {
   const out: Row = {}
   for (const n of formFields(a)) {
@@ -119,6 +128,7 @@ async function valuesOf(a: Base, ctx: Ctx, obj: Row): Promise<Row> {
     if (f.opts.hidden) continue
     if (f.kind === 'm2m') { out[n] = (await a.model.related(n, obj.id).all().fetchAll()).map((r: Row) => r.id); continue }
     out[n] = toWire(f, obj, n)
+    if ((f.kind === 'file' || f.kind === 'image') && typeof out[n] === 'string' && out[n]) out[n] = fileRef(out[n] as string, ctx)
     if (f.kind === 'fk' && out[n] != null) {   // { pk, text }: the form's chip shows the related object's name (forms take a bare pk too)
       // ponytail: one query per fk per row; batch like relatedReprs if inlines grow large
       const t = f.target!(), rel = (await scoped(t, ctx).inBulk([out[n]]))[String(out[n])] as Row | undefined

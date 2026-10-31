@@ -231,6 +231,26 @@ export function DonutChart({ d, size = 168 }: { d: ChartData; size?: number }) {
   )
 }
 
+// ---- a stats table: optional per-row trend sparkline and first-cell link (Top searches / Most visited pages) ------------
+export type StatTable = { columns: string[]; rows: (string | number | null)[][]; trend?: number[][]; links?: (string | null)[] }
+// the table as flat region state, so agents read it in read_page: one 'a | b | c' line per row
+export const tableState = (t: StatTable | undefined, n = 25) => ({ count: t?.rows.length ?? 0, columns: t?.columns.join(' | ') ?? '', rows: (t?.rows ?? []).slice(0, n).map((r) => r.map((c) => c ?? '—').join(' | ')).join('\n') })
+export function DataTable({ t, mono = [] }: { t: StatTable; mono?: string[] }) {
+  return (
+    <table className="w-full text-[13px]">
+      <thead><tr>{t.columns.map((c) => <th key={c} className="tva-th">{c}</th>)}{t.trend && <th className="tva-th">Trend</th>}</tr></thead>
+      <tbody>{t.rows.map((r, i) => (
+        <tr key={i} className="tva-row">{r.map((c, j) => {
+          const text = c === null ? '—' : typeof c === 'number' ? c.toLocaleString(undefined, { maximumFractionDigits: 2 }) : c
+          const href = j === 0 ? t.links?.[i] : undefined
+          return <td key={j} title={typeof c === 'string' && c.length > 40 ? c : undefined} className={cx('tva-td', typeof c === 'number' && 'text-right', mono.includes(t.columns[j]!) && 'max-w-[28rem] truncate font-mono text-xs')}>
+            {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{text}</a> : text}</td>
+        })}{t.trend && <td className="tva-td py-0.5">{t.trend[i] && <Sparkline values={t.trend[i]!} width={88} height={22} label={`${r[0]} trend`} />}</td>}</tr>
+      ))}</tbody>
+    </table>
+  )
+}
+
 // ---- sparkline + stat ---------------------------------------------------------------------------------------------
 export function Sparkline({ values, width = 120, height = 32, label = 'Trend' }: { values: number[]; width?: number; height?: number; label?: string }) {
   if (values.length < 2) return null

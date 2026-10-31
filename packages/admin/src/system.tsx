@@ -3,7 +3,7 @@
 // group admin:live (logs: admin:logs). Staff see health/agents/metrics/jobs; superusers also logs/security.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from '@tvine/weft/widgets'
-import { ChartCard, Sparkline, Stat, fmtValue, type ChartData } from './charts.js'
+import { ChartCard, DataTable, Sparkline, tableState, Stat, fmtValue, type ChartData, type StatTable } from './charts.js'
 import { LivePill, useLive, useLiveData, type LiveState } from './live.js'
 import type { User } from './types.js'
 import { Empty, ErrorBox, Icon, Region, Skeleton, cx, useAdmin } from './ui.js'
@@ -13,7 +13,9 @@ export const SYSTEM_PAGES = [
   { page: 'traffic', title: 'Traffic', icon: 'chart', superuser: false },
   { page: 'metrics', title: 'Metrics', icon: 'gauge', superuser: false },
   { page: 'agents', title: 'Agents', icon: 'bot', superuser: false },
-  { page: 'queries', title: 'Queries', icon: 'table', superuser: false },
+  { page: 'search', title: 'Search', icon: 'search', superuser: false },
+  { page: 'pages', title: 'Pages', icon: 'chart', superuser: false },
+  { page: 'queries', title: 'Database queries', icon: 'table', superuser: false },
   { page: 'jobs', title: 'Jobs', icon: 'layers', superuser: false },
   { page: 'logs', title: 'Logs', icon: 'logs', superuser: true },
   { page: 'security', title: 'Logins & security', icon: 'shield', superuser: true },
@@ -53,7 +55,7 @@ export function SystemView({ page }: { page: SystemPage }) {
   return (
     <Region id={`admin:system:${page}`} label={meta.title}>
       {page === 'health' ? <Health /> : page === 'logs' ? <Logs /> : page === 'agents' ? <Agents /> : page === 'metrics' ? <Metrics />
-        : page === 'jobs' ? <Jobs /> : page === 'traffic' ? <Traffic /> : page === 'queries' ? <Queries /> : <Security />}
+        : page === 'jobs' ? <Jobs /> : page === 'traffic' ? <Traffic /> : page === 'queries' ? <Queries /> : page === 'search' ? <Search /> : page === 'pages' ? <Pages /> : <Security />}
     </Region>
   )
 }
@@ -71,23 +73,13 @@ function useRange(): [SysRange, (r: SysRange) => void] {
 function RangePicker({ value, onChange }: { value: SysRange; onChange(r: SysRange): void }) {
   return <div className="tva-seg" role="group" aria-label="Time range">{SYS_RANGES.map((r) => <button key={r} type="button" agentId={`range-${r}`} aria-pressed={value === r} onClick={() => onChange(r)}>{r}</button>)}</div>
 }
-type Table = { columns: string[]; rows: (string | number | null)[][] }
+type Table = StatTable
 // a titled table card; `mono` columns (by name) render monospace, long cells truncate with the full text on hover
 function TablePanel({ id, title, t, mono = [], empty = 'Nothing yet' }: { id: string; title: string; t?: Table; mono?: string[]; empty?: string }) {
   return (
-    <Region id={`table:${id}`} label={title} state={{ rows: t?.rows.length ?? 0 }} className="tva-card min-w-0 overflow-hidden" as="section">
+    <Region id={`table:${id}`} label={title} state={tableState(t, 50)} className="tva-card min-w-0 overflow-hidden" as="section">
       <h2 className="border-b border-line px-4 py-3 font-semibold">{title}</h2>
-      {!t?.rows.length ? <p className="px-4 py-8 text-center text-sm text-muted">{empty}</p> : (
-        <div className="max-h-96 overflow-auto"><table className="w-full text-[13px]">
-          <thead><tr>{t.columns.map((c) => <th key={c} className="tva-th">{c}</th>)}</tr></thead>
-          <tbody>{t.rows.map((r, i) => (
-            <tr key={i} className="tva-row">{r.map((c, j) => {
-              const isMono = mono.includes(t.columns[j]!), text = c === null ? '—' : typeof c === 'number' ? c.toLocaleString(undefined, { maximumFractionDigits: 2 }) : c
-              return <td key={j} title={typeof c === 'string' && c.length > 40 ? c : undefined} className={cx('tva-td', typeof c === 'number' && 'text-right', isMono && 'max-w-[28rem] truncate font-mono text-xs')}>{text}</td>
-            })}</tr>
-          ))}</tbody>
-        </table></div>
-      )}
+      {!t?.rows.length ? <p className="px-4 py-8 text-center text-sm text-muted">{empty}</p> : <div className="max-h-96 overflow-auto"><DataTable t={t} mono={mono} /></div>}
     </Region>
   )
 }
@@ -456,16 +448,73 @@ function Queries() {
   const [range, setRange] = useRange()
   const picker = <RangePicker value={range} onChange={setRange} />
   const { data, error, live } = useLiveData<Queries>(call, 'admin.system.queries', { range }, { group: 'admin:live', types: ['tick'] })
-  if (!data) return <><Header title="Queries" live={live}>{picker}</Header><Loading error={error} /></>
+  if (!data) return <><Header title="Database queries" live={live}>{picker}</Header><Loading error={error} /></>
   const mono = ['fingerprint', 'Fingerprint', 'query', 'Query', 'SQL']
   return (
     <>
-      <Header title="Queries" sub="Database statements grouped by shape (values never shown)" live={live}>{picker}</Header>
+      <Header title="Database queries" sub="Database statements grouped by shape (values never shown)" live={live}>{picker}</Header>
       {!data.enabled ? <Empty title="Query stats are off" icon="table">Turn on query statistics in settings to record statement timings.</Empty> : (
         <div className="grid grid-cols-1 gap-4">
           <TablePanel id="queries-top" title="Most time spent" t={data.top} mono={mono} />
           <TablePanel id="queries-slow" title="Slow queries" t={data.slow} mono={mono} empty="No slow queries" />
         </div>
+      )}
+    </>
+  )
+}
+
+// ---- Search (what visitors search for) + Pages (most visited) ----------------------------------------------------------
+type Search = { enabled: boolean; total: number; noResultsPct: number; minCount: number; top?: Table; noResults?: Table; activity: ChartData }
+function Search() {
+  const { call } = useAdmin()
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live, loading } = useLiveData<Search>(call, 'admin.system.search', { range }, { group: 'admin:live', types: ['tick'] })
+  if (!data) return <><Header title="Search" live={live}>{picker}</Header><Loading error={error} /></>
+  return (
+    <>
+      <Header title="Search" sub={`What visitors search for. A term shows once ${data.minCount} different visitors searched it; emails, numbers and tokens are never kept`} live={live}>{picker}</Header>
+      {!data.enabled ? <Empty title="Search stats are off" icon="search">Turn on settings.admin.stats.searches to count what visitors search for.</Empty> : (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Kpi id="search-total" label="Searches" s={{ value: data.total, unit: 'count' }} />
+            <Kpi id="search-none" label="No results" s={{ value: data.noResultsPct, unit: 'percent' }} />
+          </div>
+          <ChartCard id="search-activity" title="Searches: human vs agent" type="stacked" loading={loading} data={data.activity} />
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <TablePanel id="search-top" title="Top searches" t={data.top} empty="No searches yet" />
+            <TablePanel id="search-none" title="Searches with no results" t={data.noResults} empty="Every search found something" />
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+type Pages = { enabled: boolean; views: number; visitors: number; agentReads: number; top?: Table; entries?: Table; agentTop?: Table; activity: ChartData }
+function Pages() {
+  const { call } = useAdmin()
+  const [range, setRange] = useRange()
+  const picker = <RangePicker value={range} onChange={setRange} />
+  const { data, error, live, loading } = useLiveData<Pages>(call, 'admin.system.pages', { range }, { group: 'admin:live', types: ['tick'] })
+  if (!data) return <><Header title="Pages" live={live}>{picker}</Header><Loading error={error} /></>
+  const mono = ['Path', 'Entry page']
+  return (
+    <>
+      <Header title="Pages" sub="Most visited pages (paths without query strings; admin, media and static files are not counted)" live={live}>{picker}</Header>
+      {!data.enabled ? <Empty title="Page stats are off" icon="chart">Turn on settings.admin.stats.pages to count page views.</Empty> : (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Kpi id="pages-views" label="Page views" s={{ value: data.views, unit: 'count' }} />
+            <Kpi id="pages-visitors" label="Visitors" s={{ value: data.visitors, unit: 'count' }} />
+            <Kpi id="pages-agent" label="Agent page reads" s={{ value: data.agentReads, unit: 'count' }} />
+          </div>
+          <ChartCard id="pages-activity" title="Page views: human vs agent" type="stacked" loading={loading} data={data.activity} />
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <TablePanel id="pages-top" title="Most visited pages" t={data.top} mono={mono} empty="No page views yet" />
+            <TablePanel id="pages-entry" title="Entry pages" t={data.entries} mono={mono} empty="No entries yet" />
+            <TablePanel id="pages-agent" title="Pages agents read" t={data.agentTop} mono={mono} empty="No agent reads yet" />
+          </div>
+        </>
       )}
     </>
   )
