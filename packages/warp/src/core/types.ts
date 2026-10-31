@@ -50,7 +50,7 @@ export type Event =
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
-  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent'   // v2 live
+  | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' | 'job'   // v2 live; 'job': tvine.tasks progress
       job?: JobUpdate }                                                // tvine.tasks: a background job of this session moved
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
 

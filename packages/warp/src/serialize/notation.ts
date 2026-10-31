@@ -136,7 +136,7 @@ export function parseCommandResult(text: string): Event[] {
           events.push(e); break
         }
         case 'goto': events.push({ kind: 'goto', url: String(t[1]) }); break
-        case 'update': events.push({ kind: 'update', rev, sid, source: t[1] as 'human' | 'agent', ...(t[2] !== undefined ? { job: t[2] as JobUpdate } : {}) }); break
+        case 'update': events.push({ kind: 'update', rev, sid, source: t[1] as 'human' | 'agent' | 'job', ...(t[2] !== undefined ? { job: t[2] as JobUpdate } : {}) }); break
         default: events.push({ kind: 'patch', rev, changes: t[1] })
       }
       continue
