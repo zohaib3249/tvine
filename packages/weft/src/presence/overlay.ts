@@ -15,7 +15,6 @@ const CSS = `
   z-index:2147483647!important;
   --c:var(--tvine-agent-color,#7c3aed);--fg:var(--tvine-agent-contrast,#fff);--d:var(--tvine-agent-danger-color,#dc2626);
   font:var(--tvine-agent-font,500 12px/1.2 system-ui)}
-[hidden]{display:none!important}
 .ring{position:fixed;box-sizing:border-box;border:var(--tvine-agent-ring,2px) solid var(--c);border-radius:var(--tvine-agent-radius,6px);transition:opacity .6s}
 .label{position:fixed;padding:3px 6px;border-radius:4px;background:var(--c);color:var(--fg);white-space:nowrap;max-width:60vw;overflow:hidden;text-overflow:ellipsis}
 .danger .ring{border-color:var(--d)} .danger.label,.danger .label{background:var(--d)}
@@ -32,6 +31,7 @@ const CSS = `
 .panel button.go{background:#7c3aed;color:#fff} .panel button:focus-visible{outline:2px solid #111}
 .panel input{font:600 15px/1.2 ui-monospace,monospace!important;letter-spacing:2px;width:100%;box-sizing:border-box;margin:0 0 10px;padding:6px 8px;border:1px solid #999;border-radius:6px;color:#111;background:#fff}
 .pill button{all:unset;font:600 12px/1.2 system-ui!important;cursor:pointer;padding:4px 10px;border-radius:999px;background:#fff;color:#111;text-shadow:none;font-weight:600}
+[hidden]{display:none!important}
 `
 const CURSOR = '<svg viewBox="0 0 20 20"><path d="M2 2l6 16 2.5-6.5L17 9z"/></svg>'   // static, runtime-owned
 
@@ -110,6 +110,8 @@ export class Overlay {
   }
 
   // Re-promote to the top layer so it stays above page dialogs opened after us.
+  raise(): void { if (this.host?.isConnected) this.top() }
+
   private top(): void {
     const h = this.host as HTMLElement & { showPopover?: () => void; hidePopover?: () => void }
     if (!h.showPopover) return
@@ -204,7 +206,7 @@ export class Overlay {
     }
   }
 
-  // Cursor: glides (250 ms) to the target centre and pulses; reduced motion → appears there, no animation.
+  // Cursor: glides (400 ms) to the target centre and pulses; reduced motion → appears there, no animation.
   async point(el: Element | null, a: Act): Promise<void> {
     const o = this.opts(a)
     if (!o || o.cursor === false || !el) return
@@ -217,7 +219,8 @@ export class Overlay {
     this.last = to
     c.style.transform = `translate(${to.x}px, ${to.y}px)`
     if (this.reduced || typeof c.animate !== 'function') return
-    await c.animate(
+    // not awaited: the glide runs alongside the step (agent steps never wait for animations)
+    c.animate(
       [{ transform: `translate(${from.x}px, ${from.y}px)` }, { transform: `translate(${to.x}px, ${to.y}px)` }, { transform: `translate(${to.x}px, ${to.y}px) scale(.8)` }, { transform: `translate(${to.x}px, ${to.y}px)` }],
       { duration: 400, easing: 'ease-out' },
     ).finished.catch(() => {})
@@ -238,9 +241,9 @@ export class Overlay {
   }
 }
 
-const KEY = Symbol.for('tvine.weft.presence')
-// One per tab (shared by duplicated bundles, like the registry).
-export function getOverlay(): Overlay {
-  const g = globalThis as { [KEY]?: Overlay }
-  return (g[KEY] ??= new Overlay())
-}
+// One per tab, module-private: no global key, so page script can't reach it and hide Stop.
+// ponytail: duplicated weft bundles would each get their own overlay; dedupe the bundle if that happens.
+let one: Overlay | undefined
+export const getOverlay = (): Overlay => (one ??= new Overlay())
+// A page dialog/drawer just opened: put the presence host back above it (only if it exists).
+export const raisePresence = (): void => { one?.raise() }

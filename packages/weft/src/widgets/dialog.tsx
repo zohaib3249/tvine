@@ -3,10 +3,12 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control } from '../widget/types.js'
 import { AutoOff, inner, part, useControllable, type Slots, type SlotProps } from './_parts.js'
-import { inertOutside } from './_position.js'
+import { inertOutside, showPopover } from './_position.js'
+import { raisePresence } from '../presence/overlay.js'
 
-// widgets/dialog.md: native <dialog> + showModal (top layer, focus trap, Esc). Background gets `inert`
-// while a modal is open, so it drops out of the agent view. Closed content is not mounted (never leaks).
+// widgets/dialog.md: native <dialog> opened with show() + popover=manual (top layer) — NOT showModal(), whose
+// inert document would cover the agent Stop pill. Modal = `inert` on the background (inertOutside stops at <body>,
+// so the presence host on <html> stays live) + Esc; the presence host is re-raised above the dialog. Closed content is not mounted (never leaks).
 // ponytail: props API (trigger/title/children), not the compound Dialog.Root/Trigger/Content yet; no forceMount.
 type C = Record<string, Control<any, any>>
 type S = { open: boolean }
@@ -36,9 +38,17 @@ export function Overlay({ props, w, kind, extra }: { props: DialogProps; w: Retu
   useEffect(() => {
     const d = ref.current
     if (!d || !open) return
-    if (modal && typeof d.showModal === 'function') { try { d.showModal() } catch { d.setAttribute('open', '') } } else d.setAttribute('open', '')
+    if (modal) { d.setAttribute('popover', 'manual'); showPopover(d, true) }
+    if (typeof d.show === 'function') { try { d.show() } catch { d.setAttribute('open', '') } } else d.setAttribute('open', '')
+    raisePresence()
     const undo = modal ? inertOutside(d) : () => {}
-    return () => { undo(); if (typeof d.close === 'function') d.close(); else d.removeAttribute('open') }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); set(false) } }
+    if (modal) d.ownerDocument.addEventListener('keydown', esc)
+    if (modal) d.querySelector<HTMLElement>('[autofocus],button,input,select,textarea,a[href]')?.focus()
+    return () => {
+      undo(); d.ownerDocument.removeEventListener('keydown', esc); showPopover(d, false)
+      if (typeof d.close === 'function') d.close(); else d.removeAttribute('open')
+    }
   }, [open, modal])
   const st = { 'data-state': open ? 'open' : 'closed' }
   return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': kind, ...st }, { className, ...slots?.root }, s, <>
