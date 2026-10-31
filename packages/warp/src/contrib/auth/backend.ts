@@ -6,6 +6,7 @@ import { DomainError } from '../../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type Request, type Session, type Settings, type TvineUser } from '../../core/types.js'
 import { MAX_IN, type Where } from '../../data/queryset.js'
 import { base32, checksum, hotp, mac, macOk, random62, same, seal, sha256, unseal } from './crypto.js'
+import { recordSession, sessionAlive } from './sessions.js'
 import { Group, GroupPermission, Permission, RecoveryCode, Token, Totp, User, UserGroup, UserPermission } from './models.js'
 
 export type UserRow = NonNullable<Awaited<ReturnType<typeof User.get>>>
@@ -98,7 +99,7 @@ export async function sessionUser(settings: Settings, session: Session): Promise
   const id = session.data.get(SESSION_USER), hash = session.data.get(SESSION_HASH)
   if (id === undefined) return undefined
   const row = typeof id === 'string' && /^\d+$/.test(id) ? await User.get(Number(id)) : undefined
-  if (row && row.isActive && typeof hash === 'string' && macOk(settings, 'session', row.password, hash)) return row
+  if (row && row.isActive && typeof hash === 'string' && macOk(settings, 'session', row.password, hash) && await sessionAlive(session, row.id)) return row
   session.data.delete(SESSION_USER); session.data.delete(SESSION_HASH)   // stale binding: flushed like Django
   return undefined
 }
@@ -112,6 +113,7 @@ export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
   ctx.session.data.set(SESSION_AT, Date.now())
   ctx.session.data.set(SESSION_HASH, sessionHash(ctx.settings, row.password))
   cycleSession(ctx)
+  await recordSession(ctx, row.id)   // auth.sessions: listed, revocable
   const fresh = await User.update(row.id, { lastLogin: new Date() })
   const user = new AuthUser(fresh, ctx.settings, 'session')
   ctx.request.user = user

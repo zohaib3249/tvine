@@ -7,7 +7,7 @@ import type { Dialect } from '../sql/dialect.js'
 import type { Op } from '../queryset.js'
 
 export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk' | 'm2m'
-  | 'date' | 'time' | 'duration' | 'decimal' | 'email' | 'url' | 'slug' | 'file'
+  | 'date' | 'time' | 'duration' | 'decimal' | 'email' | 'url' | 'slug' | 'file' | 'encrypted'
   | 'color' | 'phone' | 'tags' | 'ip' | 'country' | 'markdown' | 'richText' | 'code' | 'address' | 'percent' | 'dateRange'
 export type OnDelete = 'CASCADE' | 'PROTECT' | 'SET_NULL' | 'SET_DEFAULT' | 'RESTRICT' | 'DO_NOTHING'
 export type DbName = Dialect['name']
@@ -46,6 +46,10 @@ export interface ModelMeta {
   unique?: string[][]
   constraints?: import('../expressions.js').ConstraintSpec[]
   ordering?: string[]
+  // privacy (contrib/auth/privacy.ts): the fields privacy.export(user) collects from rows that reference the user
+  personalData?: string[]
+  // privacy.erase(user): delete the user's rows, blank their personalData fields, or run your own function
+  onErase?: 'delete' | 'anonymize' | ((userId: number) => Promise<void> | void)
 }
 export type Fields = Record<string, Field<any, boolean, Kind, boolean>>
 

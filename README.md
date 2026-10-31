@@ -46,6 +46,7 @@ Next: build your own app with [docs/getting-started.md](docs/getting-started.md)
 | Databases | SQLite (default), Postgres, MySQL/MariaDB | [db-engines.md](docs/design/conventions/db-engines.md) |
 | Views | `defineAction`, ListView/DetailView/ModelViewSet with all DRF hooks, `@action` | [generic-views.md](docs/design/conventions/generic-views.md) |
 | URLs | `urls.ts`: `path`, `include`, routers, `reverse` | [urls.md](docs/design/conventions/urls.md) |
+| Security features | every built-in protection (signing, encrypted fields, private media, sessions, notifications, `safeFetch`, privacy export/erase, staff hardening), its setting and default | [security-features.md](docs/design/conventions/security-features.md) |
 | Permissions | DRF-style permissions, rate limits, `humanOnly`, `confirm` | [permissions.md](docs/design/conventions/permissions.md), [human-only.md](docs/design/frontend/v2/widgets/human-only.md) |
 | Request | `request.user`, `request.agent`, `request.ip` | [request.md](docs/design/conventions/request.md) |
 | Middleware + hooks | per-app middleware, `command`/`error`/`session` hooks, `ready()` | [middleware-hooks.md](docs/design/conventions/middleware-hooks.md) |

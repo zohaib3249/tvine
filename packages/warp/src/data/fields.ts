@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import {
   BoolField, DateField, DatetimeField, DecimalField, DurationField, EmailField, EnumField, FileField, FkField, FloatField, IdField,
-  ImageField, IntField, JsonField, ColorField, PhoneField, IpField, CountryField, MarkdownField, CodeField, RichTextField, PercentField, TagsField,
+  ImageField, IntField, EncryptedField, type EncryptedOpts, JsonField, ColorField, PhoneField, IpField, CountryField, MarkdownField, CodeField, RichTextField, PercentField, TagsField,
   AddressField, DateRangeField, signatureOpts, type Address, type DateRange, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
 } from './fields/index.js'
 
@@ -49,6 +49,13 @@ export const field = {
   dateRange: mk<DateRange, 'dateRange'>(DateRangeField), // JSON {start, end} 'YYYY-MM-DD', inclusive
   // an image a person draws (admin: signature widget); humanOnly — agent writes refused. Migrations see field.image.
   signature: <const P extends Opts | undefined = undefined>(opts?: P) => new ImageField(signatureOpts(opts)) as unknown as Typed<string, 'image', P>,
+  // encrypted at rest (AES-256-GCM; security-features.md): { of: 'text' | 'json', deterministic?, context? }
+  encrypted: <const P extends EncryptedOpts | undefined = undefined>(opts?: P) =>
+    new EncryptedField(opts ?? {}) as unknown as Typed<P extends { of: 'json' } ? unknown : string, 'encrypted', P>,
+  encryptedText: <const P extends Omit<EncryptedOpts, 'of'> | undefined = undefined>(opts?: P) =>
+    new EncryptedField({ ...opts, of: 'text' }) as unknown as Typed<string, 'encrypted', P>,
+  encryptedJson: <const P extends Omit<EncryptedOpts, 'of'> | undefined = undefined>(opts?: P) =>
+    new EncryptedField({ ...opts, of: 'json' }) as unknown as Typed<unknown, 'encrypted', P>,
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
     new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>

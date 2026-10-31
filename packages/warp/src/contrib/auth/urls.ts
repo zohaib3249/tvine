@@ -2,7 +2,7 @@
 import { path } from '../../urls.js'
 import {
   changePassword, createToken, listTokens, loginAction, logoutAction, meAction, requestPasswordReset, resetPassword,
-  revokeToken, totpBegin, totpConfirm, totpDisable,
+  revokeToken, totpBegin, totpConfirm, totpDisable, sessionsAction, revokeSession, logoutOthers, exportMyData,
 } from './views.js'
 
 export const appName = 'auth'
@@ -18,5 +18,9 @@ export const urlpatterns = [
   path('totp/disable/', totpDisable, { name: 'totp_disable' }),
   path('tokens/', listTokens, { name: 'token-list' }),
   path('tokens/', createToken, { name: 'token-list' }),
+  path('export/', exportMyData, { name: 'export' }),
+  path('sessions/', sessionsAction, { name: 'session-list' }),
+  path('sessions/others/', logoutOthers, { name: 'session-others', methods: ['DELETE'] }),
+  path('sessions/<str:id>/', revokeSession, { name: 'session-detail', methods: ['DELETE'] }),
   path('tokens/<str:key>/', revokeToken, { name: 'token-detail', methods: ['DELETE'] }),
 ]

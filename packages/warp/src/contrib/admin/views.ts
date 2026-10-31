@@ -12,7 +12,7 @@ import type { Model } from '../../data/model.js'
 import { Count, Max, Min, Q, type QNode } from '../../data/expressions.js'
 import type { QuerySet } from '../../data/queryset.js'
 import { modelNamed, referencesTo } from '../../data/registry.js'
-import { isStaff } from '../../security/permissions.js'
+import { staffGuard } from './hardening.js'
 import { scoped as scopedBy } from '../../security/scope.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
@@ -458,7 +458,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
 }
 
 // =========================================================================================================
-const staff = { permissions: [isStaff] }
+const staff = { permissions: [staffGuard] }   // staff + settings.admin allowIps / require2fa / idleMs
 // agents = 'confirm' (auth.User / auth.Group by default): an agent's write answers confirm_required by 'human'
 const agentConfirm = (p: { model: string }, ctx: ActionCtx) =>
   ctx.request.agent.is && site.adminFor(p.model)?.agents === 'confirm' ? { by: 'human' as const, message: `Change ${p.model}? (accounts and permissions)` } : undefined

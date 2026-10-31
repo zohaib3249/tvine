@@ -5,7 +5,7 @@ export {
   F, Q, Value, Case, When, Coalesce, Lower, Upper, Length, Abs, Cast, TruncDay, TruncMonth, TruncYear,
   Sum, Count, Avg, Min, Max, Exists, OuterRef, Subquery, Prefetch, CheckConstraint, UniqueConstraint,
 } from './data/expressions.js'
-export { atomic, onCommit, setOnCommitErrorHandler } from './data/engine.js'
+export { atomic, defer, onCommit, setOnCommitErrorHandler } from './data/engine.js'
 export { configureDb, closeDb } from './data/db.js'
 export { makeMigrations, migrate, migrateCheck } from './data/migrate.js'
 export { defineAction, ActionManifest, paramSpecs, DomainError } from './core/actions.js'
@@ -22,7 +22,7 @@ export type {
   Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
-export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
+export { defineUpload, DiskStorage, media, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
 export { allowAny, denyAgents, deniesAgents, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf } from './security/permissions.js'
 export { authenticate, authBackend, cycleSession, setAuthBackend, type AuthBackend } from './core/auth.js'
 export {
@@ -52,3 +52,5 @@ export { defineMiddleware, CATALOG as MIDDLEWARE_CATALOG, type HttpMiddleware, t
 export { getLogger, configureLogging, type Logger, type LogRecord, type LogHandler, type LoggingConfig, type LoggingSetting, type Level } from './log.js'
 export { env, loadDotenv, FRAMEWORK_ENV } from './env.js'
 export { securityEvent } from './core/audit.js'
+export { signing, dumps, loads, Signer, TimestampSigner, BadSignature, SignatureExpired, configureSigning } from './security/signing.js'
+export { safeFetch, isPrivateAddress, SafeFetchError, type SafeFetchOpts } from './security/safe-fetch.js'

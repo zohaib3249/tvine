@@ -37,6 +37,7 @@ function kindOf(n: string, f: AnyField): MetaKind {
       return 'text'
     case 'richText': return 'rich'
     case 'dateRange': return 'daterange'
+    case 'encrypted': return (f.opts as { of?: string }).of === 'json' ? 'json' : 'text'   // shown only with hidden: false
     default: return f.kind as MetaKind   // uuid bool money datetime json image fk m2m color phone tags ip country markdown code address percent
   }
 }
