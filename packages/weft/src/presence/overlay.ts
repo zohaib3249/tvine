@@ -41,7 +41,7 @@ const PAST: Partial<Record<ActionKind, string>> = {
 }
 export const POINTED: ReadonlySet<ActionKind> = new Set(['click', 'select', 'toggle', 'open'])
 
-const clean = (s: string, max: number) => s.replace(/[\0-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").slice(0, max)
+const clean = (s: string, max: number) => s.replace(/[\0-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, "").slice(0, max)
 export const reducedMotion = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 export interface Act { verb: ActionKind; label: string; control: string; danger?: boolean; options?: false | PresenceOptions }

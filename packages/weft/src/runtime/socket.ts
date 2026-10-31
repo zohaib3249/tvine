@@ -55,12 +55,17 @@ export function useTvineChannel(opts: { enabled?: boolean; onUpdate?: () => void
 }
 
 // ---- Tab control (security.md §Remote agents, transports.md §Tab socket) ---------------------------
-// The tab's own stream `/tvine/channel?tab=<id>`: hello {tabId} → this tab can be controlled by a REMOTE
-// agent after the human clicks Allow in the trusted chrome. Forwarded `cmd` frames run here through the
-// in-tab executor (vetoes, presence, idempotency) and are answered by a result POST. Every tab POST is
-// same-origin with the httpOnly cookie and `x-tvine-tab`; no sid is ever readable here.
-const TAB_KEY = 'tvine.tab'
+// The tab's own stream `/tvine/channel?tab=<id>&doc=<nonce>`: hello {tabId} → this tab can be controlled by a
+// REMOTE agent after the human clicks Allow in the trusted chrome. Forwarded `cmd` frames (ui/read/expand/do) run
+// here through the in-tab executor and the tab's own cookie, and are answered by a result POST. Every tab POST is
+// same-origin with the httpOnly cookie and `x-tvine-tab: <tabId>`; no sid is ever readable here.
+// The stream opens only when needed: ?tvine-approve, ?tvine-connect, openConnect(), or this tab was under
+// control before a reload. Never inside a frame (the Allow prompt must not be clickjackable).
+const TAB_KEY = 'tvine.tab'              // this tab's id (reload keeps it)
+const CTL_KEY = 'tvine.tab.ctl'          // '1' while a remote agent controls this tab
+const STOP_KEY = 'tvine.tab.stopped'     // '1' after the human pressed Stop, until the server confirmed the release
 const RETRY_MS = 2_000
+const DOC = Math.random().toString(36).slice(2, 12)   // per-document nonce: another tab can't take over this stream
 let connect: (() => void) | undefined
 
 // Opens the Connect box (pairing-code fallback); an app may put this behind a menu item.
@@ -78,8 +83,16 @@ function takeParam(name: string): string | null {
   return v
 }
 const store = () => { try { return globalThis.sessionStorage } catch { return undefined } }
+const flag = (k: string, on?: boolean): boolean => {
+  try {
+    if (on === true) store()?.setItem(k, '1')
+    else if (on === false) store()?.removeItem(k)
+    return store()?.getItem(k) === '1'
+  } catch { return false }
+}
+const framed = () => { try { return globalThis.top !== globalThis.self } catch { return true } }
 
-// agent-presence.md: an agent's server-side `do` → outline the mounted widget bound to that action, if any.
+// agent-presence.md: an agent's server-side action → outline the mounted widget bound to that action, if any.
 function outlineAction(action: string): void {
   const find = (n: RegistryNode): RegistryNode | undefined => {
     for (const c of n.children) {
@@ -93,7 +106,7 @@ function outlineAction(action: string): void {
 }
 
 export function connectTab(): () => void {
-  if (typeof EventSource === 'undefined') return () => {}
+  if (typeof EventSource === 'undefined' || framed()) return () => {}
   const overlay = getOverlay()
   const tools = pageTools('tab')
   let es: EventSource | undefined, tabId: string | undefined, closed = false, retry: ReturnType<typeof setTimeout> | undefined
@@ -101,7 +114,7 @@ export function connectTab(): () => void {
   let closePrompt = () => {}
   const post = async (op: string, body: object = {}): Promise<{ status: number; body: any }> => {
     try {
-      const r = await fetch(`/tvine/tab/${op}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-tvine-tab': '1' }, body: JSON.stringify({ tabId, ...body }) })
+      const r = await fetch(`/tvine/tab/${op}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-tvine-tab': op === 'hello' ? '1' : tabId ?? '' }, body: JSON.stringify(body) })
       return { status: r.status, body: await r.json().catch(() => ({})) }
     } catch { return { status: 0, body: {} } }
   }
@@ -109,15 +122,32 @@ export function connectTab(): () => void {
 
   const released = () => {
     tabControl.remote = false
+    flag(CTL_KEY, false)
     abortRunning()
     overlay.setPill(null)
   }
-  const stop = () => { released(); void post('release') }
+  // Stop must land: release is retried until the server says 200 (or that this tab/session is gone);
+  // until then STOP_KEY makes any re-sent `control` (reconnect, reload) answer with release again.
+  let releasing = false
+  const release = async () => {
+    if (releasing) return
+    releasing = true
+    for (let wait = 500; !closed; wait = Math.min(wait * 2, 10_000)) {
+      const r = await post('release')
+      if (r.status === 200 || r.status === 401 || r.status === 403) { flag(STOP_KEY, false); break }   // landed (or nothing left to release)
+      await new Promise((ok) => { retry = setTimeout(ok, wait) })
+    }
+    releasing = false
+  }
+  const stop = () => { flag(STOP_KEY, true); released(); void release() }
   const controlled = (d: { agent?: string }) => {
     closePrompt()
+    if (flag(STOP_KEY)) { released(); void release(); return }   // the human said Stop: never silently resume
     tabControl.remote = true
-    overlay.setPill({ text: `${String(d.agent ?? 'Agent')} (unverified) connected`, button: 'Stop', onClick: stop })
+    flag(CTL_KEY, true)
+    overlay.setPill({ text: `Unverified agent "${String(d.agent ?? 'Agent')}" connected`, button: 'Stop', onClick: stop })
   }
+  const allow = () => { flag(STOP_KEY, false); setStopped(false) }
   const ask = async (requestId: string) => {
     const r = await post('request', { requestId })
     if (r.status !== 200) return   // expired, used, or busy (the server told the agent)
@@ -125,7 +155,7 @@ export function connectTab(): () => void {
     closePrompt()
     closePrompt = showRequest({
       name: String(r.body.name ?? 'Agent'),
-      onAllow: () => { setStopped(false); void post('approve', { requestId }) },
+      onAllow: () => { allow(); void post('approve', { requestId }) },
       onDeny: () => { void post('approve', { requestId, allow: false }) },
     })
   }
@@ -137,6 +167,7 @@ export function connectTab(): () => void {
         : d.op === 'ui' ? await withNav(() => tools.ui(p))
         : d.op === 'read' ? await withNav(() => tools.read_page(p))
         : d.op === 'expand' ? await withNav(() => tools.expand(p))
+        : d.op === 'do' ? await withNav(() => tools.do(p))
         : { kind: 'err', code: 'invalid_param', message: 'unknown op' }
     } catch (e) { result = { kind: 'err', code: 'internal', message: e instanceof Error ? e.message : String(e) } }
     await post('result', { cmdId: d.cmdId, result })
@@ -145,7 +176,7 @@ export function connectTab(): () => void {
   const open = () => {
     if (closed) return
     const want = tabId ?? store()?.getItem(TAB_KEY) ?? ''
-    const s = new EventSource(`/tvine/channel?tab=${encodeURIComponent(want)}`)
+    const s = new EventSource(`/tvine/channel?tab=${encodeURIComponent(want)}&doc=${DOC}`)
     es = s
     let got = false
     s.addEventListener('hello', (m) => {
@@ -153,6 +184,7 @@ export function connectTab(): () => void {
       tabId = String(parse(m).tabId ?? '')
       try { store()?.setItem(TAB_KEY, tabId) } catch { /* private mode */ }
       ready()
+      if (flag(STOP_KEY) && !releasing) void release()   // a Stop that may not have landed before the reload
     })
     s.addEventListener('control', (m) => controlled(parse(m)))
     s.addEventListener('release', () => released())
@@ -175,6 +207,7 @@ export function connectTab(): () => void {
     void ensure(true).then(() => {
       closePrompt()
       closePrompt = showConnect(async (code) => {
+        allow()
         const r = await post('approve', { code })
         return r.status === 200 ? null : String(r.body.error ?? 'that did not work')
       })
@@ -184,14 +217,14 @@ export function connectTab(): () => void {
   const wantConnect = takeParam('tvine-connect') !== null
   if (approve) void ensure(true).then(() => ask(approve))
   else if (wantConnect) connect()
-  else void ensure(false)
+  else if (flag(CTL_KEY) || flag(STOP_KEY)) void ensure(false)   // reload of a controlled (or just stopped) tab
 
   return () => {
     closed = true
     clearTimeout(retry)
     es?.close()
     closePrompt()
-    if (tabControl.remote) released()
+    if (tabControl.remote) { tabControl.remote = false; abortRunning(); overlay.setPill(null) }   // unmount ≠ release: CTL_KEY stays for the reload
     connect = undefined
   }
 }

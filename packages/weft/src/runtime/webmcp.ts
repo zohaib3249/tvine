@@ -173,6 +173,12 @@ export function pageTools(via: 'webmcp' | 'tab', header?: string) {
       const map = error?.code === 'stale_rev' || result.page !== from ? disclose(tree(), { budget: 0, rowsL1: 0, view: 'L0' }).nodes : undefined
       return error ? { kind: 'err', ...error, result: { ...result, ...(map && { map }) } } : { kind: 'ok', action: 'ui', result: { ...result, ...(map && { map }) } }
     },
+    // a backend action (advanced path): POSTed from this page with its cookie, agent-marked
+    do: async ({ action, params, bind, cmdId }: { action: string; params?: object; bind?: string; cmdId?: string }): Promise<Obj | string> => {
+      const id = cmdId ?? newId()
+      const t = await agentPost({ action, params: params ?? {}, ...(bind !== undefined && { bind }), cmdId: id, agentCmd: { cmdId: id, via: agentVia } }, header)
+      try { const j = JSON.parse(t); return j && typeof j === 'object' && !Array.isArray(j) ? j : t } catch { return t }
+    },
   }
 }
 
@@ -226,11 +232,7 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
         required: ['action'],
       },
       annotations: { destructiveHint: true },
-      execute: guard(async ({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) => {
-        const id = cmdId ?? newId()
-        const t = await agentPost({ action, params, cmdId: id, agentCmd: { cmdId: id, via: 'webmcp' } }, header)
-        try { const j = JSON.parse(t); return j && typeof j === 'object' && !Array.isArray(j) ? j : t } catch { return t }
-      }),
+      execute: guard(({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) => tools.do({ action, params, cmdId })),
     },
   ])
   return () => { off(); overlay.setPill(null) }
