@@ -10,9 +10,9 @@ const keys = (s: Settings) => [s.secret].flat()
 const mac = (data: string, key: string) => createHmac('sha256', key).update(data).digest()
 
 // Signs with the first key; the expiry is covered by the MAC so it cannot be extended.
-export function signBind(payload: Record<string, unknown>, settings: Settings): string {
+export function signBind(payload: Record<string, unknown>, settings: Settings, ttlMs = BIND_TTL_MS): string {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const exp = String(Date.now() + BIND_TTL_MS)
+  const exp = String(Date.now() + ttlMs)
   return `${body}.${mac(`${body}.${exp}`, keys(settings)[0]).toString('base64url')}.${exp}`
 }
 

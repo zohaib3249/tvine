@@ -26,6 +26,7 @@ export const recovery: Record<ErrCode, string> = {
   domain: 'the message above is the business rule; change the input or choose another option',
   internal: 'server error; retry once, then re-read the page',
   human_only: 'only a human can do this; ask the user to do it themselves, do not retry',
+  confirm_required: 'nothing ran: confirm as the message says (with the token), or ask the user when only they can confirm',
 }
 // err domain with reason 'forbidden' (route guards, permissions, cross-origin): no input change helps
 const FORBIDDEN = 'not allowed for this session; do not retry it, choose another page or action'

@@ -55,12 +55,16 @@ export type Event =
   | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot
       errors?: FieldError[]         // every bad field (Django ValidationError dict); `field` = the first, kept for compatibility
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
-      retryAfterMs?: number }       // rate_limited
+      retryAfterMs?: number         // rate_limited
+      confirm?: ConfirmAsk }        // confirm_required
   | { kind: 'goto'; url: string }
   | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' | 'job'   // v2 live; 'job': tvine.tasks progress
       action?: ActionId                                                // an agent's server action (presence outlines its widget)
       job?: JobUpdate }                                                // tvine.tasks: a background job of this session moved
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
+
+// rules.confirm's first answer (core/confirm.ts). token: absent when the caller cannot confirm (an agent, by 'human')
+export interface ConfirmAsk { token?: string; message: string; summary: Record<string, unknown>; expiresIn: number /* s */; by: 'anyone' | 'human' }
 
 // tvine.tasks progress / completion carried on an `update` event (docs/design/contrib/tasks.md §Results)
 export interface JobUpdate { id: string; task: string; status: string; progress?: number; message?: string }
@@ -68,6 +72,7 @@ export interface JobUpdate { id: string; task: string; status: string; progress?
 export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
+  | 'confirm_required'   // rules.confirm: nothing ran; resend with the token (core/confirm.ts)
 
 // channels.md: named pub/sub groups. Implementations: core/channels.ts (memory), backends/redis.ts (redis:
 // fan-out across servers, replay from a stream). seq = the event's cursor (SSE `id:`); one counter for the layer.
@@ -179,6 +184,9 @@ export interface ActionRules {
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
   secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanOnly?: true | string         // widgets/human-only.md: dispatch refuses every agent-marked request (human_only); no typed MCP tool
+  // BACKLOG #2: the first call runs nothing and answers confirm_required + a single-use token (sid + action + params,
+  // ~2 min); the same call again with params.$confirm = token runs. by 'human': only a human's request may confirm
+  confirm?: true | { message?: string | ((params: any, ctx: ActionCtx) => string); by?: 'anyone' | 'human' }
   audit?: boolean                   // false = never write a tvine.audit row for this action (settings.audit)
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }

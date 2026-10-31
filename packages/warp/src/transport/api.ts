@@ -8,7 +8,7 @@ import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../
 import { authenticate } from '../core/auth.js'
 import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
-import type { ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
+import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 
 export const API_PREFIX = '/tvine/api/'
@@ -18,7 +18,7 @@ const FORWARD_TTL_MS = 30_000
 
 export type ApiResult =
   | { ok: true; data: unknown; goto?: string }
-  | { ok: false; code: ErrCode; reason?: string; field?: string; errors?: FieldError[]; message: string; retryAfterMs?: number }
+  | { ok: false; code: ErrCode; reason?: string; field?: string; errors?: FieldError[]; message: string; retryAfterMs?: number; confirm?: ConfirmAsk }
 
 // Identity a Next server forwards. `as` = the raw x-tvine-session value of an agent's snapshot render.
 export interface Forward { cookie?: string; as?: string; ip: string; agent: boolean; path: string; mode: 'render' | 'action'; exp: number }
@@ -55,7 +55,7 @@ export function toApiResult(events: Event[]): ApiResult {
     return {
       ok: false, code: err.code, message: err.message,
       ...(err.reason !== undefined && { reason: err.reason }), ...(err.field !== undefined && { field: err.field }), ...(err.errors?.length && { errors: err.errors }),
-      ...(err.retryAfterMs !== undefined && { retryAfterMs: err.retryAfterMs }),
+      ...(err.retryAfterMs !== undefined && { retryAfterMs: err.retryAfterMs }), ...(err.confirm && { confirm: err.confirm }),
     }
   }
   const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')

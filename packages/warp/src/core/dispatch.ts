@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { audited, auditRow, writeAudit } from './audit.js'
+import { confirmGate } from './confirm.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -12,7 +13,7 @@ import { ev, isTerminal } from './events.js'
 import { compose, deepFreeze, Hooks } from './middleware.js'
 import { SessionBusy, SessionStore } from './session.js'
 import { channelsFor, idempotencyFor, limiterFor, marksFor, sessionsFor } from '../backends/index.js'
-import type { ActionCtx, ActionDef, ChannelLayer, Command, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
+import type { ActionCtx, ActionDef, ChannelLayer, Command, ConfirmAsk, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
@@ -173,14 +174,14 @@ export async function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, re
 }
 
 // The human <Form> shim's result (weft FormResult, primitive-form.md §Human validation errors).
-export interface FormResult { ok: boolean; errors?: Record<string, string>; message?: string; goto?: string }
+export interface FormResult { ok: boolean; errors?: Record<string, string>; message?: string; goto?: string; confirm?: ConfirmAsk }
 export function formResult(events: Event[]): FormResult {
   for (const e of events) {
     if (e.kind === 'err') {
       const errs = e.code !== 'invalid_param' ? undefined
         : e.errors?.length ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
         : e.field ? { [e.field]: e.message } : undefined
-      return { ok: false, ...(errs && { errors: errs }), message: e.message }
+      return { ok: false, ...(errs && { errors: errs }), message: e.message, ...(e.confirm && { confirm: e.confirm }) }
     }
     if (e.kind === 'goto') return { ok: true, goto: e.url }
   }
@@ -418,10 +419,15 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     let busy = false, dead = false
     const steps = async (): Promise<Event[]> => {
       // 7. validate: bind-only keys may not arrive as params; signed bind values win; class views validate themselves
-      const smuggled = bindKeys.find((k) => Object.hasOwn(cmd.params ?? {}, k))
+      // $confirm: rules.confirm's token (core/confirm.ts), never a param
+      const { $confirm, ...given } = cmd.params ?? {}
+      const smuggled = bindKeys.find((k) => Object.hasOwn(given, k))
       if (smuggled) return [ev.err('invalid_param', `${smuggled} comes from the signed bind, not from params`, { field: smuggled })]
-      const input = { ...cmd.params, ...bound }
+      const input = { ...given, ...bound }
       const params = def.rawParams ? input : validate(def.schema, input)
+      // 7.5 confirm (BACKLOG #2): an opted-in action's first call runs nothing and answers confirm_required + a token
+      const ask = await confirmGate(def, input, $confirm, params, ctx, server)
+      if (ask) return [ask]
       // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
       if (audited(settings, def)) {
         const { $confirm: _, ...raw } = cmd.params ?? {}

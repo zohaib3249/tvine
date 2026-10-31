@@ -47,16 +47,17 @@ export async function pageSnapshot(server: ServerCtx, sid: Sid, page: string): P
 export const hasNode = (snap: Snapshot, id: string) => expand(toTree(snap, { headless: true }), id, { limit: 0 }) !== undefined
 
 // ---- command -------------------------------------------------------------------------------
-const step = () => z.object({ target: z.string(), control: z.string(), args: z.record(z.unknown()).default({}) })
+// confirm: a rules.confirm token from this step's confirm_required answer (core/confirm.ts)
+const step = () => z.object({ target: z.string(), control: z.string(), args: z.record(z.unknown()).default({}), confirm: z.string().optional() })
 export const uiInput = z.object({
   url: z.string(), sid: z.string().optional(), cmdId: z.string().optional(), rev: z.number().int().optional(),
-  target: z.string().optional(), control: z.string().optional(), args: z.record(z.unknown()).optional(),
+  target: z.string().optional(), control: z.string().optional(), args: z.record(z.unknown()).optional(), confirm: z.string().optional(),
   steps: z.array(step()).min(1).max(MAX_STEPS).optional(),
 })
 export type UiInput = z.infer<typeof uiInput>
 type Step = z.infer<ReturnType<typeof step>>
 export const stepsOf = (u: Omit<UiInput, 'url'>): Step[] | undefined =>
-  u.steps ?? (u.target !== undefined && u.control !== undefined ? [{ target: u.target, control: u.control, args: u.args ?? {} }] : undefined)
+  u.steps ?? (u.target !== undefined && u.control !== undefined ? [{ target: u.target, control: u.control, args: u.args ?? {}, ...(u.confirm !== undefined && { confirm: u.confirm }) }] : undefined)
 
 export interface UiEnv {
   session: Session
@@ -123,9 +124,10 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
       } else if ((handle && typeof handle.id === 'string') || typeof h.call === 'string') {
         if (typeof h.field === 'string') return fail(i, s, 'unknown_action', `set ${h.field} in the args of the form's submit control instead`, { reason: 'in_tab_only' })
         // plain api call (the default): the page's fixed args + the agent's, no bind; the action validates everything
+        const ok = s.confirm === undefined ? {} : { $confirm: s.confirm }
         const call = typeof h.call === 'string'
-          ? { action: h.call, params: { ...(h.args && typeof h.args === 'object' ? h.args : {}), ...s.args } }
-          : { action: handle!.id as string, params: s.args, bind: typeof handle!.bind === 'string' && handle!.bind ? handle!.bind : undefined   /* '' = unbound (v1 ActionRef) */ }
+          ? { action: h.call, params: { ...(h.args && typeof h.args === 'object' ? h.args : {}), ...s.args, ...ok } }
+          : { action: handle!.id as string, params: { ...s.args, ...ok }, bind: typeof handle!.bind === 'string' && handle!.bind ? handle!.bind : undefined   /* '' = unbound (v1 ActionRef) */ }
         const r = await act(server, env, page, call, sid, cmd.cmdId, i)
         if ('err' in r) return { page, events: [{ ...r.err, message: `step ${i} ${s.target}.${s.control}: ${r.err.message}` }] }
         if (r.goto && !(await env.request(r.goto))) {
