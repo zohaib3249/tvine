@@ -193,6 +193,7 @@ export interface ActionRules {
   // a function decides per call (undefined = no confirm), e.g. admin's agents = 'confirm' asks only agent-marked writes
   confirm?: ConfirmRule | ((params: any, ctx: ActionCtx) => ConfirmRule | undefined)
   audit?: boolean                   // false = never write a tvine.audit row for this action (settings.audit)
+  search?: string                   // the param that is a visitor's search term (admin dashboard Top searches): e.g. 'q'
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
   // Django cache_page (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
   // varyOn default ['user']; 'session' | 'query' | a header name add to the key. Errors are never cached.
@@ -299,7 +300,7 @@ export interface Settings {
     path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' }; allowIps?: string[]; require2fa?: boolean; idleMs?: number
     // dashboard: widget ids in display order (others follow) + the automatic per-model charts; stats: the hourly rollups
     dashboard: { widgets: string[]; autoCharts: boolean }
-    stats: { enabled: boolean; retentionDays: number; flushMs: number }
+    stats: { enabled: boolean; retentionDays: number; flushMs: number; searches: { enabled: boolean; minCount: number }; pages: { enabled: boolean; keepParams: string[] } }
   }
   // BACKLOG #9: Prometheus text at `path`, off by default. Guard: a bearer `token`, or the client ip in `allowIps`;
   // neither set = loopback only. Never listed in agent discovery.

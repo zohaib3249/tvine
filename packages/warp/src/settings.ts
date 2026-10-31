@@ -90,7 +90,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   },
   compression: { enabled: true, threshold: 1024, brotli: true, gzipLevel: 6, brotliQuality: 4 },
   tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
-  admin: { path: '/admin', theme: { dark: 'auto' }, dashboard: { widgets: [], autoCharts: true }, stats: { enabled: true, retentionDays: 30, flushMs: 60_000 } },
+  admin: { path: '/admin', theme: { dark: 'auto' }, dashboard: { widgets: [], autoCharts: true }, stats: { enabled: true, retentionDays: 30, flushMs: 60_000, searches: { enabled: true, minCount: 3 }, pages: { enabled: true, keepParams: [] } } },
   caches: { default: CACHE_DEFAULTS },
   // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
   email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
@@ -197,7 +197,9 @@ const schema: z.ZodType<Settings> = z.object({
     theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }),
     allowIps: z.array(z.string().refine(validCidr, 'an address or CIDR (e.g. 10.0.0.0/8)')).optional(), require2fa: z.boolean().optional(), idleMs: z.number().int().positive().optional(),
     dashboard: z.object({ widgets: z.array(z.string().max(100)).max(100), autoCharts: z.boolean() }),
-    stats: z.object({ enabled: z.boolean(), retentionDays: z.number().int().min(1).max(3650), flushMs: z.number().int().min(1000) }) }),
+    stats: z.object({ enabled: z.boolean(), retentionDays: z.number().int().min(1).max(3650), flushMs: z.number().int().min(1000),
+      searches: z.object({ enabled: z.boolean(), minCount: z.number().int().min(1).max(1000) }),
+      pages: z.object({ enabled: z.boolean(), keepParams: z.array(z.string().max(40)).max(20) }) }) }),
   caches: z.record(alias, z.object({
     backend: z.enum(['memory', 'redis', 'file', 'dummy']), redis: alias, location: z.string().min(1).optional(),
     timeout: z.number().min(0).nullable(), keyPrefix: z.string().max(64), version: z.number().int(), maxEntries: z.number().int().positive(),

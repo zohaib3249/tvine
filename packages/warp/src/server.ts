@@ -377,6 +377,14 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
           const transport = transportOf(p), status = res.headersSent ? `${Math.floor(res.statusCode / 100)}xx` : 'aborted'
           if (metrics.enabled) metrics.observe('tvine_http_request_duration_seconds', { transport, status }, since(t0))
           if (stats.tap) statTap({ k: 'http', transport, status, route: routeLabel(p, transport), ms: performance.now() - t0 })
+          // a human page view (Most visited pages): a GET page render answered 200; agent reads come from the 'read' hook
+          if (stats.tap && transport === 'page' && req.method === 'GET' && res.statusCode === 200 && !/\/agent\.(json|txt)$/.test(p)) {
+            const ref = String(req.headers.referer ?? ''), host = String(req.headers.host ?? '')
+            let entry = true
+            try { entry = !ref || new URL(ref).host !== host } catch { /* a bad referer: an entry */ }
+            const sid = String(req.headers.cookie ?? '').split(';').map((x) => x.trim()).find((x) => x.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
+            statTap({ k: 'page', path: String(req.headers[URL_STAMP] ?? p), agent: false, sid, entry })
+          }
         })
       }
       // a real node response only (a test double without header methods is passed through untouched)

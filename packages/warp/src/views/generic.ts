@@ -479,7 +479,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     } satisfies Record<GeneratedAction, () => z.ZodTypeAny>
 
     const rulesFor: Record<GeneratedAction, ActionRules> = {
-      list: { readOnly: true }, get: { readOnly: true }, create: {}, update: {}, delete: { destructive: true },
+      list: { readOnly: true, ...(effectiveSearch(gv).length && { search: 'q' }) }, get: { readOnly: true }, create: {}, update: {}, delete: { destructive: true },
     }
     type Self = GenericView
     const out = (v: Self, ctx: ViewCtx, obj: object) => v.getSerializer(ctx).output(obj, v.getSerializerContext(ctx))

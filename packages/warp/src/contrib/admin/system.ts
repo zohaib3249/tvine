@@ -17,7 +17,7 @@ import { staffGuard } from './hardening.js'
 import { denyAgents } from '../../security/permissions.js'
 import { AdminStat } from './models.js'
 import {
-  AGENT_VIA, Collector, merge, newAcc, quantile, rangeOf, round, timeSeries, topOf, type Acc, type ChartData, type Range, type StatRow, type Table,
+  AGENT_VIA, Collector, OTHER, merge, newAcc, quantile, rangeOf, round, timeSeries, topOf, type Acc, type ChartData, type Range, type StatRow, type Table,
 } from './stats.js'
 import { rangeParam } from './stats.js'
 
@@ -246,6 +246,63 @@ export const systemQueries = defineAction('admin.system.queries', z.object({ ran
     top: table(['Fingerprint', 'Alias', 'Count', 'Total ms', 'p95 ms', 'Max ms'], top.map(([k, a]) => { const [f, d] = k.split('\u0000'); return [f!, d!, a.count, Math.round(a.sum), p95(a), ms(a.max)] })),
     slow: table(['Time', 'Fingerprint', 'ms', 'Alias'], [...col().slow].reverse().slice(0, 50).map((s) => [s.t, s.fingerprint, s.ms, s.alias])),
   }
+}, staff)
+
+// ---- visitor searches + most visited pages (Top searches / Most visited pages) -----------------------------------------
+// a table whose rows may carry a trend (per-row sparkline counts, oldest first) and a link (the first cell's href)
+export type TrendTable = Table & { trend?: number[][]; links?: (string | null)[] }
+function trends(rows: StatRow[], r: ReturnType<typeof rangeOf>, keys: string[], label: (x: StatRow) => string | undefined): number[][] {
+  const s = timeSeries(rows, r.groupBy, r.from, r.to, keys.map((k) => ({ name: k, label: k })), label)
+  return keys.map((_, i) => s.points.map((p) => p.values[i]!))
+}
+const sumBy = (rows: StatRow[], label: (x: StatRow) => string | undefined) => {
+  const m = new Map<string, number>()
+  for (const x of rows) { const k = label(x); if (k !== undefined) m.set(k, (m.get(k) ?? 0) + x.count) }
+  return m
+}
+const pct = (a: number, b: number) => (b ? round((a / b) * 100) : 0)
+// a term shows once minCount distinct sessions searched it (one person's private search never shows); (other) always
+export async function searchTables(range: Range | undefined, minCount: number, limit = 25) {
+  const [s, u] = await Promise.all([statRows('search', range), statRows('searcher', range)])
+  const searchers = sumBy(u.rows, (x) => x.dims.term)
+  const shown = s.rows.filter((x) => x.dims.term === OTHER || (searchers.get(x.dims.term!) ?? 0) >= minCount)
+  const none = sumBy(shown.filter((x) => x.dims.z === '1'), (x) => x.dims.term), agent = sumBy(shown.filter((x) => x.dims.v === 'a'), (x) => x.dims.term)
+  const top = topOf(shown, (x) => x.dims.term, limit)
+  const terms = top.map(([k]) => k)
+  const total = s.rows.reduce((n, x) => n + x.count, 0), noneTotal = s.rows.filter((x) => x.dims.z === '1').reduce((n, x) => n + x.count, 0)
+  const noRes = [...none].sort((a, b) => b[1] - a[1]).slice(0, limit)
+  const activity = timeSeries(s.rows, s.r.groupBy, s.r.from, s.r.to, [{ name: 'h', label: 'Human' }, { name: 'a', label: 'Agent' }], (x) => x.dims.v)
+  return {
+    total, noResultsPct: pct(noneTotal, total), minCount,
+    top: { ...table(['Term', 'Searches', 'Searchers', 'No results %', 'Agent'], top.map(([k, a]) => [k, a.count, searchers.get(k) ?? 0, pct(none.get(k) ?? 0, a.count), agent.get(k) ?? 0])),
+      trend: trends(shown, s.r, terms, (x) => x.dims.term) } as TrendTable,
+    noResults: table(['Term', 'Searches', 'Searchers'], noRes.map(([k, n]) => [k, n, searchers.get(k) ?? 0])),
+    activity: { ...activity, title: 'Searches: human vs agent', type: 'stacked', unit: 'count' } as ChartData,
+  }
+}
+export async function pageTables(range: Range | undefined, limit = 25) {
+  const [v, u, e] = await Promise.all([statRows('page', range), statRows('visitor', range), statRows('entry', range)])
+  const human = v.rows.filter((x) => x.dims.v !== 'a')
+  const visitors = sumBy(u.rows, (x) => x.dims.p), agent = sumBy(v.rows.filter((x) => x.dims.v === 'a'), (x) => x.dims.p)
+  const top = topOf(human, (x) => x.dims.p, limit)
+  const paths = top.map(([k]) => k)
+  const activity = timeSeries(v.rows, v.r.groupBy, v.r.from, v.r.to, [{ name: 'h', label: 'Human' }, { name: 'a', label: 'Agent' }], (x) => (x.dims.v === 'a' ? 'a' : 'h'))
+  return {
+    views: human.reduce((n, x) => n + x.count, 0), agentReads: v.rows.filter((x) => x.dims.v === 'a').reduce((n, x) => n + x.count, 0),
+    visitors: u.rows.reduce((n, x) => n + x.count, 0),
+    top: { ...table(['Path', 'Views', 'Visitors', 'Agent reads'], top.map(([k, a]) => [k, a.count, visitors.get(k) ?? 0, agent.get(k) ?? 0])),
+      trend: trends(human, v.r, paths, (x) => x.dims.p), links: paths.map((p) => (p === OTHER ? null : p)) } as TrendTable,
+    entries: table(['Entry page', 'Entries'], topOf(e.rows, (x) => x.dims.p, limit).map(([k, a]) => [k, a.count])),
+    agentTop: table(['Path', 'Agent reads'], [...agent].sort((a, b) => b[1] - a[1]).slice(0, limit)),
+    activity: { ...activity, title: 'Page views: human vs agent', type: 'stacked', unit: 'count' } as ChartData,
+  }
+}
+export const systemSearch = defineAction('admin.system.search', z.object({ range: rangeParam.optional() }), async ({ range }, actx) => {
+  const c = actx.settings.admin.stats.searches
+  return { enabled: actx.settings.admin.stats.enabled && c.enabled, ...(await searchTables(range, c.minCount, 100)) }
+}, staff)
+export const systemPages = defineAction('admin.system.pages', z.object({ range: rangeParam.optional() }), async ({ range }, actx) => {
+  return { enabled: actx.settings.admin.stats.enabled && actx.settings.admin.stats.pages.enabled, ...(await pageTables(range, 100)) }
 }, staff)
 
 // ---- jobs (tvine.tasks) --------------------------------------------------------------------------------------------------------

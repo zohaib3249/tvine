@@ -563,7 +563,7 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
   const filtered = !!(p.q?.trim() || Object.keys(p.filters ?? {}).length)
   const fullCount = a.showFullResultCount && filtered && !a.changelist ? await scoped(a, ctx).count() : undefined
   return { rows: out, count, page, pages: Math.max(1, Math.ceil(count / size)), ...(fullCount !== undefined && { fullCount }), ...(facets && { facets }) }
-}, read)
+}, { ...read, search: 'q' })
 
 export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
   const a = await gate(ctx, model, 'module')
@@ -703,7 +703,7 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
   const qs = applySearch(target, scoped(target, ctx), p.q).order(...(target.ordering ?? ['id']))
   const rows = await qs.slice((p.page - 1) * size, p.page * size + 1).all()   // one extra row tells `more`
   return { results: rows.slice(0, size).map((r: Row) => ({ pk: String(r.id), text: target.str(r) })), more: rows.length > size }
-}, read)
+}, { ...read, search: 'q' })
 
 export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
   const a = await gate(ctx, model, 'module')
@@ -763,7 +763,7 @@ export const search = defineAction('search', z.object({ q: z.string().min(1).max
     if (rows.length) out.push({ model: a._key, name: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(a._key.split('.')[1]!)}s`, results: rows.map((r: Row) => ({ pk: String(r.id), text: a.str(r) })) })
   }
   return { results: out }
-}, read)
+}, { ...read, search: 'q' })
 
 // per-user prefs (saved filters, column choices): get → every key; set → one key (value null deletes)
 const PREF_BYTES = 16 * 1024, PREF_KEYS = 100

@@ -88,6 +88,32 @@ export function fingerprint(sql: string, o: { mysql?: boolean } = {}): string {
 }
 const clean = (s: string, n = 60) => s.replace(/[\0-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '').trim().slice(0, n)
 export const AGENT_VIA = new Set(['agent', 'webmcp', 'tab'])
+// ---- visitor searches + page views (Top searches / Most visited pages) ------------------------------------------------
+// a search term as counted: trimmed, lowercased, one space, ≤ 64 chars. undefined = not counted: empty, or it looks like
+// personal data or a secret (an email, a phone / card / long digit run, a token or hex string over 20 chars)
+export function searchTerm(raw: string): string | undefined {
+  const t = clean(raw.normalize('NFKC'), 1000).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 64).trim()
+  if (!t) return undefined
+  if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(t)) return undefined                                  // email
+  if (/\d{7,}/.test(t.replace(/(?<=\d)[\s().+\-/]+(?=\d)/g, ''))) return undefined          // phone, card, long digit run
+  if (/[0-9a-f]{21,}/.test(t) || t.split(' ').some((w) => w.length > 20 && /\d/.test(w))) return undefined   // hex / token
+  return t
+}
+const ASSET = /^\/_next\/|\.(?:m?js|css|map|png|jpe?g|gif|svg|ico|webp|avif|bmp|woff2?|ttf|otf|eot|txt|xml|json|webmanifest|mp4|webm|mp3|pdf|zip)$/i
+// a page view's path as counted: no fragment, no query except settings.admin.stats.pages.keepParams, never an excluded
+// prefix (admin, /tvine, media) or a static asset. undefined = not counted.
+export function pagePath(raw: string, keep: string[] = [], skip: string[] = ['/admin', '/tvine', '/media']): string | undefined {
+  const [path = '', query = ''] = raw.split('#')[0]!.split('?')
+  let p = path || '/'
+  try { p = decodeURI(p) } catch { /* keep it encoded */ }
+  p = p.replace(/\/{2,}/g, '/')
+  if (skip.some((s) => s && (p === s || p.startsWith(s.endsWith('/') ? s : `${s}/`))) || ASSET.test(p)) return undefined
+  const q = new URLSearchParams(query)
+  const kept = keep.filter((k) => q.has(k)).map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(q.get(k)!.slice(0, 64))}`)
+  return clean(p, 200) + (kept.length ? `?${kept.join('&')}` : '')
+}
+export const OTHER = '(other)'
+const CAPS: Record<string, [dim: string, n: number]> = { search: ['term', 500], searcher: ['term', 500], page: ['p', 1000], visitor: ['p', 1000], entry: ['p', 1000] }
 const MAX_DIMS = 300                 // distinct dims per key per cell; more fold into { other: '1' }
 const HOUR = 3_600_000, MIN = 60_000, TICK = 10_000
 
@@ -109,6 +135,8 @@ export class Collector {
   mailFailedAt?: number
   private flushing?: Promise<void>
   private lastPrune = 0
+  private readonly capSeen = new WeakMap<Cells, Map<string, Set<string>>>()
+  private distinct = { hour: 0, seen: new Set<string>() }   // (key, term/path, visitor hash) seen this hour
   onLive?: (type: 'agent' | 'security' | 'tick') => void
 
   constructor(readonly o: {
@@ -116,6 +144,8 @@ export class Collector {
     mysql?: (alias: string) => boolean          // the alias's dialect quotes strings with "…" too
     route?: (path: string) => string | undefined // a page path → its route pattern (agent sessions show patterns)
     key?: string                                 // HMAC key for token labels (settings.secret): stable across servers
+    searches?: { enabled: boolean }
+    pages?: { enabled: boolean; keepParams: string[]; skip?: string[] }   // skip: path prefixes never counted (admin, media)
   } = { slowMs: 100, retentionDays: 30 }) {}
   private now(): number { return this.o.now?.() ?? Date.now() }
 
@@ -133,13 +163,22 @@ export class Collector {
       for (const k of this.minutes.keys()) if (k < m - HOUR) this.minutes.delete(k)
     }
     for (const cells of [this.hour.cells, mc]) {
+      const cap = CAPS[key]
+      if (cap) {   // first N distinct terms / paths per cell (hour and minute), the rest fold into (other)
+        let seen = this.capSeen.get(cells)
+        if (!seen) this.capSeen.set(cells, (seen = new Map()))
+        let s = seen.get(key)
+        if (!s) seen.set(key, (s = new Set()))
+        const v = dims[cap[0]]!
+        if (!s.has(v)) { if (s.size >= cap[1]) dims = { ...dims, [cap[0]]: OTHER }; else s.add(v) }
+      }
       let id = key + '\0' + JSON.stringify(dims)
       let c = cells.get(id)
       if (!c) {
         let n = 0
         for (const x of cells.values()) if (x.key === key) n++
-        if (n >= MAX_DIMS) { id = key + '\0{"other":"1"}'; c = cells.get(id) }
-        if (!c) cells.set(id, (c = { key, dims: n >= MAX_DIMS ? { other: '1' } : dims, acc: newAcc() }))
+        if (n >= MAX_DIMS && !cap) { id = key + '\0{"other":"1"}'; c = cells.get(id) }
+        if (!c) cells.set(id, (c = { key, dims: n >= MAX_DIMS && !cap ? { other: '1' } : dims, acc: newAcc() }))
       }
       addTo(c.acc, ms, by)
     }
@@ -167,6 +206,24 @@ export class Collector {
         if (s.status === '5xx') k.errors++
         addTo(k.acc, s.ms)
       }
+      return
+    }
+    if (s.k === 'search') {
+      if (this.o.searches?.enabled === false) return
+      const term = searchTerm(s.term)
+      if (!term) return
+      this.inc('search', { term, v: AGENT_VIA.has(s.via) ? 'a' : 'h', z: s.results === 0 ? '1' : '0' })
+      if (this.first('searcher', term, s.sid)) this.inc('searcher', { term })
+      return
+    }
+    if (s.k === 'page') {
+      if (this.o.pages?.enabled === false) return
+      const p = pagePath(s.path, this.o.pages?.keepParams, this.o.pages?.skip)
+      if (!p) return
+      this.inc('page', { p, v: s.agent ? 'a' : 'h' })
+      if (s.agent) return
+      if (this.first('visitor', p, s.sid)) this.inc('visitor', { p })
+      if (s.entry) this.inc('entry', { p })
       return
     }
     if (s.k === 'cache') { this.inc('cache', { c: s.alias, h: s.hit ? '1' : '0' }); return }
@@ -208,8 +265,20 @@ export class Collector {
     this.onLive?.('agent')
   }
 
+  // the first time this hour that this visitor (a keyed hash of the session, never the raw sid) hit key/value
+  private first(key: string, value: string, sid: string | undefined): boolean {
+    if (!sid) return false
+    const h = Math.floor(this.now() / HOUR)
+    if (h !== this.distinct.hour) this.distinct = { hour: h, seen: new Set() }
+    const id = `${key}\0${value}\0${createHmac('sha256', this.o.key ?? this.node).update(sid).digest('base64url').slice(0, 16)}`
+    if (this.distinct.seen.has(id) || this.distinct.seen.size >= 200_000) return false   // ponytail: per-hour distinct, summed across hours; HyperLogLog if exact uniques over days matter
+    this.distinct.seen.add(id)
+    return true
+  }
+
   // an agent's page read (ServerCtx 'read' hook): where its session is now
   read(sid: string, page: string): void {
+    this.record({ k: 'page', path: page, agent: true, sid, entry: false })
     const x = this.sessions.get((sidHash(sid) ?? '').slice(0, 12))
     if (!x) return
     const path = page.split('?')[0]!
@@ -338,6 +407,8 @@ export function newCollector(settings: Settings, route?: (path: string) => strin
     slowMs: settings.db.slowQueryMs || 100, retentionDays: settings.admin.stats.retentionDays, route,
     mysql: (alias) => { try { return connections.get(alias).dialect.name === 'mysql' } catch { return false } },
     key: Array.isArray(secret) ? secret[0] : secret,
+    searches: settings.admin.stats.searches,
+    pages: { ...settings.admin.stats.pages, skip: [settings.admin.path, '/tvine', '/media', settings.media.route.replace(/\/$/, '')] },
   })
 }
 // tap + periodic flush; the returned stop() unhooks and flushes once more

@@ -111,6 +111,16 @@ function markCalls(s: Snapshot, actions: ServerCtx['actions']): Snapshot {
   return s
 }
 
+// how many results a search returned: an array's length, or a page's count/total/items/results
+export function resultCount(r: unknown): number | undefined {
+  if (Array.isArray(r)) return r.length
+  if (!r || typeof r !== 'object') return undefined
+  const o = r as Record<string, unknown>
+  for (const k of ['count', 'total']) if (typeof o[k] === 'number') return o[k] as number
+  for (const k of ['items', 'results', 'rows', 'options']) if (Array.isArray(o[k])) return (o[k] as unknown[]).length
+  return undefined
+}
+
 // Requests whose caller discards snapshots (the human <Form>: formResult only reads ok/err/goto).
 const quiet = new WeakSet<Request>()
 const renderRead = new WeakSet<Request>()
@@ -130,6 +140,10 @@ export async function* dispatch(cmd: Command, server: ServerCtx, request: Reques
     const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
     statTap({ k: 'action', action: server.actions.get(cmd.action) ? cmd.action : '_unknown', outcome: err?.code ?? 'ok', via: viaOf(request),
       ...(request.agent.is && { agent: request.agent.client ?? request.headers.get('user-agent') ?? undefined }), ...(request.user.scopes && { token: String(request.user.id ?? '?') }), sid, ms: performance.now() - t0 })
+    // a visitor's search (rules.search names the term param): the collector normalizes it and drops PII-looking terms
+    const sp = server.actions.get(cmd.action)?.rules?.search, term = sp ? (cmd.params as Record<string, unknown> | undefined)?.[sp] : undefined
+    const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
+    if (typeof term === 'string' && term.trim() && ok) statTap({ k: 'search', term, results: resultCount(ok.result), via: viaOf(request), sid })
   }
   if (metrics.enabled) {
     const outcome = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')?.code ?? 'ok'

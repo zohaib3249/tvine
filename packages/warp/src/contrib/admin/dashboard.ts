@@ -1,4 +1,4 @@
-// The admin home (admin.dashboard / admin.widget): built-in widgets (traffic, logins, agents, top actions, top queries,
+// The admin home (admin.dashboard / admin.widget): built-in widgets (traffic, logins, agents, top actions, top searches, most visited pages,
 // KPIs) from the stats rollups, automatic model charts (charts.ts) when settings.admin.dashboard.autoCharts, and the
 // app's admin.site.registerWidget() ones. settings.admin.dashboard.widgets puts ids first; each user's own layout
 // (order / hidden / sizes) is the admin.prefs key 'dashboard.layout'.
@@ -13,7 +13,7 @@ import { checkPerm, type Ctx } from './options.js'
 import { site, type AdminWidget } from './sites.js'
 import { AGENT_VIA, rangeOf, timeSeries, type ChartData, type Range } from './stats.js'
 import { rangeParam } from './stats.js'
-import { actionTables, loginChart, statRows, systemAgents, systemQueries, trafficCharts } from './system.js'
+import { actionTables, loginChart, pageTables, searchTables, statRows, systemAgents, trafficCharts } from './system.js'
 
 type Size = 'sm' | 'md' | 'lg' | 'xl'
 type Spec = { id: string; title: string; size: Size; type: string; data?: { id: string; params?: Record<string, unknown> }; refreshMs?: number; component?: string; model?: string }
@@ -43,7 +43,10 @@ const BUILTIN: Record<string, Builtin> = {
   'agents.top': { title: 'Top agents', size: 'md', type: 'table', run: async (c, range) => (await systemAgents.run({ range }, c) as { topAgents: unknown }).topAgents },
   'actions.top': { title: 'Top actions', size: 'md', type: 'table', run: async (_c, range) => (await actionTables(range)).top },
   'actions.slowest': { title: 'Slowest actions', size: 'md', type: 'table', run: async (_c, range) => (await actionTables(range)).slowest },
-  'queries.top': { title: 'Top queries', size: 'lg', type: 'table', run: async (c, range) => (await systemQueries.run({ range }, c) as { top: unknown }).top },
+  // what visitors search for and read (never database queries: those are System → Database queries)
+  'searches.top': { title: 'Top searches', size: 'lg', type: 'table', run: async (c, range) => (await searchTables(range, c.settings.admin.stats.searches.minCount, 10)).top },
+  'pages.top': { title: 'Most visited pages', size: 'lg', type: 'table', run: async (_c, range) => (await pageTables(range, 10)).top },
+  'searches.none': { title: 'Searches with no results', size: 'md', type: 'table', run: async (c, range) => (await searchTables(range, c.settings.admin.stats.searches.minCount, 10)).noResults },
 }
 const readFn = (w: AdminWidget) => typeof w.data === 'function'
 
