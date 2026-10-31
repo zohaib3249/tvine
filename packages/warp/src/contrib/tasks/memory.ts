@@ -66,7 +66,7 @@ export class MemoryBroker implements Broker {
   private wake(): void { setImmediate(() => { this.ev.emit('wake'); bus.emit('enqueued') }) }
   private moved(r: Row): void {
     if (!r.sid) return
-    const m: Moved = { id: r.id, task: r.task, status: shown(r.status), progress: r.progress, message: r.message, sid: r.sid, userId: r.userId }
+    const m: Moved = { id: r.id, task: r.task, status: shown(r.status), progress: r.progress, message: r.message, sid: r.sid, userId: r.userId, attempts: r.attempts }
     setImmediate(() => this.ev.emit('moved', m))
   }
   // every status change goes through here: a new ver invalidates the row's old heap entries
@@ -162,9 +162,9 @@ export class MemoryBroker implements Broker {
     return { token, jobs, ...(jobs.length < n && { nextAt: this.nextAt() }) }
   }
 
-  private live(id: string, token: string): Row | undefined {
+  private live(id: string, token: string, expiredBefore?: number): Row | undefined {
     const r = this.jobs.get(id)
-    return r && r.token === token && r.status === 'running' ? r : undefined
+    return r && r.token === token && r.status === 'running' && (expiredBefore === undefined || (r.leaseUntil ?? 0) < expiredBefore) ? r : undefined
   }
 
   async heartbeat(runs: { id: string; token: string }[], leaseMs: number) {
@@ -221,16 +221,16 @@ export class MemoryBroker implements Broker {
     if (g?.status === 'pending' && status !== 'success') { g.status = 'failed'; g.purgeAt = purgeAt }
   }
 
-  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number }) {
-    const r = this.live(job.id, token)
+  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number; expiredBefore?: number }) {
+    const r = this.live(job.id, token, o.expiredBefore)
     if (!r) return false
     this.settle(r, { status, finishedAt: Date.now(), purgeAt: o.purgeAt, leaseUntil: null, ...(o.error !== undefined && { error: o.error }) })
     this.afterFinal(r, status, o.purgeAt)
     return true
   }
 
-  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean }) {
-    const r = this.live(id, token)
+  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean; expiredBefore?: number }) {
+    const r = this.live(id, token, o.expiredBefore)
     if (!r) return false
     this.settle(r, { status: 'queued', runAt: o.runAt, worker: null, token: null, leaseUntil: null, ...(o.error !== undefined && { error: o.error }), ...(o.refund && { attempts: r.attempts - 1 }) })
     this.wake()

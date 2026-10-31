@@ -22,6 +22,6 @@ export type StoreStatus = JobStatus | 'scheduled'
 export const shown = (s: StoreStatus): JobStatus => (s === 'scheduled' ? 'queued' : s)
 
 // what the progress relay needs of a row that moved
-export type Moved = Pick<JobRow, 'id' | 'task' | 'status' | 'progress' | 'message' | 'sid' | 'userId'>
+export type Moved = Pick<JobRow, 'id' | 'task' | 'status' | 'progress' | 'message' | 'sid' | 'userId' | 'attempts'>
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))

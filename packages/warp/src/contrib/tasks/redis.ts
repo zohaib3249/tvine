@@ -27,8 +27,8 @@ import type { Broker, Claim, ChordSpec, Final, NewJob, QueueStats, SigJSON, Work
 import type { JobRow, JobStatus } from './models.js'
 import { bus, checkClaim, shown, type Moved, type StoreStatus } from './shared.js'
 
-// prefix: overrides the alias's key prefix (tests, bench: a throwaway namespace on the same server)
-export interface RedisBrokerOpts { alias?: string; prefix?: string; leaseMs?: number; safetyMs?: number }
+// keys go through the alias's prefix only (settings.redis.<alias>.prefix): a separate namespace = a separate alias
+export interface RedisBrokerOpts { alias?: string; leaseMs?: number; safetyMs?: number }
 
 const INT = new Set(['priority', 'attempts', 'maxRetries', 'runAt', 'leaseUntil', 'expiresAt', 'groupIndex', 'createdAt', 'startedAt', 'finishedAt', 'purgeAt', 'updatedAt'])
 const BOOL = new Set(['acksLate', 'cancel'])
@@ -58,7 +58,7 @@ function decRow(h: Record<string, string>): JobRow | undefined {
 }
 
 // ---- Lua ------------------------------------------------------------------------------------------------
-// ARGV[1] = key base (prefix + 'tvine:{tasks}:'), KEYS[1] = base .. 'meta' (routes the script to the tag's slot)
+// ARGV[1] = key base (the alias prefix + '{tasks}:'), KEYS[1] = base .. 'meta' (routes the script to the tag's slot)
 const PRELUDE = `
 local B = ARGV[1]
 local wake = false
@@ -69,9 +69,9 @@ local function setStatus(id, from, to, created)
   redis.call('HSET', jk(id), 'status', to)
 end
 local function moved(id)
-  local f = redis.call('HMGET', jk(id), 'id', 'task', 'status', 'progress', 'message', 'sid', 'userId')
+  local f = redis.call('HMGET', jk(id), 'id', 'task', 'status', 'progress', 'message', 'sid', 'userId', 'attempts')
   if f[6] then
-    redis.call('PUBLISH', B .. 'moved', cjson.encode({ id = f[1], task = f[2], status = f[3], progress = f[4], message = f[5], sid = f[6], userId = f[7] }))
+    redis.call('PUBLISH', B .. 'moved', cjson.encode({ id = f[1], task = f[2], status = f[3], progress = f[4], message = f[5], sid = f[6], userId = f[7], attempts = f[8] }))
   end
 end
 local function ready(id, q, prio)
@@ -99,8 +99,9 @@ local function insert(row, now)
   if row.groupId then redis.call('ZADD', B .. 'gm:' .. row.groupId, tonumber(row.groupIndex or '0'), id) end
   moved(id)
 end
-local function live(id, token)
-  local f = redis.call('HMGET', jk(id), 'status', 'token', 'createdAt')
+local function live(id, token, expiredBefore)
+  local f = redis.call('HMGET', jk(id), 'status', 'token', 'createdAt', 'leaseUntil')
+  if expiredBefore and expiredBefore ~= '' and not (tonumber(f[4] or '0') < tonumber(expiredBefore)) then return nil end
   if f[1] == 'running' and f[2] == token then return f[3] end
   return nil
 end
@@ -261,10 +262,10 @@ redis.call('ZREM', B .. 'firing', ARGV[3])
 redis.call('ZADD', B .. 'gpurge', ARGV[5], ARGV[3])
 if ARGV[4] ~= '' then insert(cjson.decode(ARGV[4]), tonumber(ARGV[2])) end
 return done(1)`,
-  // ARGV: B, now, id, token, status, hasError, error, purgeAt
+  // ARGV: B, now, id, token, status, hasError, error, purgeAt, expiredBefore | ''
   finish: `
 local id = ARGV[3]
-local created = live(id, ARGV[4])
+local created = live(id, ARGV[4], ARGV[9])
 if not created then return 0 end
 ack(id)
 setStatus(id, 'running', ARGV[5], created)
@@ -274,10 +275,10 @@ redis.call('ZADD', B .. 'purge', ARGV[8], id)
 afterFinal(id, ARGV[5], ARGV[8])
 moved(id)
 return 1`,
-  // ARGV: B, now, id, token, runAt, hasError, error, refund
+  // ARGV: B, now, id, token, runAt, hasError, error, refund, expiredBefore | ''
   requeue: `
 local now, id = tonumber(ARGV[2]), ARGV[3]
-local created = live(id, ARGV[4])
+local created = live(id, ARGV[4], ARGV[9])
 if not created then return 0 end
 ack(id)
 redis.call('HDEL', jk(id), 'worker', 'token')
@@ -410,7 +411,7 @@ export class RedisBroker implements Broker {
 
   constructor(o: RedisBrokerOpts = {}) {
     this.alias = o.alias ?? 'default'
-    this.base = o.prefix !== undefined ? `${o.prefix}tvine:{tasks}:` : `${redisKey(this.alias, '{tasks}')}:`
+    this.base = `${redisKey(this.alias, '{tasks}')}:`
     this.safetyMs = o.safetyMs ?? 5_000
     this.leaseMs = o.leaseMs ?? 30_000
   }
@@ -500,12 +501,12 @@ export class RedisBroker implements Broker {
 
   private err(e: string | null | undefined): [string, string] { return e === undefined ? ['0', ''] : e === null ? ['null', ''] : ['1', e] }
 
-  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number }) {
-    return (await this.call('finish', this.now(), job.id, token, status, ...this.err(o.error), o.purgeAt)) === 1
+  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number; expiredBefore?: number }) {
+    return (await this.call('finish', this.now(), job.id, token, status, ...this.err(o.error), o.purgeAt, o.expiredBefore ?? '')) === 1
   }
 
-  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean }) {
-    const ok = (await this.call('requeue', this.now(), id, token, o.runAt, ...this.err(o.error), o.refund ? '1' : '0')) === 1
+  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean; expiredBefore?: number }) {
+    const ok = (await this.call('requeue', this.now(), id, token, o.runAt, ...this.err(o.error), o.refund ? '1' : '0', o.expiredBefore ?? '')) === 1
     if (ok) this.local('enqueued')
     return ok
   }
@@ -596,7 +597,7 @@ export class RedisBroker implements Broker {
         let m: Record<string, unknown>
         try { m = JSON.parse(msg) as Record<string, unknown> } catch { return }
         const v = (x: unknown) => (x === false || x === undefined ? null : x)
-        const mv: Moved = { id: String(m.id), task: String(m.task), status: shown(m.status as StoreStatus), progress: v(m.progress) === null ? null : Number(m.progress), message: v(m.message) as string | null, sid: v(m.sid) as string | null, userId: v(m.userId) as string | null }
+        const mv: Moved = { id: String(m.id), task: String(m.task), status: shown(m.status as StoreStatus), progress: v(m.progress) === null ? null : Number(m.progress), message: v(m.message) as string | null, sid: v(m.sid) as string | null, userId: v(m.userId) as string | null, attempts: Number(m.attempts ?? 0) }
         for (const f of [...this.movedFns]) { try { f(mv) } catch { /* a watcher's own failure */ } }
       })
     })()

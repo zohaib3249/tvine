@@ -401,13 +401,21 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       // 8. handler (atomic unless readOnly / opted out), raced against handlerMs
       const out = await execute(def, params, ctx, server, hold)
       // 9. committed: apply staged session data, bump rev, flush channel events
+      session.data = staged.data
+      // session fixation (cycleSession, e.g. login): rotate FIRST, so the new data (a login) is only ever saved
+      // under the NEW sid. A failed rotation kills the old sid and fails the request: never log in a planted sid.
+      if (wantsCycle(staged)) {
+        try { live = await server.sessions.rotate(session) } catch (e) {
+          server.log('error', 'session rotation failed; old session deleted', { action: def.id, error: errStr(e) })
+          await server.sessions.delete(sid).catch((d: unknown) => server.log('error', 'session delete failed', { action: def.id, error: errStr(d) }))
+          return [ev.err('internal', 'session could not be renewed; sign in again')]
+        }
+        markRotated(request, live)
+      }
       try {
-        session.data = staged.data
-        if (!def.rules?.readOnly) await server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
-        else await server.sessions.save(session)
+        if (!def.rules?.readOnly) await server.sessions.bump(live.sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
+        else await server.sessions.save(live)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
-        // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
-        if (wantsCycle(staged)) { live = await server.sessions.rotate(session); markRotated(request, live) }
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // every server's snapshot cache sees this commit before anyone gets the reply
       try { await server.settle?.() } catch (e) { server.log('error', 'shared cache invalidation failed', { action: def.id, error: errStr(e) }) }

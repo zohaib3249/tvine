@@ -1,8 +1,10 @@
 // `tvine tasks bench`: the configured broker's raw speed (no handler work), on a private copy of the store —
-// file: a sibling temp file on the same disk; redis: the same server under a throwaway key prefix; memory: a fresh one.
+// file: a sibling temp file on the same disk; redis: the same server through a throwaway alias (its own prefix); memory: a fresh one.
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
-import type { Broker, NewJob, TasksSettings } from './broker.js'
+import type { Settings } from '../../core/types.js'
+import { configureRedis } from '../../redis/index.js'
+import type { Broker, NewJob } from './broker.js'
 import { fileBroker } from './file.js'
 import { memoryBroker } from './memory.js'
 import { redisBroker } from './redis.js'
@@ -37,11 +39,16 @@ export async function runBench(b: Broker, name: string, o: BenchOpts): Promise<B
   return { broker: name, jobs: done, enqueuePerSec: Math.round(enqueuePerSec), jobsPerSec: Math.round(jobsPerSec), claimP50Ms: +pct(lat, 50).toFixed(3), claimP99Ms: +pct(lat, 99).toFixed(3) }
 }
 
-export async function benchConfigured(t: TasksSettings, o: BenchOpts): Promise<BenchResult> {
+export async function benchConfigured(settings: Pick<Settings, 'tasks' | 'redis'>, o: BenchOpts): Promise<BenchResult> {
+  const t = settings.tasks
   if (t.broker === 'db') throw new Error("tvine tasks bench measures the file / memory / redis brokers; 'db' is the app's own database")
   if (t.broker === 'memory') return runBench(memoryBroker(), 'memory', o)
   if (t.broker === 'redis') {
-    const b = redisBroker({ alias: t.redis ?? 'default', prefix: `bench-${randomUUID()}:` })
+    const conn = settings.redis[t.redis ?? 'default']
+    if (!conn) throw new Error(`settings.redis.${t.redis ?? 'default'} is not configured`)
+    const alias = `bench-${randomUUID()}`
+    configureRedis({ redis: { [alias]: { ...conn, prefix: `${conn.prefix ?? 'tvine:'}${alias}:` } } })
+    const b = redisBroker({ alias })
     try { return await runBench(b, 'redis', o) } finally {
       let cur = '0'
       do { const [next, keys] = await b.cmd<[string, string[]]>(['SCAN', cur, 'MATCH', `${b.base}*`, 'COUNT', 1000]); cur = next; if (keys.length) await b.cmd(['DEL', ...keys]) } while (cur !== '0')
