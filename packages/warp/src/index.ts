@@ -22,7 +22,7 @@ export type {
 } from './core/types.js'
 export { defineSettings, type SettingsInput } from './settings.js'
 export { defineUpload, DiskStorage, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
-export { allowAny, denyAgents, deniesAgents, humanOnly, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf } from './security/permissions.js'
+export { allowAny, denyAgents, deniesAgents, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf } from './security/permissions.js'
 export { authenticate, authBackend, cycleSession, setAuthBackend, type AuthBackend } from './core/auth.js'
 export {
   createAgentServer, currentRequest, currentSession, formDispatcher, loadSettings, type PageAccess, type AgentServer, type AgentServerOptions, type HeadersLike, type CookieJar,

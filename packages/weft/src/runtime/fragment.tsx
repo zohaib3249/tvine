@@ -30,7 +30,7 @@ export function describeWidget(id: string, parent: string, spec: WidgetSpec): Wi
   return {
     id, ...(parent && { p: parent }), kind: spec.kind, label: spec.label,
     ...(spec.sum && { sum: spec.sum }),
-    ...(spec.humanOnly && { ho: spec.humanOnly }),
+    ...(spec.humanOnly && { ho: spec.humanOnly.slice(0, 200) }),
     ...(state !== undefined && { state }),
     ...(Object.keys(ctl).length && { ctl }),
     ...(spec.entity && { e: spec.entity }),

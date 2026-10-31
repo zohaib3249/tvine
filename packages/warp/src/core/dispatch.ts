@@ -226,7 +226,8 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
   const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
   const known = cmd.cmdId ? await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }) : undefined
-  if (known) {
+  // humanOnly actions never replay here: the agent mark (agentCmd, tab mark) is only known after the session (4.1 below)
+  if (known && !server.actions.get(cmd.action)?.rules?.humanOnly) {
     const r = await server.idempotency.replay(known.sid, cmd.cmdId!, hash)
     if (r.hit === true) return { sid: known.sid, events: r.events }
   }
@@ -244,6 +245,13 @@ async function run(cmd: Command, server: ServerCtx, request: Request): Promise<R
   const original = request
   request = await asAgent(cmd, server, request, sid)
   if (request !== original) aliasRequest(request, original)   // a rotation in the pipeline reaches the transport's request too
+  // 4.1 humanOnly (widgets/human-only.md): THE security guard, before replay / in-flight dedupe, so an agent reusing a
+  // human's cmdId gets human_only, never the stored result. Every agent-marked request (MCP tools, `do`, agent HTTP,
+  // the tab agent mark/tail, WebMCP agentCmd) is refused; only a human's own request runs it. No rule or hook overrides it.
+  const ho = server.actions.get(cmd.action)?.rules?.humanOnly
+  if (ho && request.agent.is) {
+    return { sid, events: [ev.err('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : cmd.action}); ask the user to do it`, { reason: 'human_only' })] }
+  }
   const hold: Hold = {}
   // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
   const locked = (fn: () => Promise<Event[]>) => serial(sid, () => sessions.lock(sid, fn).catch((e: unknown) => {
@@ -334,12 +342,6 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   }
   // 4. resolve action
   if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid) })]
-  // 4.1 humanOnly (widgets/human-only.md): THE security guard. Every agent-marked request (MCP tools, `do`, agent HTTP,
-  // the tab agent mark/tail, WebMCP agentCmd) is refused; only a human's own request runs it. No rule or hook overrides it.
-  if (def.rules?.humanOnly && request.agent.is) {
-    const why = typeof def.rules.humanOnly === 'string' ? def.rules.humanOnly : def.id
-    return [ev.err('human_only', `only a human can do this here (${why}); ask the user to do it`, { reason: 'human_only' })]
-  }
 
   // handler state is staged: applied only after commit
   const outbox: [string, Event][] = []

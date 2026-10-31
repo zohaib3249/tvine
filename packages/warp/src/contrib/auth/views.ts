@@ -5,7 +5,7 @@ import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, TvineUser } from '../../core/types.js'
 import { onCommit } from '../../data/engine.js'
-import { humanOnly, isAuthenticated } from '../../security/permissions.js'
+import { denyAgents, isAuthenticated } from '../../security/permissions.js'
 import {
   AuthUser, checkResetToken, checkSecondFactor, hasSecondFactor, INVALID, login, logout, makeResetToken, newRecoveryCodes,
   newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
@@ -93,7 +93,7 @@ export const changePassword = defineAction('changePassword', z.object({ oldPassw
   // update_session_auth_hash: this session is re-bound to the new hash (on a new sid); every other one is now stale
   await login(ctx, fresh)
   return null
-}, { permissions: [isAuthenticated, humanOnly] })
+}, { permissions: [isAuthenticated, denyAgents] })
 
 // Always ok: the answer (and its timing: sending happens after commit, not awaited) never says whether the email exists.
 export const requestPasswordReset = defineAction('requestPasswordReset', z.object({ email: z.string().email().max(254) }), async ({ email }, ctx) => {
@@ -138,7 +138,7 @@ export const totpBegin = defineAction('totpBegin', z.object({ password: pw().opt
   else await Totp.create({ userId: id, secret: sealed })
   const issuer = ctx.settings.auth?.totp?.issuer ?? ctx.settings.site.name
   return { secret: base32(raw), uri: totpUri(raw, issuer, u.username) }   // shown this once
-}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
+}, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 
 export const totpConfirm = defineAction('totpConfirm', z.object({ otp: z.string().max(10) }), async ({ otp }, ctx) => {
   const u = sessionOnly(ctx)
@@ -151,7 +151,7 @@ export const totpConfirm = defineAction('totpConfirm', z.object({ otp: z.string(
   const codes = newRecoveryCodes()
   for (const c of codes) await RecoveryCode.create({ userId: t.userId, digest: sha256(normCode(c)) })
   return { recoveryCodes: codes }
-}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
+}, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 
 export const totpDisable = defineAction('totpDisable', z.object({ password: pw() }), async ({ password }, ctx) => {
   const u = sessionOnly(ctx)
@@ -164,7 +164,7 @@ export const totpDisable = defineAction('totpDisable', z.object({ password: pw()
   await Totp.objects.filter({ userId: row.id }).delete()
   await RecoveryCode.objects.filter({ userId: row.id }).delete()
   return null
-}, { permissions: [isAuthenticated, humanOnly] })
+}, { permissions: [isAuthenticated, denyAgents] })
 
 // ---- personal access tokens ---------------------------------------------------------------------
 const SCOPE = /^(\*|read|[a-z][a-z0-9_]*\.(\*|[A-Za-z_$][\w$.]*))$/
@@ -183,7 +183,7 @@ export const createToken = defineAction('createToken', z.object({
   const expiresAt = new Date(Date.now() + days * 86_400_000)
   await Token.create({ userId: Number(u.id), name, key, digest, scopes: [...new Set(scopes)], expiresAt })
   return { token, key, name, scopes: [...new Set(scopes)], expiresAt: expiresAt.toISOString() }   // the token: shown this once
-}, { permissions: [isAuthenticated, humanOnly], secretResult: true })
+}, { permissions: [isAuthenticated, denyAgents], secretResult: true })
 
 export const listTokens = defineAction('listTokens', z.object({}), async (_p, ctx) =>
   (await Token.objects.filter({ userId: Number(me(ctx).id), revoked: false }).order('-createdAt').all(200)).map((t) => ({

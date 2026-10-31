@@ -37,7 +37,7 @@ export const actionLine = (a: { id: string; params: { name: string; type: string
 
 export const HINT2 = '#hint ~ id kind "label" k=v | controls · @type cols then rows, "-"=null · > href label · ! act(p:type) bind=<b> -> POST {action,params,sid,bind} · + more'
 
-const KV = ['of', 'count', 'next', 'shown', 'href', 'at', 'n', 'state', 'desc', 'does'] as const
+const KV = ['humanOnly', 'of', 'count', 'next', 'shown', 'href', 'at', 'n', 'state', 'desc', 'does'] as const
 
 // v2 body lines: `= title`, `~` node lines (+ rows / links / actions under them), `+` expand hints.
 export function notationBody(s: Shaped): string[] {

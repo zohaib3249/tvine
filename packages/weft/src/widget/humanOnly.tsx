@@ -13,17 +13,24 @@ export const HumanOnlyCtx = createContext<string | undefined>(undefined)
 export const BLOCKED = ['click', 'dblclick', 'auxclick', 'contextmenu', 'input', 'beforeinput', 'change', 'submit', 'reset',
   'keydown', 'keyup', 'keypress', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend'] as const
 
-// Capture on window (runs before React's root listeners, so onClickCapture handlers are covered too).
-// ponytail: the app's own programmatic events inside the wrapper are blocked as well (a button calling
-// hiddenFileInput.click()); use a <label> for those. React portals leave the DOM subtree: not covered here.
+// Capture on window (runs before React's root listener, so onClickCapture handlers are covered too).
+// An untrusted event dispatched synchronously while a trusted one is being handled passes: that is the page's
+// own code reacting to the human (Tabs calling t.click() on an arrow key, a key handler's requestSubmit()).
+// ponytail: "in progress" ends at the window bubble listener, or a 0 ms timer when a handler stopped propagation;
+// a script listening to the same human event can piggyback inside that window (page scripts are a known limit).
+// React portals leave the DOM subtree: not covered here.
+let trusted = false
+const done = () => { trusted = false }
 export function blockUntrusted(el: HTMLElement): () => void {
   const stop = (e: Event) => {
-    if (e.isTrusted || !(e.target instanceof Node) || !el.contains(e.target)) return
+    if (e.isTrusted) { trusted = true; setTimeout(done); return }
+    if (trusted || !(e.target instanceof Node) || !el.contains(e.target)) return
     e.stopImmediatePropagation()
     e.preventDefault()
   }
-  for (const t of BLOCKED) window.addEventListener(t, stop, true)
-  return () => { for (const t of BLOCKED) window.removeEventListener(t, stop, true) }
+  const end = (e: Event) => { if (e.isTrusted) done() }
+  for (const t of BLOCKED) { window.addEventListener(t, stop, true); window.addEventListener(t, end) }
+  return () => { for (const t of BLOCKED) { window.removeEventListener(t, stop, true); window.removeEventListener(t, end) } }
 }
 
 export function HumanOnly({ reason, children }: { reason: string; children?: ReactNode }) {

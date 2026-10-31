@@ -11,7 +11,6 @@ const tag = (p: Permission): Permission => Object.assign(p, { [AGENTS_DENIED]: t
 export const deniesAgents = (p: Permission): boolean => !!(p as { [AGENTS_DENIED]?: true })[AGENTS_DENIED]
 
 export const denyAgents: Permission = tag((ctx) => !ctx.agent?.is)
-export const humanOnly: Permission = denyAgents
 export const isAuthenticated: Permission = (ctx) => ctx.user.isAuthenticated
 const active = (ctx: PermissionCtx) => ctx.user.isAuthenticated && ctx.user.isActive !== false
 export const isStaff: Permission = (ctx) => active(ctx) && ctx.user.isStaff === true
