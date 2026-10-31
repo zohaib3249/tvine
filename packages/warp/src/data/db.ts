@@ -9,6 +9,7 @@ import { postgres as pgDialect } from './sql/dialects/postgres.js'
 import { mysql as mysqlDialect } from './sql/dialects/mysql.js'
 import type { Dialect } from './sql/dialect.js'
 import { resolveDbUrl } from '../settings.js'
+import { metrics, since } from '../core/metrics.js'
 
 // `sqlite` is the raw handle, present only on sqlite connections (tests and the sqlite runner use it)
 export interface Connection { alias: string; dialect: Dialect; driver: Driver; sqlite?: Database.Database }
@@ -33,10 +34,26 @@ export function sqlitePath(raw: string): string {
 }
 
 export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL): Connection {
-  if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: pgDriver(url.trim(), pool) }
-  if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: mysqlDriver(url.trim(), pool) }
-  const driver = sqliteDriver(sqlitePath(url))
+  if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: timed(pgDriver(url.trim(), pool), alias) }
+  if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: timed(mysqlDriver(url.trim(), pool), alias) }
+  const driver = timed(sqliteDriver(sqlitePath(url)), alias)
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
+}
+
+// metrics (BACKLOG #9): statement count + duration per alias, inside transactions / sessions too. In place, so a
+// driver's extras (sqlite db handle, pool stats) stay; a tx driver that IS this one is already timed.
+function timed<D extends Driver>(d: D, alias: string): D {
+  const { query, exec, transaction, session } = d
+  const time = <T>(op: string, p: Promise<T>) => {
+    if (!metrics.enabled) return p
+    const t0 = performance.now()
+    return p.finally(() => metrics.observe('tvine_db_query_duration_seconds', { db: alias, op }, since(t0)))
+  }
+  d.query = (sql, params) => time('query', query.call(d, sql, params))
+  d.exec = (sql, params) => time('exec', exec.call(d, sql, params))
+  d.transaction = <T>(fn: (tx: Driver) => Promise<T>, opts?: { signal?: AbortSignal }) => transaction.call(d, (tx) => fn(tx === d ? tx : timed(tx, alias)), opts) as Promise<T>
+  if (session) d.session = <T>(fn: (x: Driver) => Promise<T>) => session.call(d, (x) => fn(x === d ? x : timed(x, alias))) as Promise<T>
+  return d
 }
 
 class ConnectionHandler {

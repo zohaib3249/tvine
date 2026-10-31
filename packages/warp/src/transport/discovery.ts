@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ActionManifest } from '../core/actions.js'
 import type { ActionRef, Settings } from '../core/types.js'
 import { connections } from '../data/db.js'
+import { originOf } from './tab.js'
 
 export interface RouteInfo { path: string; name?: string }
 export interface HealthStats { sessions: number; db?: unknown; extra?: Record<string, unknown> }   // extra: apps' sections (ServerCtx.health)
@@ -17,6 +18,23 @@ export interface DiscoveryDeps {
   routes: RouteInfo[]
   stats: () => HealthStats
   startedAt: number
+  // BACKLOG #11: own = the app ships its robots.txt (public/ or an app/robots route): we serve none.
+  // sitemap = the app serves /sitemap.xml; admin = the admin panel's path when tvine.admin is installed
+  robots?: { own: boolean; sitemap: boolean; admin?: string }
+}
+
+// The default robots.txt: crawlers may read the agent surface, never Tvine internals or the admin.
+// (Bot-protection layers: exempt these same paths so agents can reach them.)
+export function robotsTxt(settings: Settings, o: { sitemap?: string; admin?: string }): string {
+  const r = settings.robots
+  return [
+    'User-agent: *',
+    ...['/llms.txt', '/agent.txt', '/.well-known/tvine.json', '/tvine/manifest', '/mcp', ...r.allow].map((p) => `Allow: ${p}`),
+    ...['/tvine/', ...(o.admin ? [`${o.admin}/`] : []), ...r.disallow].map((p) => `Disallow: ${p}`),
+    ...r.extra,
+    ...(o.sitemap ? ['', `Sitemap: ${o.sitemap}`] : []),
+    '',
+  ].join('\n')
 }
 
 export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
@@ -42,7 +60,7 @@ const JSON_CT = 'application/json; charset=utf-8'
 const CACHED = 'public, max-age=3600'
 
 export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
-  const { settings, manifest, routes, stats, startedAt } = deps
+  const { settings, manifest, routes, stats, startedAt, robots } = deps
   const send = (res: ServerResponse, type: string, cache: string, body: string) => {
     res.writeHead(200, { 'content-type': type, 'cache-control': cache })
     res.end(body)
@@ -85,6 +103,13 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
       case '/.well-known/tvine.json': return get(JSON_CT, CACHED, () => wellKnown)
       case '/tvine/manifest': return get(JSON_CT, CACHED, () => site)
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
+      case '/robots.txt': {
+        if (!robots || robots.own) return next()
+        // an auto sitemap link is absolute from this request's Host (validated by originOf): Vary keeps caches per host
+        const auto = robots.sitemap && !settings.robots.sitemap ? originOf(req, settings) : ''
+        if (auto) res.setHeader('vary', 'host')
+        return get('text/plain; charset=utf-8', CACHED, () => robotsTxt(settings, { sitemap: settings.robots.sitemap ?? (auto ? `${auto}/sitemap.xml` : undefined), admin: robots.admin }))
+      }
       case '/tvine/health':
         return get(JSON_CT, 'no-store', () => {
           const { sessions, db = connections.stats(), extra } = stats()   // pool stats unless the caller supplies db
