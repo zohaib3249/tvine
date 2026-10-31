@@ -188,7 +188,7 @@ async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, str
   }
   // AllValuesFieldListFilter: the distinct values in use
   const key = f.key(s.field!)
-  const vals = await a.model.objects.values(key).distinct().order(key).all(200)
+  const vals = await a.getQueryset(ctx).values(key).distinct().order(key).all(200)   // Django: model_admin.get_queryset(request)
   return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
 }
 // Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
