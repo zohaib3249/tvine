@@ -180,19 +180,25 @@ export interface Settings {
   header: string                    // default 'x-tvine' (also Accept: text/tvine)
   formats: { default: 'json' | 'notation'; notationPath: boolean }
   trustProxy: number                // XFF hops to trust
-  session: { ttlMs: number; cookieName: string; max: number }   // max: live sessions kept; past it the least recently used is evicted
+  // Named connections (docs/design/conventions/backends.md). `default` falls back to REDIS_URL. Every subsystem
+  // whose backend is 'redis' names one of these (its `redis` key, default 'default').
+  redis: Record<string, RedisConnection>
+  session: { ttlMs: number; cookieName: string; max: number   // max: live sessions kept; past it the least recently used is evicted
+    backend: Backend; redis: string }
+  channels: { backend: Backend; redis: string }                 // pub/sub fan-out + Last-Event-ID replay
   limits: {
     bodyBytes: number
     handlerMs: number
     rate: { limit: number; windowMs: number }
     sseConnPerIp: number
+    backend: Backend; redis: string                               // rate limits, idempotency, login throttle, tab agent marks
   }
   socket: boolean
   mcp: { tools: 'both' | 'generic' | 'typed'; exclude: string[]; maxTools: number }
   middleware: Middleware[]
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string }
-  snapshotCache: { ttlMs: number }      // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
+  snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
     url: string
@@ -207,11 +213,17 @@ export interface Settings {
   audit: boolean                    // v1.1
   // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
   // SIGTERM grace, how long final job rows are kept
-  tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number }
+  // broker: the job store (tvine.tasks picks the default); redis: the settings.redis alias a 'redis' broker uses
+  tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
+    broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings
 }
+
+export type Backend = 'memory' | 'redis'
+// settings.redis.<alias>. url: redis:// or rediss:// (TLS); prefix: every key this connection writes starts with it.
+export interface RedisConnection { url: string; tls?: boolean; prefix?: string; connectTimeoutMs?: number }
 
 // settings.auth: `user` is the BYO resolver (overrides everything); the rest configures tvine.auth
 // (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.

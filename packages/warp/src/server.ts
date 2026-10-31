@@ -19,7 +19,8 @@ import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { signBind } from './security/sign.js'
-import { defineSettings, merge, type SettingsInput } from './settings.js'
+import { checkBackends, defineSettings, merge, type SettingsInput } from './settings.js'
+import { closeRedis, configureRedis } from './redis/index.js'
 import { channelTransport } from './transport/channel.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
@@ -100,6 +101,7 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   const base = file ? ((await importApp(file)) as { default: Settings }).default : {}
   const settings = defineSettings(merge(base as Record<string, unknown>, over) as SettingsInput)
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
+  checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   return settings
 }
 
@@ -135,6 +137,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
+  configureRedis(settings, (level, msg, data) => say(data ? `${msg} ${JSON.stringify(data)}` : msg, level === 'error' ? 'warn' : level))
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
   const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (route, sid) => snapshot(route, sid) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
@@ -284,6 +287,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       }
       if (next) await (await next.catch(() => undefined))?.app.close?.()
       await connections.closeAll()
+      await closeRedis()
     },
   }
 }

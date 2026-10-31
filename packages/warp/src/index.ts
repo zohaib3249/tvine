@@ -34,3 +34,4 @@ export { discoveryTransport, buildSiteManifest, loadNextRoutes, type RouteInfo, 
 export { channelTransport, type ChannelDeps } from './transport/channel.js'
 export { TabHub, tabTransport, TAB_LIMITS, type TabAnswer, type AgentState } from './transport/tab.js'
 export { routeMatcher } from './transport/routes.js'
+export { getRedis, getSubscriber, redisKey, configureRedis, closeRedis, redis, RedisConnections, type RedisClient } from './redis/index.js'
