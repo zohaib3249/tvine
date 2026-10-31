@@ -36,7 +36,16 @@ export function resolve(t: TableDef, name: string, table?: string): { f: F; fiel
 // ---- compiled expressions -------------------------------------------------------------------------
 // f: output field (its fromDb converts the value back); cur: the currency expression of a money output;
 // agg: contains an aggregate (→ HAVING / GROUP BY); round: Avg of money (cents → whole cents)
-export interface Compiled { e: Expr; f?: F; cur?: Expr; agg: boolean; round?: boolean }
+// curGuard: the currency is only known at run time (two money operands whose currencies may differ):
+// reads see NULL currency → refused at hydration; update() refuses it outright
+export interface Compiled { e: Expr; f?: F; cur?: Expr; agg: boolean; round?: boolean; curGuard?: boolean }
+const isMoney = (c: Compiled) => c.f?.kind === 'money'
+// a money output must know its currency: a bare amount (Value(7), Coalesce(price, 0)) is refused
+const needCur = (c: Compiled, what: string): Expr => {
+  if (!c.cur) throw invalid(`${what}: a money value needs its currency — Value({ value, currency }) or a money field`)
+  return c.cur
+}
+const sameExpr = (a?: Expr, b?: Expr) => JSON.stringify(a) === JSON.stringify(b)
 
 const OUT = { int: new IntField(), float: new FloatField(), text: new TextField(), bool: new BoolField(), datetime: new DatetimeField() }
 const NUMERIC = new Set<Kind>(['int', 'float', 'money', 'id'])
@@ -135,7 +144,12 @@ export class Scope {
 
   // ---- expressions --------------------------------------------------------------------------------
   expr(x: unknown, hint?: F): Compiled {
-    if (!(x instanceof Expression)) return { e: param(hint ? named(hint, () => hint.toDb(x, this.d)[0]) : x), f: hint, agg: false }
+    if (!(x instanceof Expression)) {
+      if (!hint) return { e: param(x), agg: false }
+      const v = named(hint, () => hint.toDb(x, this.d))
+      // money: {value, currency} carries its currency; a bare number is an amount only
+      return { e: param(v[0]), f: hint, agg: false, ...(hint.kind === 'money' && v[1] != null ? { cur: param(v[1]) } : {}) }
+    }
     switch (x.kind) {
       case 'F': return this.ref((x as any).name)
       case 'value': return this.expr((x as any).value, hint)
@@ -149,14 +163,33 @@ export class Scope {
         const b = this.expr(r, op === '+' || op === '-' ? a.f : undefined)
         for (const s of [a, b]) if (s.f && !NUMERIC.has(s.f.kind)) throw invalid(`arithmetic needs numeric fields (got ${s.f.kind})`)
         const f = a.f ?? b.f
-        return { e: bin(op, a.e, b.e), f: f?.kind === 'id' ? OUT.int : f, agg: a.agg || b.agg, ...(f?.kind === 'money' ? { cur: (a.cur ?? b.cur) } : {}) }
+        const base = { e: bin(op, a.e, b.e), f: f?.kind === 'id' ? OUT.int : f, agg: a.agg || b.agg }
+        if (!isMoney(a) && !isMoney(b)) return base
+        // money: + / - another amount in the SAME currency; * / by a plain number only
+        if (op === '*' || op === '/') {
+          if (!isMoney(a) || isMoney(b)) throw invalid(`money can only be ${op === '*' ? 'multiplied' : 'divided'} by a plain number (money on the left)`)
+          return { ...base, f: a.f, cur: needCur(a, 'money arithmetic'), curGuard: a.curGuard }
+        }
+        const other = isMoney(a) ? b : a
+        if (other.f && !isMoney(other)) throw invalid(`cannot add / subtract a ${other.f.kind} field to money (use an amount, or a money field)`)
+        const m = isMoney(a) ? a : b
+        const ca = needCur(m, 'money arithmetic')
+        if (!other.cur || sameExpr(ca, other.cur)) return { ...base, f: m.f, cur: ca, curGuard: m.curGuard || other.curGuard }
+        // two currencies: equal at run time, or NULL (a read refuses it; update() refuses the expression)
+        return { ...base, f: m.f, cur: { t: 'case', whens: [[bin('=', ca, other.cur), ca]] }, curGuard: true }
       }
       case 'func': {
         const { fn: name, args } = x as any as { fn: 'lower' | 'upper' | 'length' | 'coalesce' | 'abs'; args: Expression[] }
         const cs: Compiled[] = []
         for (const a of args) cs.push(this.expr(a, cs[0]?.f))
         const f = name === 'length' ? OUT.int : name === 'lower' || name === 'upper' ? OUT.text : cs[0]?.f
-        return { e: { t: 'func', fn: name, args: cs.map(c => c.e) }, f, agg: cs.some(c => c.agg) }
+        const out: Compiled = { e: { t: 'func', fn: name, args: cs.map(c => c.e) }, f, agg: cs.some(c => c.agg) }
+        if (f?.kind === 'money' && name === 'coalesce') {
+          // the currency of the first non-null amount
+          out.cur = { t: 'func', fn: 'coalesce', args: cs.map(c => ({ t: 'case' as const, whens: [[isNotNull(c.e), needCur(c, 'Coalesce')] as [Expr, Expr]] })) }
+          out.curGuard = cs.some(c => c.curGuard)
+        } else if (f?.kind === 'money' && name === 'abs') { out.cur = needCur(cs[0], 'Abs'); out.curGuard = cs[0].curGuard }
+        return out
       }
       case 'cast': {
         const { e, to } = x as any as { e: Expression; to: 'int' | 'float' | 'text' }
@@ -176,7 +209,12 @@ export class Scope {
         for (const w of whens) if (w.then instanceof Expression && w.then.kind !== 'value') hintF ??= this.expr(w.then).f
         const ws = whens.map(w => { const t = this.expr(w.then, hintF); thens.push(t); return [this.q(w.cond), t.e] as [Expr, Expr] })
         const el = otherwise === undefined ? undefined : this.expr(otherwise, hintF)
-        return { e: { t: 'case', whens: ws, ...(el ? { else: el.e } : {}) }, f: hintF, agg: thens.some(t => t.agg) || !!el?.agg }
+        const out: Compiled = { e: { t: 'case', whens: ws, ...(el ? { else: el.e } : {}) }, f: hintF, agg: thens.some(t => t.agg) || !!el?.agg }
+        if (hintF?.kind === 'money') {   // each branch's currency, picked by the same conditions
+          out.cur = { t: 'case', whens: ws.map(([c], i) => [c, needCur(thens[i], 'Case')] as [Expr, Expr]), ...(el ? { else: needCur(el, 'Case') } : {}) }
+          out.curGuard = thens.some(t => t.curGuard) || !!el?.curGuard
+        }
+        return out
       }
       case 'agg': {
         const { fn: name, e, distinct, filter } = x as any as { fn: 'sum' | 'count' | 'avg' | 'min' | 'max'; e?: Expression; distinct: boolean; filter?: QNode }
@@ -479,7 +517,7 @@ function buildSelect(s: Scope, def: ModelDef, spec: QuerySpec, limit?: number): 
     if (c.f && c.f.kind !== 'm2m') {
       const names = c.f.columns(alias)
       push(c.e, names[0], c.agg)
-      if (names[1]) push(c.cur ?? raw('0'), names[1], c.agg)
+      if (names[1]) push(needCur(c, alias), names[1], c.agg)
     } else push(c.e, alias, c.agg)
   }
   let firstCol: Expr | undefined
@@ -630,7 +668,7 @@ export function compileAggregate(spec: QuerySpec, t: TableDef, aggs: [string, Ex
       if (!c.agg) throw invalid(`aggregate(): ${name} is not an aggregate (Sum, Count, Avg, Min, Max)`, name)
       const names = c.f ? c.f.columns(name) : [name]
       cols.push(as(c.e, names[0]))
-      if (names[1]) cols.push(as(c.cur ?? raw('0'), names[1]))
+      if (names[1]) cols.push(as(needCur(c, name), names[1]))
       outs.push({ key: name, alias: name, f: c.f, round: c.round })
     }
     return { s, select: { t: 'select' as const, from: t.name, cols, ...(s.joins.length ? { joins: s.joins } : {}), ...(where ? { where } : {}) }, outs }

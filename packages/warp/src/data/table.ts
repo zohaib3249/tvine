@@ -92,10 +92,15 @@ export class Table {
     const set: [string, Expr][] = []
     for (const [name, v] of Object.entries(patch)) {
       const { f, field, col: c } = resolve(this, name)
-      if (v instanceof Expression) {   // F / Case / Coalesce …: the first (amount) column; values convert through the field
+      if (v instanceof Expression) {   // F / Case / Coalesce …: values convert through the field
         const x = writeScope(this, d).expr(v, f)
         if (x.agg) throw new DomainError('invalid_param', `${this.name}.${field}: update() cannot use an aggregate`, field)
-        set.push([f.columns(field)[0], x.e])
+        const cols = f.columns(field)
+        if (f.kind === 'money') {   // amount AND currency, both from the expression
+          if (x.f?.kind !== 'money' || !x.cur) throw new DomainError('invalid_param', `${this.name}.${field}: set money from a money expression or Value({ value, currency })`, field)
+          if (x.curGuard) throw new DomainError('invalid_param', `${this.name}.${field}: the expression mixes money values whose currencies may differ`, field)
+          set.push([cols[0], x.e], [cols[1], x.cur])
+        } else set.push([cols[0], x.e])
         continue
       }
       if (v instanceof Delta) {
