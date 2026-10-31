@@ -112,6 +112,14 @@ export class SessionStore {
     return s.rev
   }
 
+  // rev + 1 ONLY (the data is not written): for a writer outside the command path (the tasks progress relay), so it
+  // can never overwrite a command's data. The new rev, or undefined when the session is gone. Memory: the object.
+  async bumpRev(sid: Sid): Promise<Rev | undefined> {
+    const s = this.once.get(sid) ?? this.byId.get(sid)
+    if (!s) return undefined
+    return ++s.rev
+  }
+
   // Persist the session's data without a rev bump (a readOnly action may still write session.data).
   // Memory: the object IS the store.
   async save(_s: Session): Promise<void> {}

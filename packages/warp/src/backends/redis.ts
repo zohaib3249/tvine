@@ -5,7 +5,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { deserialize, serialize } from 'node:v8'
 import { nanoid } from 'nanoid'
-import type { ActionRules, ChannelLayer, Event, Replayed, Session, Settings, Sid, Snapshot } from '../core/types.js'
+import type { ActionRules, ChannelLayer, Event, Replayed, Rev, Session, Settings, Sid, Snapshot } from '../core/types.js'
 import { RING } from '../core/channels.js'
 import { newSession, SessionBusy, SessionStore, type SessionKey, type SessionStoreOptions } from '../core/session.js'
 import { bucketsFor, checkRate, type Limiter, type RateKeys, type RateResult } from '../security/ratelimit.js'
@@ -76,6 +76,12 @@ local k = ARGV[1] .. 's:' .. ARGV[2]
 if redis.call('EXISTS', k) == 0 then return false end
 redis.call('HSET', k, 'rev', ARGV[3], 'data', ARGV[4])
 return redis.call('HINCRBY', k, 'ver', 1)`)
+// rev + 1 only; ver + 1 so every server's cached copy reloads (rev and data) on its next read
+const BUMP_REV = new Script(`
+local k = ARGV[1] .. 's:' .. ARGV[2]
+if redis.call('EXISTS', k) == 0 then return false end
+redis.call('HINCRBY', k, 'ver', 1)
+return redis.call('HINCRBY', k, 'rev', 1)`)
 const COOKIE = new Script(`
 local p, sid, ttl = ARGV[1], ARGV[2], tonumber(ARGV[4])
 if redis.call('EXISTS', p .. 's:' .. sid) == 0 then return false end
@@ -185,6 +191,14 @@ export class RedisSessionStore extends SessionStore {
   override async save(s: Session): Promise<void> {
     const ver = await SAVE.run<number | null>(await this.client(), [], [this.prefix, s.sid, s.rev, enc(s.data)])
     if (ver !== null) this.ver.set(s, Number(ver))
+  }
+
+  override async bumpRev(sid: Sid): Promise<Rev | undefined> {
+    const rev = await BUMP_REV.run<number | null>(await this.client(), [], [this.prefix, sid])
+    if (rev === null) return undefined
+    const s = this.byId.get(sid)
+    if (s) s.rev = Number(rev)   // its ver stays behind: the next load refreshes the data too
+    return Number(rev)
   }
 
   override async rotate(old: Session): Promise<Session> {
