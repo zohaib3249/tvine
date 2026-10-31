@@ -46,7 +46,7 @@ export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
   const title = o.name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
   const t = (s: string) => `tvine ${s}`
   const deps: Record<string, string> = {
-    tvine: tvineDep(opts), next: '16.4.2', react: '19.3.1', 'react-dom': '19.3.1',
+    tvine: tvineDep(opts), next: '16.4.2', react: '19.3.1', 'react-dom': '19.3.1', zod: '^3.25.76',   // action params (views.ts)
     ...(db === 'postgres' ? { pg: '^8.13.0' } : db === 'mysql' ? { mysql2: '^3' } : {}),
   }
   const run = pm === 'npm' ? 'npx' : pm
@@ -223,9 +223,15 @@ ${run} tvine startapp blog     # apps/blog + installedApps + config/urls.ts
 | apps/<name>/ | an app (listed in installedApps): models, views, urls, admin, migrations |
 | app/ | Next.js pages (call the backend through \`api.*\`) |
 
+AI assistants (Claude Code, Cursor, Copilot, Codex): read \`AGENTS.md\` first.
+
 Claude Code: \`.mcp.json\` points at \`http://localhost:3000/mcp\`; start \`tvine dev\`, then run \`claude\` in this folder.
 `,
     'apps/.gitkeep': '',
+    // AI coding assistants: AGENTS.md is the cross-tool file; Claude Code imports it, Cursor references it
+    'AGENTS.md': readFileSync(join(PKG_DIR, 'AGENTS.md'), 'utf8'),
+    'CLAUDE.md': '@AGENTS.md\n\nThis is a Tvine project: AGENTS.md (imported above) has the layout, commands, recipes and rules.\n',
+    '.cursor/rules/tvine.mdc': '---\ndescription: Tvine framework guide (layout, commands, recipes, rules)\nalwaysApply: true\n---\n@AGENTS.md\n',
   }
   write(dir, files)
   return { dir, files: Object.keys(files) }
@@ -268,7 +274,7 @@ export default function Welcome() {
 ${[
   admin ? card('/admin', 'Admin', 'Manage your data. Create a login with tvine createsuperuser.') : '',
   card('/mcp', 'MCP endpoint', 'Your actions as tools for Claude and other agents at /mcp.'),
-  card('${DOCS}/blob/main/docs/getting-started.md', 'Docs', 'Models, views, urls, admin, tasks: Django, in TypeScript.'),
+  card(`${DOCS}/blob/main/docs/getting-started.md`, 'Docs', 'Models, views, urls, admin, tasks: Django, in TypeScript.'),
   card('/tvine/health', 'Health', 'Is the server up? /tvine/health'),
 ].filter(Boolean).join('\n')}
         </div>
@@ -279,6 +285,7 @@ tvine makemigrations && tvine migrate
 claude                              \`}<span className="c"># Claude Code reads .mcp.json: your actions are its tools</span></pre>
         </div>
         <p className="tv-foot">Connect Claude Code: <code>.mcp.json</code> points at http://localhost:3000/mcp.</p>
+        <p className="tv-foot">Using an AI assistant? It reads <code>AGENTS.md</code> (layout, commands, recipes, rules): Claude Code, Cursor, Copilot, Codex.</p>
       </div>
     </main>
   )

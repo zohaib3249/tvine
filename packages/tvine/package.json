@@ -37,6 +37,7 @@
     "node": ">=22.15"
   },
   "files": [
+    "AGENTS.md",
     "warp/bin",
     "warp/data",
     "warp/dist",
