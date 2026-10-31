@@ -25,6 +25,7 @@
 | ![Changelist with charts](docs/images/admin-orders.png) Changelist with charts | ![Change form](docs/images/admin-product-form.png) Change form |
 | ![System Agents](docs/images/admin-agents.png) System → Agents: who is using your app | ![System Traffic](docs/images/admin-traffic.png) System → Traffic |
 | ![System Health](docs/images/admin-health.png) System → Health | ![Example store](docs/images/shop-home.png) An example store app built with Weft |
+| ![Welcome page](docs/images/welcome.png) `tvine startproject` welcome page | ![Admin on mobile](docs/images/admin-mobile.png) Admin on mobile |
 
 Screenshots are from an example store app built on Tvine.
 
