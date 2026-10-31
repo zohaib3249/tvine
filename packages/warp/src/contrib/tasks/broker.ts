@@ -1,14 +1,21 @@
 // The job store boundary (docs/design/contrib/tasks.md §Broker). task.ts, worker.ts, beat.ts, relay.ts, views.ts and
-// cli.ts reach jobs, chords, locks, schedules and worker rows ONLY through `Broker`; `dbBroker()` keeps them in the
-// tasks_* tables. A Redis / fast job store (#12) implements the same interface.
+// cli.ts reach jobs, chords, locks, schedules and worker rows ONLY through `Broker`. `settings.tasks.broker` picks
+// the store: 'file' (default: its own SQLite WAL file, file.ts), 'memory' (one process, memory.ts), 'redis'
+// (multi-host, redis.ts) or 'db' (`dbBroker()` below: the tasks_* tables of the app's database).
 // Every write after a claim matches id + token + status='running': the token fences a worker whose lease expired,
 // so it can never overwrite the attempt that re-claimed its job.
 import { randomUUID } from 'node:crypto'
-import { EventEmitter } from 'node:events'
 import { connections, type Connection } from '../../data/db.js'
 import { atomic } from '../../data/engine.js'
 import { dec } from '../../index.js'
+import { DEFAULTS } from '../../settings.js'
+import { fileBroker } from './file.js'
+import { memoryBroker } from './memory.js'
 import { FINAL, Group, Job, Lock, Schedule, WorkerRow, type JobRow, type JobStatus } from './models.js'
+import { redisBroker } from './redis.js'
+import { bus, checkClaim, notify, type Moved } from './shared.js'
+
+export { bus, notify, type Moved }
 
 export type NewJob = Omit<JobRow, 'result' | 'error' | 'leaseUntil' | 'worker' | 'token' | 'progress' | 'message' | 'startedAt' | 'finishedAt' | 'purgeAt' | 'attempts' | 'cancel'> & Partial<JobRow>
 export interface SigJSON { task: string; args?: unknown; immutable?: boolean; opts?: { countdown?: number; priority?: number; queue?: string } }
@@ -28,8 +35,9 @@ export interface Broker {
   enqueueUnique(job: NewJob, key: string, windowMs: number, ttlMs: number): Promise<void>
   get(id: string): Promise<JobRow | undefined>
   list(f: { status?: string; queue?: string; limit: number }): Promise<JobRow[]>
-  // claimed rows (running, attempt counted) + their lease token. skipTasks: rate-limited tasks this worker must not take now
-  claim(c: Claim): Promise<{ token: string; jobs: JobRow[] }>
+  // claimed rows (running, attempt counted) + their lease token. skipTasks: rate-limited tasks this worker must not take now.
+  // nextAt (when fewer than n came back): the earliest delayed job's runAt, so an idle worker wakes for it
+  claim(c: Claim): Promise<{ token: string; jobs: JobRow[]; nextAt?: number }>
   // extend leases; which were lost (re-claimed / settled elsewhere) and which were revoked meanwhile
   heartbeat(runs: { id: string; token: string }[], leaseMs: number): Promise<{ lost: string[]; cancelled: string[] }>
   progress(id: string, token: string, pct: number, message: string | null): Promise<boolean>
@@ -54,19 +62,19 @@ export interface Broker {
   register(w: WorkerInfo): Promise<void>
   beat(name: string, running: number, processed: number): Promise<void>
   unregister(name: string): Promise<void>
-  cleanup(now: number): Promise<void>
+  // result TTL and housekeeping. callback: rebuilds a chord callback a crashed member left half-fired (redis)
+  cleanup(now: number, o?: { callback?: (sig: SigJSON, results: unknown[], parent: JobRow) => NewJob | undefined }): Promise<void>
   stats(leaseMs: number): Promise<QueueStats>
   // job rows that moved (progress, status) for rows with an owner session; returns unsubscribe
-  watch(fn: (j: JobRow) => void, o?: { minMs?: number; maxMs?: number }): () => void
+  watch(fn: (j: Moved) => void, o?: { minMs?: number; maxMs?: number }): () => void
+  // pushed wake-ups (another process enqueued / requeued): the worker claims at once. A broker with onWake also
+  // calls fn on a safety poll (≤5 s); without it the worker polls settings.tasks.pollMs
+  onWake?(fn: () => void): () => void
+  compact?(): Promise<{ before: number; after: number }>
+  close?(): Promise<void>
 }
 
-// in-process notifications: a write in this process wakes workers ('enqueued') and watchers ('moved') at once
-export const bus = new EventEmitter()
-bus.setMaxListeners(0)
-const later = (e: 'enqueued' | 'moved' | 'outbox') => setImmediate(() => bus.emit(e))
-export const notify = later
-
-const QUEUE_RE = /^[a-z0-9_-]{1,64}$/i
+const later = notify
 const MAX_CLAIM = 100
 const isDup = (e: unknown, what: string) => (e as { code?: string })?.code === 'domain' && String((e as Error).message).includes(`${what} must be unique`)
 
@@ -113,8 +121,7 @@ class DbBroker implements Broker {
   }
 
   async claim({ worker, queues, n, leaseMs, now = Date.now(), skipTasks = [] }: Claim) {
-    if (!Number.isInteger(n) || n < 1 || n > MAX_CLAIM) throw new Error(`claim: n must be 1-${MAX_CLAIM}`)
-    if (queues !== '*' && (!queues.length || !queues.every((x) => QUEUE_RE.test(x)))) throw new Error('claim: bad queue names')
+    checkClaim(n, queues)
     const token = randomUUID()
     const set = { worker, token, leaseUntil: now + leaseMs, now }
     const f: Filter = { queues, now, skip: skipTasks.slice(0, 100) }
@@ -139,7 +146,7 @@ class DbBroker implements Broker {
     }
     if (!ids.length) return { token, jobs: [] }
     const jobs = await Job.objects.filter([{ field: 'id', op: 'in', value: ids }]).all()
-    return { token, jobs: jobs.filter((j) => j.token === token) }
+    return { token, jobs: jobs.filter((j) => j.token === token).sort((x, y) => y.priority - x.priority || x.runAt - y.runAt || (x.id < y.id ? -1 : 1)) }
   }
 
   async heartbeat(runs: { id: string; token: string }[], leaseMs: number) {
@@ -363,9 +370,36 @@ class DbBroker implements Broker {
 }
 
 // ---- the configured store ------------------------------------------------------------------
+export type TasksSettings = typeof DEFAULTS.tasks
+let conf: TasksSettings = DEFAULTS.tasks
 let current: Broker | undefined
-export const broker = (): Broker => (current ??= dbBroker())
+
+export function openBroker(t: TasksSettings): Broker {
+  switch (t.broker) {
+    case 'db': return dbBroker()
+    case 'memory': return memoryBroker()
+    case 'redis': return redisBroker({ alias: t.redis ?? 'default', leaseMs: t.leaseMs })
+    case 'file': return fileBroker({ path: t.file, durable: t.durable })
+    default: throw new Error(`settings.tasks.broker "${String(t.broker)}": use 'file', 'memory', 'redis' or 'db'`)
+  }
+}
+
+export const broker = (): Broker => (current ??= openBroker(conf))
 export function setBroker(b: Broker): void { current = b }
+export const brokerKind = (): TasksSettings['broker'] => conf.broker
+
+// settings.tasks changed (configureTasks): a different store is opened on next use; the old one is closed
+export function configureBroker(t: TasksSettings): void {
+  const key = (x: TasksSettings) => JSON.stringify([x.broker, x.file, x.durable, x.redis])
+  const changed = key(t) !== key(conf)
+  conf = t
+  if (changed && current) { const old = current; current = undefined; void old.close?.() }
+}
+export async function closeBroker(): Promise<void> {
+  const b = current
+  current = undefined
+  await b?.close?.()
+}
 
 // ---- raw statements: constant identifiers through quoteIdent, every value a param -------------
 type Stmt = [sql: string, params: unknown[]]

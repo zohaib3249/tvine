@@ -8,7 +8,7 @@ import { currentAction } from '../../core/dispatch.js'
 import { DomainError } from '../../core/errors.js'
 import { onCommit } from '../../data/engine.js'
 import { DEFAULTS } from '../../settings.js'
-import { broker, bus, notify, type ChordSpec, type NewJob, type SigJSON } from './broker.js'
+import { broker, bus, configureBroker, notify, type ChordSpec, type NewJob, type SigJSON } from './broker.js'
 import { nextFire, parseCron } from './cron.js'
 import { Outbox, type JobRow, type JobStatus } from './models.js'
 
@@ -65,7 +65,11 @@ export class Retry extends Error {
 
 // ---- config (settings.tasks, set by the app's ready() and by tvine worker) ---------------------
 export const config: { tasks: typeof DEFAULTS.tasks } = { tasks: { ...DEFAULTS.tasks } }
-export function configureTasks(tasks: typeof DEFAULTS.tasks): void { config.tasks = { ...tasks } }
+// a partial settings.tasks is completed from the defaults; a changed store is reopened on its next use
+export function configureTasks(tasks: Partial<typeof DEFAULTS.tasks>): void {
+  config.tasks = { ...DEFAULTS.tasks, ...tasks }
+  configureBroker(config.tasks)
+}
 
 // ---- defineTask + registry ---------------------------------------------------------------------
 const NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
