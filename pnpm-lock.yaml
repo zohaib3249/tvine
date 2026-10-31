@@ -123,6 +123,12 @@ importers:
         specifier: 4.1.14
         version: 4.1.14
 
+  packages/create-tvine:
+    dependencies:
+      '@tvine/warp':
+        specifier: workspace:*
+        version: link:../warp
+
   packages/inspect:
     devDependencies:
       zod:

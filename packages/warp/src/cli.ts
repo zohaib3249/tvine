@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, realpathSync, watch, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
@@ -38,35 +38,57 @@ async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promis
 }
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
-  start [--port 3000] [--host h] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
-                                --api-only: no frontend (Next runs separately with TVINE_API_URL)
-  dev [--port 3000] [--host h]  runserver: in-process next dev (needs next installed)
-  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)
+
+Project
+  startproject <name> [dir] [--db sqlite|postgres|mysql] [--no-admin] [--no-tasks] [--pm pnpm|npm|yarn] [--no-install] [--local]
+                                a ready-to-run project (--local: link this clone's packages; not on npm yet)
+  startapp <name> [--model Name]  apps/<name>/: models, views, urls, admin, tests (+ one include line in urls.ts)
   check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
   routes                        print the action manifest
   show_urls                     print the urls.ts routes: pattern, methods, name, action
   generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
+
+Database
   makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
   migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
                                 <app>: forward to its latest; <target>: forward or ROLL BACK to it
   sqlmigrate <app> <migration> [--backwards]
+  showmigrations
   dumpdata [app[.model] …] [--output f.json]   fixtures as JSON (fk order)
   loaddata <f.json> …           load fixtures in one transaction (upsert by pk)
-  showmigrations
+  encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)
+
+Run
+  dev [--port 3000] [--host h]  runserver: in-process next dev (needs next installed)
+  build                         next build (the pages tvine start serves)
+  start [--port 3000] [--host h] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
+                                --api-only: no frontend (Next runs separately with TVINE_API_URL)
+  shell                         Node REPL: settings loaded, db configured, every model by name
+  test [vitest args]            vitest run
+
+Users
   createsuperuser [--username u] [--email e] [--noinput]   (tvine.auth; --noinput reads TVINE_SUPERUSER_USERNAME/_EMAIL/_PASSWORD)
   changepassword <username>                                 (tvine.auth)
+  privacy export|erase <user>   tvine.auth: a user's data as JSON (--output file) / anonymize it (--yes)
+
+Jobs
   worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
   audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
-  privacy export|erase <user>   tvine.auth: a user's data as JSON (--output file) / anonymize it (--yes)
-  encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)`
+
+Tools
+  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (needs @tvine/inspect; dev only)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
 const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
 // per command: its own flags and how many positionals it takes
 const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
+  startproject: { options: { db: str, 'no-admin': bool, 'no-tasks': bool, pm: str, 'no-install': bool, local: bool }, args: [1, 2] },
+  startapp: { options: { model: str }, args: [1, 1] },
+  build: { options: {}, args: [0, 0] },
+  shell: { options: {}, args: [0, 0] },
   start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
   dev: { options: { port: str, host: str }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
@@ -90,6 +112,19 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
 }
 
 class Usage extends Error {}
+
+const relativeTo = (p: string) => { const r = relative(process.cwd(), p); return r && !r.startsWith('..') ? r : p }
+// a project binary (node_modules/.bin walking up from cwd) or, with onPath, a command on PATH; inherits the terminal
+function binRun(name: string, args: string[], io: Io, cwd = process.cwd(), onPath = false): Promise<number> {
+  let bin = name
+  if (!onPath) {
+    let dir = cwd
+    while (!existsSync(join(dir, 'node_modules/.bin', name)) && dirname(dir) !== dir) dir = dirname(dir)
+    bin = join(dir, 'node_modules/.bin', name)
+    if (!existsSync(bin)) { io.err(`tvine: ${name} is not installed in this project`); return Promise.resolve(1) }
+  }
+  return new Promise((ok) => spawn(bin, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' }).on('exit', (c) => ok(c ?? 1)).on('error', (e) => { io.err(`tvine: ${e.message}`); ok(1) }))
+}
 
 // .env files (env.md): real environment variables beat them all (loadEnvFile never overrides)
 const loadEnv = () => { loadDotenv() }
@@ -139,6 +174,7 @@ function devWatch(apps: string, io: Io): { close(): void } {
 
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
   const [cmd, ...rest] = argv
+  if (cmd === 'test') return await binRun('vitest', ['run', ...rest], io)   // vitest flags pass through untouched
   const spec = cmd === undefined ? undefined : COMMANDS[cmd]
   if (!spec) { io.err(USAGE); return 1 }
   try {
@@ -148,10 +184,47 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
-    if (args.length < spec.args[0]) throw new Usage(cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
+    if (args.length < spec.args[0]) throw new Usage(cmd === 'startproject' || cmd === 'startapp' ? `usage: tvine ${cmd} <name>` : cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
+      case 'startproject': {
+        const { startProject } = await import('./cli/scaffold.js')
+        const pm = (o.pm as string | undefined) ?? 'pnpm'
+        const r = startProject({ name: args[0]!, dir: args[1], db: o.db as string | undefined, admin: !o['no-admin'], tasks: !o['no-tasks'], pm, local: !!o.local })
+        io.out(`created ${r.dir} (${r.files.length} files)`)
+        if (r.warning) io.err(r.warning)
+        if (!o['no-install']) {
+          io.out(`${pm} install …`)
+          if (await binRun(pm, ['install'], io, r.dir, true) !== 0) io.err(`tvine startproject: ${pm} install failed; run it yourself`)
+        }
+        const x = pm === 'npm' ? 'npx' : pm
+        io.out(['', 'next steps:', `  cd ${relativeTo(r.dir)}`, ...(o['no-install'] ? [`  ${pm} install`] : []),
+          `  ${x} tvine migrate`, `  ${x} tvine createsuperuser`, `  ${x} tvine dev          # http://localhost:3000`,
+          `  ${x} tvine startapp blog --model Post`].join('\n'))
+        return 0
+      }
+      case 'startapp': {
+        const { startApp } = await import('./cli/scaffold.js')
+        const r = startApp(apps, args[0]!, o.model as string | undefined)
+        io.out(`created ${relativeTo(r.dir)}/: ${r.files.join(', ')}`)
+        io.out(r.urls === 'added' ? `added include('${args[0]}.urls') to urls.ts` : `add to urls.ts urlpatterns: ${r.urls}`)
+        io.out(`apps/* are discovered automatically (no INSTALLED_APPS line). next: tvine makemigrations && tvine migrate`)
+        return 0
+      }
+      case 'build': return await binRun('next', ['build'], io)
+      case 'shell': {
+        const settings = await loadSettings()
+        connections.configure(settings)
+        const models = Object.values(await discoverModels(apps, { installed: settings.installedApps })).flat()
+        const repl = await import('node:repl')
+        const r = repl.start({ prompt: 'tvine> ' })
+        r.context.settings = settings
+        for (const m of models) r.context[m.name[0]!.toUpperCase() + m.name.slice(1).replace(/_(\w)/g, (_, c: string) => c.toUpperCase())] = m
+        io.out(`models: ${models.map((m) => m.name).join(', ') || '(none)'} (await works: await Post.objects.all())`)
+        r.on('exit', () => { void connections.closeAll().then(() => io.exit(0)) })
+        return undefined
+      }
       case 'start':
       case 'dev': {
         const port = o.port === undefined ? env.int('PORT', 3000) : Number(o.port)
