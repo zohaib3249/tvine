@@ -541,12 +541,12 @@ async function storeFiles(a: ModelAdmin, ctx: Ctx, p: z.infer<typeof saveParams>
     const f = owner && formFields(owner).includes(m![3]!) ? owner.model.fields[m![3]!] : undefined
     const up = f && fieldMeta(m![3]!, f, metaOpts(owner!)).upload
     if (!up) throw bad(part.field, 'not a file field of this form')
+    if (m![1] && !p.inlines?.[m![1]]?.[+m![2]!]) throw bad(part.field, 'no such inline row')   // the row's values come in params
     const file = await storePart(part, { maxBytes: up.maxBytes ?? FILE_MAX, types: typesOf(up.accept), uploadTo: f!.opts.uploadTo }, ctx.settings.media)
     stored.push(file.key)
     if (!m![1]) p.values[m![3]!] = file.key
     else {
-      const rows = ((p.inlines ??= {})[m![1]] ??= [])
-      ;(rows[+m![2]!] ??= {})[m![3]!] = file.key
+      p.inlines![m![1]]![+m![2]!]![m![3]!] = file.key
     }
   }
 }

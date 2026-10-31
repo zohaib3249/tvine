@@ -18,7 +18,7 @@ const hasFile = (v: unknown): boolean => typeof File !== 'undefined' && (v insta
 async function multipart(id: string, params: Record<string, unknown>): Promise<ApiResult> {
   const fd = new FormData()
   const strip = (v: unknown, path: string): unknown => {
-    if (v instanceof File) { fd.append(path, v); return undefined }
+    if (v instanceof File) { fd.append(path.replace(/^(values|inlines)\./, ''), v); return undefined }   // the API's part names: `<field>`, `<inline>.<i>.<field>`
     if (Array.isArray(v)) return v.map((x, i) => strip(x, `${path}.${i}`))
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, strip(x, path ? `${path}.${k}` : k)]))
     return v
