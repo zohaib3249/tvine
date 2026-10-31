@@ -352,8 +352,8 @@ export class Worker {
       const error = j.cancel ? 'revoked' : !j.acksLate ? 'worker lost (acks early: not re-delivered)' : 'worker lost'
       const ttl = taskById(j.task)?.opts.resultTtlMs ?? config.tasks.resultTtlMs
       const ok = status === 'queued'
-        ? await this.broker.requeue(j.id, j.token!, { runAt: now, error })
-        : await this.broker.finish(j, j.token!, status, { error, purgeAt: now + ttl })
+        ? await this.broker.requeue(j.id, j.token!, { runAt: now, error, expiredBefore: now })   // still expired: a late heartbeat wins
+        : await this.broker.finish(j, j.token!, status, { error, purgeAt: now + ttl, expiredBefore: now })
       if (ok) { n++; this.log('warn', status === 'queued' ? 'job.redelivered' : `job.${status}`, { worker: this.name, jobId: j.id, task: j.task, attempt: j.attempts, from: j.worker, error }) }
     }
     return n

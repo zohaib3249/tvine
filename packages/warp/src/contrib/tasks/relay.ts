@@ -32,12 +32,15 @@ export class ProgressRelay {
   private async post(j: Moved): Promise<void> {
     const s = j.sid ? await this.server.sessions.peek({ sid: j.sid }) : undefined
     if (!s) return   // another web process's session, or gone
-    // the first server to claim this exact change publishes it (and bumps the rev once)
-    if (this.claim && !(await this.claim(createHash('sha1').update(JSON.stringify([j.id, j.status, j.progress, j.message])).digest('hex')))) return
-    // a final status bumps the rev (the page may show what the job changed); progress keeps it
-    if (FINAL.includes(j.status)) { s.rev++; await this.server.sessions.save(s) }
+    // the first server to claim this exact change publishes it (and bumps the rev once); the attempt keeps a retried
+    // job's identical progress apart from the previous attempt's
+    if (this.claim && !(await this.claim(createHash('sha1').update(JSON.stringify([j.id, j.attempts, j.status, j.progress, j.message])).digest('hex')))) return
+    // a final status bumps the rev (the page may show what the job changed); progress keeps it. Rev only, under the
+    // session's lock: never a save of this (maybe stale) copy, which would overwrite a command's data
+    let rev = s.rev
+    if (FINAL.includes(j.status)) rev = (await this.server.sessions.lock(s.sid, () => this.server.sessions.bumpRev(s.sid))) ?? rev
     const e: Event = {
-      kind: 'update', sid: s.sid, rev: s.rev, source: 'job',
+      kind: 'update', sid: s.sid, rev, source: 'job',
       job: { id: j.id, task: j.task, status: j.status, ...(j.progress != null && { progress: j.progress }), ...(j.message != null && { message: j.message }) },
     }
     this.server.channels.group(`sid:${s.sid}`).send(e)

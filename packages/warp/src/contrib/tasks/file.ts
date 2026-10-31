@@ -82,7 +82,7 @@ function dec(r: Record<string, unknown>): JobRow {
   o.status = shown(o.status as StoreStatus)
   return o as JobRow
 }
-const moved = (r: Record<string, unknown>): Moved => ({ id: r.id as string, task: r.task as string, status: shown(r.status as StoreStatus), progress: r.progress as number | null, message: r.message as string | null, sid: r.sid as string | null, userId: r.user_id as string | null })
+const moved = (r: Record<string, unknown>): Moved => ({ id: r.id as string, task: r.task as string, status: shown(r.status as StoreStatus), progress: r.progress as number | null, message: r.message as string | null, sid: r.sid as string | null, userId: r.user_id as string | null, attempts: r.attempts as number })
 const busy = (e: unknown) => { const c = (e as { code?: string })?.code ?? ''; return c.startsWith('SQLITE_BUSY') || c === 'SQLITE_LOCKED' }
 
 // ---- wake sentinels ------------------------------------------------------------------------------------
@@ -244,10 +244,10 @@ export class FileBroker implements Broker {
     this.touched(row.sid)
   }
   // a CAS on id + token + status='running' (the fence); the row after, or undefined when the token lost
-  private settle(id: string, token: string, patch: Partial<Record<Col | 'status', unknown>>): Record<string, unknown> | undefined {
-    const keys = Object.keys(patch) as Col[]
-    const r = this.st(`UPDATE job SET ${keys.map((k) => `${SNAKE[k]} = ?`).join(', ')}, updated_at = ?, seq = ? WHERE id = ? AND token = ? AND status = 'running' RETURNING *`)
-      .get(...keys.map((k) => enc(k, patch[k])), Date.now(), this.seq(), id, token) as Record<string, unknown> | undefined
+  private settle(id: string, token: string, patch: Partial<Record<Col | 'status', unknown>>, expiredBefore?: number): Record<string, unknown> | undefined {
+    const keys = Object.keys(patch) as Col[], exp = expiredBefore !== undefined
+    const r = this.st(`UPDATE job SET ${keys.map((k) => `${SNAKE[k]} = ?`).join(', ')}, updated_at = ?, seq = ? WHERE id = ? AND token = ? AND status = 'running'${exp ? ' AND lease_until < ?' : ''} RETURNING *`)
+      .get(...keys.map((k) => enc(k, patch[k])), Date.now(), this.seq(), id, token, ...(exp ? [expiredBefore] : [])) as Record<string, unknown> | undefined
     if (r) this.touched(r.sid)
     return r
   }
@@ -355,20 +355,20 @@ export class FileBroker implements Broker {
     if (cb) this.insert(cb, Date.now())
   }
 
-  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number }) {
+  async finish(job: JobRow, token: string, status: Final, o: { error?: string | null; purgeAt: number; expiredBefore?: number }) {
     return this.tx(() => {
-      if (!this.settle(job.id, token, { status, finishedAt: Date.now(), purgeAt: o.purgeAt, leaseUntil: null, ...(o.error !== undefined && { error: o.error }) })) return false
+      if (!this.settle(job.id, token, { status, finishedAt: Date.now(), purgeAt: o.purgeAt, leaseUntil: null, ...(o.error !== undefined && { error: o.error }) }, o.expiredBefore)) return false
       this.afterFinal(job, status, o.purgeAt)
       return true
     })
   }
 
-  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean }) {
+  async requeue(id: string, token: string, o: { runAt: number; error?: string | null; refund?: boolean; expiredBefore?: number }) {
     return this.tx(() => {
       const r = this.settle(id, token, {
         status: o.runAt > Date.now() ? 'scheduled' : 'queued', runAt: o.runAt, worker: null, token: null, leaseUntil: null,
         ...(o.error !== undefined && { error: o.error }),
-      })
+      }, o.expiredBefore)
       if (!r) return false
       if (o.refund) this.st('UPDATE job SET attempts = attempts - 1 WHERE id = ?').run(id)
       this.flags.wake = true
@@ -489,7 +489,7 @@ export class FileBroker implements Broker {
   watch(fn: (j: Moved) => void) {
     let cur = { seq: (this.st(`SELECT v FROM meta WHERE k = 'seq'`).get() as { v: number }).v, id: '' }
     let busyNow = false, again = false, stopped = false
-    const page = this.st(`SELECT id, task, status, progress, message, sid, user_id, seq FROM job WHERE sid IS NOT NULL AND (seq, id) > (?, ?) ORDER BY seq, id LIMIT 500`)
+    const page = this.st(`SELECT id, task, status, progress, message, sid, user_id, attempts, seq FROM job WHERE sid IS NOT NULL AND (seq, id) > (?, ?) ORDER BY seq, id LIMIT 500`)
     const pull = () => {
       if (stopped) return
       if (busyNow) { again = true; return }

@@ -91,7 +91,7 @@ export async function tasksCommand(apps: string, settings: Settings, args: strin
     if (sub === 'bench') {
       const o = { jobs: int(o_.jobs, 'jobs', 1) ?? 5000, workers: int(o_.workers, 'workers', 1) ?? 4, batch: int(o_.batch, 'batch', 1) ?? settings.tasks.claimBatch }
       if (o.batch > 100) throw new Error('--batch must be <= 100')
-      const r = await benchConfigured(settings.tasks, o)
+      const r = await benchConfigured(settings, o)
       io.out(`${r.broker}: ${r.jobs} jobs · enqueue ${r.enqueuePerSec}/s (one transaction each) · claim+complete ${r.jobsPerSec} jobs/s (${o.workers} claimers, batch ${o.batch}) · claim p50 ${r.claimP50Ms} ms, p99 ${r.claimP99Ms} ms${r.busyRetries ? ` · ${r.busyRetries} SQLITE_BUSY retries` : ''}`)
       return 0
     }
