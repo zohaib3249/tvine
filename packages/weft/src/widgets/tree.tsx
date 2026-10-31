@@ -2,11 +2,12 @@
 import { useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control, ControlCtx, Json } from '../widget/types.js'
-import { AutoOff, flag, headlessOf, inner, part, useControllable, type Slots, type SlotProps } from './_parts.js'
+import { flag, headlessOf, inner, part, useControllable, type Slots, type SlotProps } from './_parts.js'
 
 // widgets/tree.md: APG Tree View on <ul role=tree>. The whole tree is SSR'd (collapsed groups `hidden inert`),
 // so open/close are `rendered` for headless agents; single selection maps to `url` when given.
-// Agents act through the real toggles and labels, so onExpandedChange / onSelectedChange run.
+// Agents act through the real toggles and labels, so onExpandedChange / onSelectedChange run; controls list
+// only expanded-visible items. App `render(n)` content is not under AutoOff, so its own elements register.
 // ponytail: static nodes only (no lazy branches), no move, no typeahead.
 type C = Record<string, Control<any, any>>
 type S = { expanded: string[]; selected?: string[] }
@@ -21,13 +22,15 @@ export type TreeProps = {
 }
 
 const flat = (ns: TreeNode[]): TreeNode[] => ns.flatMap((n) => [n, ...flat(n.children ?? [])])
+// Only items whose ancestors are all expanded: collapsed groups are `inert`, so the agent can't reach inside.
+const visible = (ns: TreeNode[], open: string[]): TreeNode[] => ns.flatMap((n) => [n, ...(open.includes(n.id) ? visible(n.children ?? [], open) : [])])
 const strip = (ns: TreeNode[]): Json[] => ns.map((n) => ({ id: n.id, label: n.label, ...(n.children?.length && { children: strip(n.children) }) }))
 
 const useTree = defineWidget<TreeProps, S, C>({
   kind: 'tree',
   state: (p) => ({ expanded: p.expanded ?? [], ...(p.selection !== 'none' && { selected: p.selected ?? [] }) }),
   controls: ({ props: p, el }) => {
-    const all = flat(p.nodes), open = p.expanded ?? []
+    const open = p.expanded ?? [], all = visible(p.nodes, open)
     const branches = all.filter((n) => n.children?.length).map((n) => n.id)
     const press = (ctx: ControlCtx, id: string, part_: string) => inner<HTMLElement>(ctx, el(), `[data-id="${CSS.escape(id)}"] > [data-part=${part_}]`).click()
     const c: C = {}
@@ -107,5 +110,5 @@ export function Tree(props: DefinedProps<TreeProps, C>) {
   return <>{w.embed}{part('ul', {
     ref: w.ref, ...w.props, role: 'tree', 'aria-label': label, 'aria-multiselectable': selection === 'multiple' || undefined,
     'data-tvine-widget': 'tree', 'data-disabled': flag(disabled), onKeyDown: onKey,
-  }, { className, ...slots?.root }, s, <AutoOff>{nodes.map((n) => item(n, 1))}</AutoOff>)}</>
+  }, { className, ...slots?.root }, s, nodes.map((n) => item(n, 1)))}</>
 }
