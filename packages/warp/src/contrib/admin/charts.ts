@@ -17,6 +17,7 @@ import { labelOf } from './meta.js'
 import { checkPerm, type ChartSpec, type Ctx, type ModelAdmin } from './options.js'
 import { site } from './sites.js'
 import { bucketsOf, floorTo, rangeOf, rangeParam, round, type ChartData, type Range } from './stats.js'
+import { DASH_RATE } from './stats.js'
 import { changelistQs, choicesOf, filterSpecs } from './views.js'
 
 type Spec = ChartSpec & { id: string; title: string; aggregate: NonNullable<ChartSpec['aggregate']> }
@@ -146,11 +147,16 @@ async function gateChart(ctx: Ctx, model: string): Promise<ModelAdmin> {
   return a
 }
 const modelKey = z.string().regex(/^[a-z][a-z0-9_]*\.[a-zA-Z0-9_]+$/).max(100)
-const read = { permissions: [isStaff], readOnly: true }
+const read = { permissions: [isStaff], readOnly: true, rate: DASH_RATE }
 
-export const charts = defineAction('charts', z.object({ model: modelKey }), async ({ model }, ctx) => {
-  const a = await gateChart(ctx, model)
-  return { charts: chartSpecs(a).map(({ id, title, type, aggregate, field, by, size }) => ({ id, title, type, aggregate, ...(field && { field }), ...(by && { by }), ...(size && { size }) })) }
+// data: true = each chart's result inline (the changelist strip: one round trip)
+export const charts = defineAction('charts', z.object({
+  model: modelKey, data: z.coerce.boolean().optional(), range: rangeParam.optional(), filters: z.record(z.string().max(200)).optional(),
+}), async (p, ctx) => {
+  const a = await gateChart(ctx, p.model)
+  const specs = chartSpecs(a)
+  const results = p.data ? await Promise.all(specs.map((s) => chart.run({ model: p.model, chart: s.id, range: p.range, filters: p.filters }, ctx).catch((e: Error) => ({ error: e.message.slice(0, 200) })))) : []
+  return { charts: specs.map(({ id, title, type, aggregate, field, by, size }, i) => ({ id, title, type, aggregate, ...(field && { field }), ...(by && { by }), ...(size && { size }), ...(p.data && { result: results[i] }) })) }
 }, read)
 
 export const chart = defineAction('chart', z.object({

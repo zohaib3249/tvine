@@ -18,14 +18,15 @@ import { AdminStat } from './models.js'
 import {
   AGENT_VIA, Collector, merge, newAcc, quantile, rangeOf, round, timeSeries, topOf, type Acc, type ChartData, type Range, type StatRow, type Table,
 } from './stats.js'
+import { DASH_RATE } from './stats.js'
 import { rangeParam } from './stats.js'
 
 // set by hooks.ts ready(): the server this admin runs in and its collector
 export const runtime: { ctx?: ServerCtx; collector?: Collector; startedAt: number; lag?: ReturnType<typeof monitorEventLoopDelay> } = { startedAt: Date.now() }
 
 const isSuperuser: Permission = (c) => c.user.isSuperuser === true && c.user.isActive !== false
-const staff = { permissions: [isStaff], readOnly: true }
-const superuser = { permissions: [isStaff, isSuperuser], readOnly: true }
+const staff = { permissions: [isStaff], readOnly: true, rate: DASH_RATE }
+const superuser = { permissions: [isStaff, isSuperuser], readOnly: true, rate: DASH_RATE }
 const forbidden = () => new DomainError('forbidden', 'forbidden: not allowed')
 const col = () => runtime.collector ?? new Collector()
 const ms = (n: number) => Math.round(n * 10) / 10

@@ -6,11 +6,13 @@ import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
 import { isStaff } from '../../security/permissions.js'
-import { chartSpecs } from './charts.js'
+import { chart, chartSpecs } from './charts.js'
+import { recent } from './views.js'
 import { AdminPref } from './models.js'
 import { checkPerm, type Ctx } from './options.js'
 import { site, type AdminWidget } from './sites.js'
 import { AGENT_VIA, rangeOf, timeSeries, type ChartData, type Range } from './stats.js'
+import { DASH_RATE } from './stats.js'
 import { rangeParam } from './stats.js'
 import { actionTables, loginChart, statRows, systemAgents, systemQueries, trafficCharts } from './system.js'
 
@@ -51,7 +53,8 @@ async function may(ctx: Ctx, p?: string): Promise<boolean> {
   return !p || !!u.isSuperuser || (!!u.hasPerm && (await u.hasPerm(p)))
 }
 
-export const dashboard = defineAction('dashboard', z.object({}), async (_p, ctx) => {
+export const dashboard = defineAction('dashboard', z.object({ range: rangeParam.optional() }), async ({ range }, ctx) => {
+  if (range && typeof range === 'object') { try { rangeOf(range) } catch (e) { throw new DomainError('invalid_param', `range: ${(e as Error).message}`, 'range') } }
   const s = ctx.settings.admin, superuser = !!ctx.request.user.isSuperuser
   const out: Spec[] = []
   if (s.stats.enabled) for (const [id, b] of Object.entries(BUILTIN)) if (!b.superuser || superuser) out.push({ id, title: b.title, size: b.size, type: b.type, data: { id: 'admin.widget', params: { id } } })
@@ -76,8 +79,21 @@ export const dashboard = defineAction('dashboard', z.object({}), async (_p, ctx)
   const first = s.dashboard.widgets
   out.sort((x, y) => (first.indexOf(x.id) < 0 ? 1e6 : first.indexOf(x.id)) - (first.indexOf(y.id) < 0 ? 1e6 : first.indexOf(y.id)))
   const pref = await AdminPref.objects.filter({ userId: String(ctx.request.user.id ?? ''), key: 'dashboard.layout' }).first()   // scope: ok (own prefs)
-  return { widgets: out, layout: pref?.value ?? null, autoRefreshMs: 30_000 }
-}, { permissions: [isStaff], readOnly: true })
+  // one round trip: every built-in / model / function widget's data inline (a dashboard is ~20 widgets; one call keeps
+  // it inside the session's rate budget). An ActionDef widget is still called by the UI.
+  const results = await Promise.all(out.map(async (w) => {
+    if (!w.data || !['admin.widget', 'admin.chart', 'admin.recent'].includes(w.data.id)) return undefined
+    try { return await runWidget(ctx, w, range) } catch (e) { return { error: (e as Error).message.slice(0, 200) } }
+  }))
+  return { widgets: out.map((w, i) => (results[i] === undefined ? w : { ...w, result: results[i] })), layout: pref?.value ?? null, autoRefreshMs: 60_000 }
+}, { permissions: [isStaff], readOnly: true, rate: DASH_RATE })
+
+async function runWidget(ctx: Ctx, w: Spec, range: Range | undefined): Promise<unknown> {
+  const p = w.data!.params ?? {}
+  if (w.data!.id === 'admin.chart') return chart.run({ ...(p as { model: string; chart: string }), range }, ctx)
+  if (w.data!.id === 'admin.recent') return recent.run({ limit: 8 }, ctx)
+  return widget.run({ id: String(p.id), range }, ctx)
+}
 
 export const widget = defineAction('widget', z.object({ id: z.string().max(200), range: rangeParam.optional() }), async ({ id, range }, ctx) => {
   if (range && typeof range === 'object') { try { rangeOf(range) } catch (e) { throw new DomainError('invalid_param', `range: ${(e as Error).message}`, 'range') } }
@@ -89,5 +105,5 @@ export const widget = defineAction('widget', z.object({ id: z.string().max(200),
   const w = site.widgets.find((x) => x.id === id)
   if (!w || !readFn(w) || !(await may(ctx, w.permission))) throw new DomainError('not_found', `no widget ${id}`)
   return (w.data as (ctx: Ctx, p: { range?: Range }) => unknown)(ctx, { range })
-}, { permissions: [isStaff], readOnly: true })
+}, { permissions: [isStaff], readOnly: true, rate: DASH_RATE })
 

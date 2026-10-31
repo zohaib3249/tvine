@@ -46,6 +46,8 @@ export function fingerprint(sql: string): string {
     .replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, '(?…)').replace(/\s+/g, ' ').trim().slice(0, 300)
 }
 const clean = (s: string, n = 60) => s.replace(/[\0-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '').trim().slice(0, n)
+// one dashboard load reads ~20 widgets (each a staff-only read): its own per-session budget, not the site's 60/min
+export const DASH_RATE = { limit: 600, windowMs: 60_000 }
 export const AGENT_VIA = new Set(['agent', 'webmcp', 'tab'])
 const MAX_DIMS = 300                 // distinct dims per key per cell; more fold into { other: '1' }
 const HOUR = 3_600_000, MIN = 60_000, TICK = 10_000
