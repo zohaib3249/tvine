@@ -168,8 +168,8 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
         const m = JSON.parse(info) as { type: string; public?: boolean }
         res.setHeader('Content-Type', m.type)
         res.setHeader('X-Content-Type-Options', 'nosniff')
-        res.setHeader('Content-Security-Policy', 'sandbox')   // nothing served from the app origin runs as a page
-        if (!m.type.startsWith('image/')) res.setHeader('Content-Disposition', 'attachment')   // a PDF downloads, never opens inline
+        // a PDF downloads, never opens inline (security/headers.ts adds the sandbox CSP; this holds without it too)
+        if (!m.type.startsWith('image/') && !res.hasHeader('Content-Disposition')) res.setHeader('Content-Disposition', 'attachment')
         res.setHeader('Cache-Control', `${m.public ? 'public' : 'private'}, max-age=31536000, immutable`)
         res.setHeader('Content-Length', String(st.size))
       }
