@@ -60,8 +60,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if npm view "tvine@$VERSION" version >/dev/null 2>&1; then
-            echo "::notice::tvine@$VERSION is already on npm; skipping publish"
+          if npm view "tvinejs@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::tvinejs@$VERSION is already on npm; skipping publish"
           else
             npm publish --provenance --access public
           fi

@@ -12,7 +12,7 @@ export type Site = {
 
 export type Choice = { value: string; label: string }
 // Form shapes are shared with tvine/forms (part C) — one definition.
-import type { FieldKind, FieldMeta, FormMeta, InlineMeta } from 'tvine/forms'
+import type { FieldKind, FieldMeta, FormMeta, InlineMeta } from '../../weft/dist/forms/index.js'
 export type { FieldKind, FieldMeta, FormMeta, InlineMeta }
 export type Fieldset = FormMeta['fieldsets'][number]
 export type Column = { name: string; label: string; sortable: boolean; kind?: string }

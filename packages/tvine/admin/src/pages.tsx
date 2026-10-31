@@ -1,6 +1,6 @@
 'use client'
 import { useState, type FormEvent } from 'react'
-import { toast } from 'tvine/widgets'
+import { toast } from '../../weft/dist/widgets/index.js'
 import type { Call, RouteData } from './data.js'
 import { href } from './routes.js'
 import type { DeleteNode, DeletePreview, LogEntry, ModelMeta, ObjectData, SiteApp, User } from './types.js'

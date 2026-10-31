@@ -1,5 +1,5 @@
 {
-  "name": "tvine",
+  "name": "tvinejs",
   "version": "0.1.0",
   "description": "Tvine: agent-native full-stack web framework. Django-style TypeScript backend (ORM, migrations, auth, admin, tasks, built-in MCP server) + Next.js/React frontend that AI agents can read and drive.",
   "keywords": [
@@ -21,7 +21,10 @@
     "full-stack"
   ],
   "license": "MIT",
-  "repository": "github:zohaib3249/tvine",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zohaib3249/tvine.git"
+  },
   "homepage": "https://github.com/zohaib3249/tvine#readme",
   "bugs": "https://github.com/zohaib3249/tvine/issues",
   "type": "module",
@@ -151,6 +154,10 @@
       "default": "./inspect/dist/index.js"
     },
     "./package.json": "./package.json"
+  },
+  "imports": {
+    "#weft/jsx-runtime": "./weft/dist/jsx/jsx-runtime.js",
+    "#weft/jsx-dev-runtime": "./weft/dist/jsx/jsx-dev-runtime.js"
   },
   "scripts": {
     "build": "tsc -p inspect && tsc -p warp && tsc -p weft && cp weft/src/forms/forms.css weft/dist/forms/forms.css && tsc -p admin && tailwindcss -i admin/src/admin.css -o admin/dist/admin.css --minify && esbuild admin/dist/client.js --bundle --minify --format=esm --platform=browser --define:process.env.NODE_ENV='\"production\"' --alias:server-only=./node_modules/server-only/empty.js --outfile=admin/dist/static/admin.js --log-level=warning",

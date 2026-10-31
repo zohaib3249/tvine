@@ -2,7 +2,7 @@
 // System section: Health, Logs, Agents, Metrics, Jobs, Security (admin.system.* actions), all live over the channel
 // group admin:live (logs: admin:logs). Staff see health/agents/metrics/jobs; superusers also logs/security.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { toast } from 'tvine/widgets'
+import { toast } from '../../weft/dist/widgets/index.js'
 import { ChartCard, DataTable, Sparkline, tableState, Stat, fmtValue, type ChartData, type StatTable } from './charts.js'
 import { LivePill, useLive, useLiveData, type LiveState } from './live.js'
 import type { User } from './types.js'

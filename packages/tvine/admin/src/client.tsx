@@ -1,8 +1,8 @@
 // Browser entry of the prebuilt bundle (dist/static/admin.js) that Warp serves at settings.admin.path when the app
 // has no admin page of its own (serve.ts). Same AdminApp as the Next mount; data comes through api.* only.
 import { createRoot } from 'react-dom/client'
-import { WeftRoot } from 'tvine/weft'
-import { api } from 'tvine/api'
+import { WeftRoot } from '../../weft/dist/index.js'
+import { api } from '../../weft/dist/api/client.js'
 import { AdminApp } from './app.js'
 import { caller, loadSite } from './data.js'
 

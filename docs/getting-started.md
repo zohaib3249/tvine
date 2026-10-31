@@ -12,7 +12,7 @@ Every command below was run as written.
 ## 0. Start a project
 
 ```bash
-npx tvine startproject mysite      # or, with a global CLI (npm i -g tvine): tvine startproject mysite
+npx tvinejs startproject mysite    # or, with a global CLI (npm i -g tvinejs): tvine startproject mysite
 cd mysite
 pnpm tvine migrate
 pnpm tvine createsuperuser

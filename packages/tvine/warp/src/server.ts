@@ -473,7 +473,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 async function adminMount(settings: Settings, route: (p: string) => string | undefined): Promise<Handler> {
   const base = settings.admin.path.replace(/\/$/, '') || '/admin'
   let mod: { adminHandler(o: { path: string; title?: string }): Handler }
-  try { mod = await fromApp('tvine/admin/serve') }
+  try { mod = await import(new URL('../../admin/dist/serve.js', import.meta.url).href) }
   catch (e) { throw new Error(`tvine.admin is installed but tvine/admin cannot be loaded from ${process.cwd()}: pnpm add tvine/admin (${(e as Error).message})`, { cause: e }) }
   const serve = mod.adminHandler({ path: base, title: settings.admin.title })
   return (req, res, next) => {

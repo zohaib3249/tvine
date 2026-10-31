@@ -1,6 +1,6 @@
 // Server entry. Mount: app/admin/[[...path]]/page.tsx → `export { default, generateMetadata } from 'tvine/admin/page'`.
 // First paint is server-rendered from api.* (in-process dispatch as the signed-in user); the client then navigates itself.
-import { api } from 'tvine/api'
+import { api } from '../../weft/dist/api/server.js'
 import { AdminApp } from './app.js'
 import { caller, loadRoute, loadSite } from './data.js'
 import { parse, type Query } from './routes.js'

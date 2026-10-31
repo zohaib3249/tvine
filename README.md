@@ -2,11 +2,14 @@
 
 **The agent-native web framework: Django for TypeScript, with Next.js and React, where AI agents use your app through a built-in MCP server (Model Context Protocol) and WebMCP.** Own ORM, migrations, admin panel, auth, background tasks.
 
+[![npm](https://img.shields.io/npm/v/tvinejs?label=npm%3A%20tvinejs)](https://www.npmjs.com/package/tvinejs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.15-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
+
+npm package name: `tvinejs` (you import it and run it as `tvine`): `npm install tvine@npm:tvinejs`, or `npx tvinejs startproject my-app`.
 
 ## Why Tvine
 
@@ -43,8 +46,8 @@ pnpm exec tvine dev --port 4400
 
 - App: http://localhost:4400, admin: http://localhost:4400/admin
 - What an agent sees: `curl -H 'x-tvine: 1' http://localhost:4400/`
-- `tvine: command not found`? Use `pnpm exec tvine …`, or `npm i -g tvine` once. See [Getting the `tvine` command](docs/installation.md#getting-the-tvine-command).
-- New project from scratch: `npx tvine startproject my-app`. See [installation.md](docs/installation.md).
+- `tvine: command not found`? Use `pnpm exec tvine …`, or `npm i -g tvinejs` once (gives the `tvine` command). See [Getting the `tvine` command](docs/installation.md#getting-the-tvine-command).
+- New project from scratch: `npx tvinejs startproject my-app`. See [installation.md](docs/installation.md).
 
 **Connect Claude.** Put this `.mcp.json` in the folder where you run `claude`:
 
@@ -99,7 +102,7 @@ Two modes: **headless** (the agent works on the server-rendered page, no browser
 ## Project layout
 
 ```
-packages/tvine/     the one npm package `tvine`
+packages/tvine/     the one npm package `tvinejs` (imported as `tvine`)
   warp/      tvine, tvine/auth, tvine/migrations, …   server: ORM + migrations, views, MCP/HTTP, auth, admin, tasks, CLI
   weft/      tvine/weft, tvine/api, tvine/widgets, tvine/forms   frontend: widgets, api.* client, tab control, WebMCP
   admin/     tvine/admin, tvine/admin.css               the /admin panel UI

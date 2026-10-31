@@ -1,6 +1,6 @@
 # Releasing
 
-One npm package, `tvine` (`packages/tvine`). A pushed `vX.Y.Z` tag publishes it
+One npm package, `tvinejs` (`packages/tvine`; npm rejected `tvine`, apps install it as `tvine@npm:tvinejs` and import `tvine`). A pushed `vX.Y.Z` tag publishes it
 (`.github/workflows/release.yml`).
 
 ## Every release
@@ -17,11 +17,11 @@ The workflow then:
 
 - refuses a tag whose commit is not on `main`
 - builds (`pnpm install --frozen-lockfile && pnpm -r build`)
-- fails if the tag is not `v` + the `tvine` version
+- fails if the tag is not `v` + the `tvinejs` version
 - runs `npm publish --provenance --access public` (skipped with a notice if that version is already on npm, so a re-run is safe)
-- creates the GitHub release with generated notes and the `npm pack` tarball attached
+- creates the GitHub release with generated notes and the `npm pack` tarball (`tvinejs-X.Y.Z.tgz`) attached
 
 ## One-time setup
 
-- On npmjs.com create an **Automation** access token for the account that owns `tvine`.
+- On npmjs.com create an **Automation** access token for the account that owns `tvinejs`.
 - In the GitHub repo: Settings → Secrets and variables → Actions → new repository secret `NPM_TOKEN` with that token.
