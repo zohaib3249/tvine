@@ -62,6 +62,22 @@ export function showRequest(o: { name: string; onAllow: () => void; onDeny: () =
   return close
 }
 
+// A short notice in the same trusted panel (an approve link that can't be shown must never fail silently):
+// text only, one OK button, gone after 15 s. Returns close().
+export function showNotice(text: string): () => void {
+  const p = getOverlay().panel()!
+  let open = true
+  const close = () => { if (open) { open = false; clearTimeout(timer); getOverlay().panel(false) } }
+  const timer = setTimeout(close, 15_000)
+  const ok = el('button', 'OK')
+  ok.type = 'button'
+  ok.addEventListener('click', close)
+  const row = el('div', undefined, 'row')
+  row.append(ok)
+  p.append(el('p', clean(text, 200)), row)
+  return close
+}
+
 // Fallback: the human types the code the agent gave them. `submit` answers an error text, or null on success.
 export function showConnect(submit: (code: string) => Promise<string | null>): () => void {
   const p = getOverlay().panel()!

@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TvineEvent } from '../types.js'
 import { getOverlay } from '../presence/overlay.js'
-import { showConnect, showRequest } from '../presence/chrome.js'
+import { showConnect, showNotice, showRequest } from '../presence/chrome.js'
 import { abortRunning, setStopped } from './exec.js'
 import { pageTools, tabControl, webmcpActive, withNav } from './webmcp.js'
 import { getRegistry, type RegistryNode } from './registry.client.js'
@@ -178,8 +178,19 @@ export function connectTab(): () => void {
   const ask = async (requestId: string) => {
     taken.delete('tvine-approve')   // used by the live mount: a later remount must not ask again
     const r = await post('request', { requestId })
-    if (r.status !== 200) return   // expired, used, or busy (the server told the agent)
-    if (webmcpActive()) { void post('approve', { requestId, allow: false, reason: 'busy' }); return }
+    if (r.status !== 200) {   // never silent: the human opened a link and must see why nothing is asked
+      closePrompt()
+      closePrompt = showNotice(r.status === 0 ? 'Could not reach the site to load the agent request. Check the server and open the link again.'
+        : r.status === 404 ? 'This agent request expired or was already used (links work once, for 5 minutes). Ask the agent for a new link.'
+        : `The agent request could not be shown: ${String(r.body.error ?? r.status)}`)
+      return
+    }
+    if (webmcpActive()) {
+      void post('approve', { requestId, allow: false, reason: 'busy' })
+      closePrompt()
+      closePrompt = showNotice('An agent is already working in this tab, so the new request was refused.')
+      return
+    }
     closePrompt()
     closePrompt = showRequest({
       name: String(r.body.name ?? 'Agent'),
