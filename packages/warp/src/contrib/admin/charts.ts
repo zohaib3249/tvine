@@ -12,7 +12,7 @@ import { cache } from '../../cache/index.js'
 import { Avg, Count, Max, Min, Sum, TruncDay, type Expression } from '../../data/expressions.js'
 import type { Field } from '../../data/fields/index.js'
 import type { QuerySet } from '../../data/queryset.js'
-import { isStaff } from '../../security/permissions.js'
+import { staffGuard } from './hardening.js'
 import { labelOf } from './meta.js'
 import { checkPerm, type ChartSpec, type Ctx, type ModelAdmin } from './options.js'
 import { site } from './sites.js'
@@ -147,7 +147,7 @@ async function gateChart(ctx: Ctx, model: string): Promise<ModelAdmin> {
   return a
 }
 const modelKey = z.string().regex(/^[a-z][a-z0-9_]*\.[a-zA-Z0-9_]+$/).max(100)
-const read = { permissions: [isStaff], readOnly: true, rate: DASH_RATE }
+const read = { permissions: [staffGuard], readOnly: true, rate: DASH_RATE }
 
 // data: true = each chart's result inline (the changelist strip: one round trip)
 export const charts = defineAction('charts', z.object({
