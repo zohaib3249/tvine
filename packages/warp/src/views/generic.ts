@@ -4,7 +4,7 @@
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
 import { liveManifest, paramSpecs } from '../core/actions.js'
-import { DomainError } from '../core/errors.js'
+import { DomainError, zodErrors } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
 import { Paginator } from '../data/paginator.js'
@@ -126,11 +126,8 @@ export function validate(schema: z.ZodTypeAny, raw: unknown, url = false, readOn
     : raw
   const r = schema.safeParse(input)
   if (r.success) return r.data
-  const i = r.error.issues[0]
-  const field = i.code === 'unrecognized_keys' ? i.keys[0] : String(i.path[0] ?? '')
-  const msg = i.code !== 'unrecognized_keys' ? `${field}: ${i.message}`
-    : readOnly?.has(field) ? `"${field}" is read-only` : `unknown param "${field}"`
-  throw new DomainError('invalid_param', msg, field)
+  const { errors, field, message } = zodErrors(r.error.issues as never, readOnly)
+  throw new DomainError('invalid_param', message, field, errors)
 }
 
 

@@ -1,7 +1,7 @@
 // defineModel: one field definition → zod schema, columns, and Model.objects.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { DomainError } from '../core/errors.js'
+import { DomainError, zodErrors } from '../core/errors.js'
 import { QuerySet } from './queryset.js'
 import { aggregateRows, atomic, bulkUpdate, engineSource, existsRows, insertMany, insertRow } from './engine.js'
 import { concrete, hasDefault, isAuto, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
@@ -43,8 +43,8 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
   const prepare = (data: Record<string, unknown>) => {
     const r = input.safeParse(data)
     if (!r.success) {
-      const i = r.error.issues[0]
-      throw new DomainError('invalid_param', `${name}.${i.path.join('.')}: ${i.message}`, String(i.path[0]))
+      const { errors, field } = zodErrors(r.error.issues as never)
+      throw new DomainError('invalid_param', r.error.issues.map(i => `${name}.${i.path.join('.')}: ${i.message}`).join('; '), field, errors)
     }
     const row: Record<string, unknown> = { ...r.data }
     for (const [n, f] of concrete(fields)) {

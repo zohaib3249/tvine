@@ -160,7 +160,12 @@ export async function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, re
 export interface FormResult { ok: boolean; errors?: Record<string, string>; message?: string; goto?: string }
 export function formResult(events: Event[]): FormResult {
   for (const e of events) {
-    if (e.kind === 'err') return { ok: false, ...(e.code === 'invalid_param' && e.field && { errors: { [e.field]: e.message } }), message: e.message }
+    if (e.kind === 'err') {
+      const errs = e.code !== 'invalid_param' ? undefined
+        : e.errors?.length ? Object.fromEntries([...e.errors].reverse().map(x => [x.field, x.message]))   // first message per field wins
+        : e.field ? { [e.field]: e.message } : undefined
+      return { ok: false, ...(errs && { errors: errs }), message: e.message }
+    }
     if (e.kind === 'goto') return { ok: true, goto: e.url }
   }
   return { ok: true }
@@ -478,7 +483,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (e instanceof HandlerTimeout) return [ev.err('internal', 'handler timeout')]
     if (e instanceof DomainError) {
       const code = e.code === 'invalid_param' || e.code === 'internal' ? e.code : 'domain'
-      return [ev.err(code, e.message, { field: e.field, reason: e.code })]
+      return [ev.err(code, e.message, { field: e.field, errors: e.errors, reason: e.code })]
     }
     server.log('error', 'action failed', { action: def.id, error: errStr(e) })
     return [ev.err('internal', 'internal error')]

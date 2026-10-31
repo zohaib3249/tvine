@@ -1,8 +1,9 @@
-import type { ErrCode } from './types.js'
+import type { ErrCode, FieldError } from './types.js'
 
-// Domain failures thrown by handlers; dispatch maps them to err domain.
+// Domain failures thrown by handlers; dispatch maps them to err domain. `errors` lists every bad field
+// (Django ValidationError({field: [...]})); `field` stays the first one for older clients.
 export class DomainError extends Error {
-  constructor(public code: string, message: string, public field?: string) {
+  constructor(public code: string, message: string, public field?: string, public errors?: FieldError[]) {
     super(message)
     this.name = 'DomainError'
   }
@@ -32,4 +33,14 @@ const FORBIDDEN = 'not allowed for this session; do not retry it, choose another
 const TOO_LARGE = 'send less: it is over the size limit shown'
 export const recoveryOf = (e: { code: ErrCode; reason?: string }): string =>
   e.reason === 'too_large' ? TOO_LARGE : e.code === 'domain' && e.reason === 'forbidden' ? FORBIDDEN : recovery[e.code]
+// zod issues → FieldError[] (all of them) + the classic single field / message. One issue keeps the old
+// `field: message` text exactly; several are joined with '; '.
+export function zodErrors(issues: { code: string; path: (string | number)[]; message: string; keys?: string[] }[], readOnly?: Set<string>):
+  { errors: FieldError[]; field: string; message: string } {
+  const errors: FieldError[] = issues.flatMap(i => i.code === 'unrecognized_keys'
+    ? (i.keys ?? []).map(k => readOnly?.has(k) ? { field: k, code: 'read_only', message: `"${k}" is read-only` } : { field: k, code: 'unknown', message: `unknown param "${k}"` })
+    : [{ field: String(i.path[0] ?? ''), code: i.code, message: i.path.length > 1 ? `${i.path.slice(1).join('.')}: ${i.message}` : i.message }])
+  const text = (e: FieldError) => (e.code === 'unknown' || e.code === 'read_only' ? e.message : `${e.field}: ${e.message}`)
+  return { errors, field: errors[0]?.field ?? '', message: errors.map(text).join('; ') }
+}
 export const RECOVERIES: string[] = [...new Set([...Object.values(recovery), FORBIDDEN, TOO_LARGE])]

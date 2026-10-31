@@ -17,7 +17,7 @@ export {
 } from './views/generic.js'
 export { ANONYMOUS } from './core/types.js'
 export type {
-  Sid, Rev, NodeId, ActionId, Node, ActionRef, Link, Snapshot, Command, Event, ErrCode, ChannelLayer,
+  Sid, Rev, NodeId, ActionId, Node, ActionRef, Link, Snapshot, Command, Event, ErrCode, FieldError, ChannelLayer,
   ReadonlyHeaders, TvineUser, UploadedFile, Request, Session, ActionCtx, PermissionCtx, Permission,
   Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'

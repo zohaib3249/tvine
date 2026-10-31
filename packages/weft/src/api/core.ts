@@ -5,9 +5,13 @@ export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only'
 
+// one bad field of an invalid_param (Django ValidationError dict style): every bad field is listed;
+// `field` on the result is the first one (kept for older code)
+export interface FieldError { field: string; code?: string; message: string }
+
 export type ApiResult<T = unknown> =
   | { ok: true; data: T; goto?: string }
-  | { ok: false; code: ErrCode; reason?: string; field?: string; message: string; retryAfterMs?: number }
+  | { ok: false; code: ErrCode; reason?: string; field?: string; errors?: FieldError[]; message: string; retryAfterMs?: number }
 
 export interface ApiOpts { cmdId?: string; bind?: string; signal?: AbortSignal }
 export interface ApiCall<P = Record<string, unknown>, R = unknown> {
@@ -23,11 +27,11 @@ export type Api = keyof ApiManifest extends never ? Record<string, Record<string
 export type Transport = (id: string, params: unknown, opts: ApiOpts | undefined) => Promise<ApiResult>
 
 export class ApiError extends Error {
-  code: ErrCode; reason?: string; field?: string
+  code: ErrCode; reason?: string; field?: string; errors?: FieldError[]
   constructor(r: Extract<ApiResult, { ok: false }>) {
     super(r.message)
     this.name = 'ApiError'
-    this.code = r.code; this.reason = r.reason; this.field = r.field
+    this.code = r.code; this.reason = r.reason; this.field = r.field; this.errors = r.errors
   }
 }
 
