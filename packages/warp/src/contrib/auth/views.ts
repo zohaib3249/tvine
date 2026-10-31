@@ -16,6 +16,7 @@ import { base32, sha256 } from './crypto.js'
 import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
 import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
 import { checkNewDevice, securityNotice } from './notify.js'
+import { exportToMedia } from './privacy.js'
 import { checkPassword, dummyCheck, makePassword, MAX_PASSWORD, validatePassword } from './passwords.js'
 import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
@@ -171,6 +172,18 @@ export const logoutOthers = defineAction('logoutOthers', z.object({}), async (_p
   securityEvent('sessions_revoked', { userId: u.id, count: n }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
   return { revoked: n }
 }, { permissions: [isAuthenticated, notInTab] })
+
+// ---- privacy: my data ---------------------------------------------------------------------------------
+// a JSON file of everything the app holds on me (models opt in with Meta.personalData), as a private media file:
+// the answer and an email carry a signed link that only this user can open, for 24 h. A human confirms; twice an hour.
+export const exportMyData = defineAction('exportMyData', z.object({}), async (_p, ctx) => {
+  const u = sessionOnly(ctx)
+  const path = await exportToMedia(Number(u.id), ctx.settings)
+  const url = ctx.settings.siteUrl ? new URL(path, ctx.settings.siteUrl).href : path
+  if (u.email) onCommit(() => void sendMail({ subject: 'Your data export is ready', to: u.email!, message: `Hi ${u.username},\n\nDownload your data (signed in, within 24 hours):\n\n${url}\n` }, { background: true }).catch(() => undefined))
+  securityEvent('data_export', { userId: u.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
+  return { url }
+}, { permissions: [isAuthenticated, denyAgents], rate: { limit: 2, windowMs: 3_600_000 }, confirm: { by: 'human' } })
 
 // ---- TOTP ----------------------------------------------------------------------------------------
 export const totpBegin = defineAction('totpBegin', z.object({ password: pw().optional() }), async ({ password }, ctx) => {

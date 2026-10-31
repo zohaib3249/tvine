@@ -60,6 +60,7 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
   audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
+  privacy export|erase <user>   tvine.auth: a user's data as JSON (--output file) / anonymize it (--yes)
   encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)`
 
 type Opts = NonNullable<ParseArgsConfig['options']>
@@ -85,6 +86,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
   audit: { options: { days: str }, args: [1, 1] },
   encryption: { options: {}, args: [1, 1] },
+  privacy: { options: { output: str, yes: bool }, args: [2, 2] },
 }
 
 class Usage extends Error {}
@@ -201,6 +203,28 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         try {
           const models = Object.values(await discoverModels(apps, { installed: settings.installedApps })).flat()
           io.out(`re-encrypted ${await rotateEncryption(models, io.out)} row(s) with the newest key`)
+        } finally { await connections.closeAll() }
+        return 0
+      }
+      case 'privacy': {
+        const [what, username] = args as [string, string]
+        if (what !== 'export' && what !== 'erase') throw new Usage('usage: tvine privacy export|erase <username>')
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.auth')) throw new Usage("tvine.auth is not installed: add 'tvine.auth' to settings.installedApps")
+        connections.configure(settings)
+        try {
+          await discoverModels(apps, { installed: settings.installedApps })   // every model registered (Meta.personalData)
+          const { User } = await import('./contrib/auth/models.js')
+          const { exportData, eraseData } = await import('./contrib/auth/privacy.js')
+          const u = await User.objects.filter({ username }).first()
+          if (!u) throw new Usage(`no user named ${username}`)
+          if (what === 'export') {
+            const json = JSON.stringify(await exportData(u.id), null, 2)
+            if (o.output) { writeFileSync(o.output as string, json + '\n', { mode: 0o600 }); io.out(`wrote ${o.output}`) } else io.out(json)
+          } else {
+            if (!o.yes) throw new Usage('erase cannot be undone: pass --yes')
+            io.out(`erased user ${u.id}: ${JSON.stringify(await eraseData(u.id, { settings }))}`)
+          }
         } finally { await connections.closeAll() }
         return 0
       }

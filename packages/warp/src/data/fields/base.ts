@@ -40,6 +40,10 @@ export interface ModelMeta {
   unique?: string[][]
   constraints?: import('../expressions.js').ConstraintSpec[]
   ordering?: string[]
+  // privacy (contrib/auth/privacy.ts): the fields privacy.export(user) collects from rows that reference the user
+  personalData?: string[]
+  // privacy.erase(user): delete the user's rows, blank their personalData fields, or run your own function
+  onErase?: 'delete' | 'anonymize' | ((userId: number) => Promise<void> | void)
 }
 export type Fields = Record<string, Field<any, boolean, Kind, boolean>>
 

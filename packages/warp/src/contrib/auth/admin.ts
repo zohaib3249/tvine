@@ -4,7 +4,8 @@
 // (a hidden field: never in admin values); the add form sets the first one, the set-password view every later one.
 import { DomainError } from '../../core/errors.js'
 import { path } from '../../urls.js'
-import { ModelAdmin, TabularInline, type Ctx } from '../admin/options.js'
+import { adminAction, ModelAdmin, TabularInline, type Ctx } from '../admin/options.js'
+import { eraseData } from './privacy.js'
 import { site } from '../admin/sites.js'
 import { logAction } from '../admin/views.js'
 import { CHANGE } from '../admin/models.js'
@@ -37,8 +38,17 @@ export class SessionInline extends TabularInline {
   hasChangePermission() { return false }
 }
 
+// GDPR erase (privacy.erase): anonymize the account and every opted-in model's personal data; audited
+export const erasePersonalData = adminAction({ name: 'erasePersonalData', description: 'Erase personal data of selected users', permissions: ['delete'], confirm: 'This anonymizes the selected accounts and erases their personal data. It cannot be undone.', humanOnly: true },
+  async (_a, ctx, _qs, pks) => {
+    sudo(ctx)
+    for (const id of pks) await eraseData(Number(id), { settings: ctx.settings, request: ctx.request })
+    return { message: `${pks.length} user(s) erased.`, level: 'success' }
+  })
+
 export class UserAdmin extends ModelAdmin<UserRow> {
   inlines = [SessionInline]
+  actions = [erasePersonalData]
   // secreview-1 M1 (owner brief): no agents at all on accounts, stricter than secreview-3 M3's 'confirm'.
   // An app may opt in with agents = 'confirm' (an agent's change then needs the user) or true.
   agents: boolean | 'confirm' = false

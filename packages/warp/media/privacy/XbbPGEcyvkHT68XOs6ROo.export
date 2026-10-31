@@ -1,0 +1,26 @@
+{
+  "exportedAt": "2026-10-31T11:03:14.857Z",
+  "user": {
+    "id": 11,
+    "username": "dan",
+    "email": "dan@example.com",
+    "dateJoined": "2026-10-31T11:03:14.836Z",
+    "lastLogin": "2026-10-31T11:03:14.854Z"
+  },
+  "sessions": [
+    {
+      "ip": "127.0.0.1",
+      "userAgent": "node",
+      "createdAt": "2026-10-31T11:03:14.854Z",
+      "lastSeen": "2026-10-31T11:03:14.854Z"
+    }
+  ],
+  "tokens": [],
+  "address": [
+    {
+      "id": 1,
+      "line": "1 Main St",
+      "phone": "555"
+    }
+  ]
+}
