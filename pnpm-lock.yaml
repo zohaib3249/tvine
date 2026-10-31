@@ -20,6 +20,9 @@ importers:
 
   apps/demo-shop:
     dependencies:
+      '@tvine/admin':
+        specifier: workspace:*
+        version: link:../../packages/admin
       '@tvine/warp':
         specifier: workspace:*
         version: link:../../packages/warp
