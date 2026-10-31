@@ -6,7 +6,7 @@ import { atomic } from '../data/engine.js'
 export async function rotateEncryption(models: Model<any, any>[], log: (m: string) => void = () => {}): Promise<number> {
   let total = 0
   for (const m of models) {
-    const names = Object.entries(m.fields).filter(([, f]) => f.kind === 'encrypted').map(([n]) => n)
+    const names = Object.entries(m.fields as Record<string, { kind: string }>).filter(([, f]) => f.kind === 'encrypted').map(([n]) => n)
     if (!names.length) continue
     let cursor: string | undefined
     let n = 0
