@@ -8,6 +8,7 @@ import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../
 import { authenticate } from '../core/auth.js'
 import { rotatedSession } from '../core/auth.js'
 import { buildRequest, clientIp } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { isAgent } from './http.js'
@@ -169,8 +170,6 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
   // secreview H1: the agent markers are read from the RAW headers (`shown` drops x-tvine-*): a declared agent stays one
   if (isAgent(req, settings)) request.agent = { ...request.agent, is: true, via: 'http' }
   request.raw = req   // the endpoint (/tvine/api/<id>, or a urls.ts path) + method for settings.cors (core/cors-match)
-  const secure = (req.socket as { encrypted?: boolean }).encrypted === true ||
-    (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
   let cookie: string | undefined
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const i = part.indexOf('=')
@@ -178,7 +177,7 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
   }
   return {
     request, cookie, mode: 'action',
-    mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`) },
+    mint: async (s) => { res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(s.sid))) },
   }
 }
 

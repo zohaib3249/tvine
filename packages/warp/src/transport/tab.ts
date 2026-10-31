@@ -12,6 +12,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
 import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
 import { limiterFor } from '../backends/index.js'
@@ -420,7 +421,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
       if (!(await server.limiter.check({ ip })).ok) return tooMany(res)   // as the <Form> path, before minting
       session = await sessions.create()
       const c = await sessions.cookieFor(session.sid)
-      return send(res, 200, { ok: true }, { 'set-cookie': `${name}=${c}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${httpsOf(req, settings) ? '; Secure' : ''}` })
+      return send(res, 200, { ok: true }, { 'set-cookie': cookieHeader(settings, c) })
     }
     if (!session) return send(res, 401, { error: 'no session' })
     if (!hub.own(session, tabId)) return send(res, 403, { error: 'not your tab' })

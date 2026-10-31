@@ -7,6 +7,7 @@ import { collect, dispatch, rateLimited, renderCtx, type ServerCtx } from '../co
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { buildRequest, clientIp, requestId } from '../core/request.js'
+import { cookieHeader } from '../core/session.js'
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { bodyCap } from '../security/ratelimit.js'
@@ -84,19 +85,12 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     }
     return undefined
   }
-  // https per the same trusted hops as request.ip (request.md): rightmost-`trustProxy` X-Forwarded-Proto.
-  const https = (req: IncomingMessage) => {
-    if ((req.socket as { encrypted?: boolean }).encrypted) return true
-    if (settings.trustProxy <= 0) return false
-    const parts = String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-    return parts[parts.length - settings.trustProxy] === 'https'
-  }
   // Only when the browser has no live cookie session: an explicit agent sid never steals a human's cookie.
   const setCookie = async (req: IncomingMessage, res: ServerResponse, sid: string) => {
     const c = cookieOf(req)
     if (!sid || (c !== undefined && await sessions.peek({ cookie: c }))) return
     if (!(await sessions.peek({ sid }))) return
-    res.setHeader('set-cookie', `${cookieName}=${await sessions.cookieFor(sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${https(req) ? '; Secure' : ''}`)
+    res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(sid)))
   }
 
   const pickFormat = (req: IncomingMessage, q: URLSearchParams, forced?: Format): Format => {

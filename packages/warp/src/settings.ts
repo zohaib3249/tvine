@@ -37,7 +37,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   formats: { default: 'json', notationPath: true },
   trustProxy: 0,
   redis: {},
-  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default' },
+  session: { ttlMs: 86_400_000, cookieName: 'tvine_s', max: 100_000, backend: 'memory', redis: 'default', secure: false, sameSite: 'lax' },
   channels: { backend: 'memory', redis: 'default' },
   limits: {
     bodyBytes: 65_536,
@@ -112,7 +112,8 @@ const schema: z.ZodType<Settings> = z.object({
     prefix: z.string().max(64).regex(/^[^\s*?[\]]*$/, 'prefix may not hold spaces or glob characters').optional(),
     connectTimeoutMs: z.number().int().positive().optional(),
   }).strict()),
-  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias }),
+  session: z.object({ ttlMs: z.number().positive(), cookieName: z.string(), max: z.number().int().positive(), backend, redis: alias,
+    secure: z.boolean(), sameSite: z.enum(['lax', 'strict', 'none']) }).refine((s) => s.sameSite !== 'none' || s.secure, 'session.sameSite none needs session.secure'),
   channels: z.object({ backend, redis: alias }),
   limits: z.object({
     bodyBytes: posInt,
@@ -208,11 +209,13 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
   const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
-  const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
+  const base = { ...DEFAULTS, session: { ...DEFAULTS.session, secure: prod }, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   // every named cache (not only `default`) is completed from the cache defaults
   if (isPlain(merged.caches)) merged.caches = Object.fromEntries(Object.entries(merged.caches).map(([k, c]) => [k, { ...CACHE_DEFAULTS, ...(c as object) }]))
   const settings = schema.parse(merged)
+  // secreview M2: a Secure cookie on Path=/ with no Domain is a __Host- cookie (a subdomain or http page cannot plant it)
+  if (settings.session.secure && !settings.session.cookieName.startsWith('__')) settings.session.cookieName = `__Host-${settings.session.cookieName}`
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page
   // module may import settings.ts during `next build`, where no secret exists. Non-enumerable, so
   // merging these settings again (loadSettings) re-resolves the secret instead of tripping here.

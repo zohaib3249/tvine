@@ -15,6 +15,7 @@ import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
 import { buildRequest, clientIp } from './core/request.js'
+import { cookieOpts } from './core/session.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
@@ -45,7 +46,7 @@ type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => 
 export type HeadersLike = Iterable<[string, string]>   // a fetch Headers, or Next's headers()
 export interface CookieJar {                           // Next's cookies()
   get(name: string): { value: string } | undefined
-  set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax'; secure: boolean; path: string; maxAge: number }): unknown
+  set(name: string, value: string, o: { httpOnly: boolean; sameSite: 'lax' | 'strict' | 'none'; secure: boolean; path: string; maxAge: number }): unknown
 }
 export interface NextApp {
   prepare(): Promise<void>
@@ -438,7 +439,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     try { path = new URL(h.referer).pathname } catch { /* refused below */ }
     const pattern = path === undefined ? undefined : route(path)
     if (path === undefined || pattern === undefined) return { ok: false, message: 'forbidden: the referer is not a page of this site' }
-    let { ip, secure } = stampOf(h, settings, src.nonce)
+    let { ip } = stampOf(h, settings, src.nonce)
     if (!ip) {
       ip = 'unknown'
       if (!warned) { warned = true; server.log('warn', '<Form> request did not pass through the tvine handler and trustProxy is 0: all such submits share one rate-limit key') }
@@ -455,7 +456,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
       if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
       cookie = await sessions.cookieFor((await sessions.create()).sid)
       // the same attributes as transport/http.ts sets on its session cookie
-      jar.set(name, cookie, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+      jar.set(name, cookie, cookieOpts(settings))
       const others = (h.cookie ?? '').split(';').map((p) => p.trim()).filter((p) => p && !p.startsWith(`${name}=`))
       const header = [...others, `${name}=${cookie}`].join('; ')
       const base = request.headers
@@ -463,7 +464,7 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     }
     const out = formResult(await collect(dispatch(cmd, server, request, { snapshot: false })))
     const rotated = rotatedSession(request)   // login/logout: the old cookie is dead, hand out the new one
-    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) })
+    if (rotated) jar.set(name, await sessions.cookieFor(rotated.sid), cookieOpts(settings))
     return out
   }
 }
@@ -554,7 +555,7 @@ export function apiFor(server: ServerCtx, route: (path: string) => string | unde
     const action = h['next-action'] !== undefined
     return invoke(server, call, {
       request, cookie: jar.get(name)?.value, mode: action ? 'action' : 'render',
-      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), { httpOnly: true, sameSite: 'lax', secure: st.secure, path: '/', maxAge: Math.floor(settings.session.ttlMs / 1000) }) },
+      mint: async (s) => { jar.set(name, await sessions.cookieFor(s.sid), cookieOpts(settings)) },
     })
   }
 }
