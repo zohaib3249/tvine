@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ActionManifest } from '../core/actions.js'
 import type { ActionRef, Settings } from '../core/types.js'
 import { connections } from '../data/db.js'
+import { hiddenFromAnon } from '../security/permissions.js'
 
 export interface RouteInfo { path: string; name?: string }
 export interface HealthStats { sessions: number; db?: unknown; extra?: Record<string, unknown> }   // extra: apps' sections (ServerCtx.health)
@@ -22,6 +23,7 @@ export interface DiscoveryDeps {
 export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
   const apps: SiteManifest['apps'] = {}
   for (const d of manifest.all()) {
+    if (hiddenFromAnon(d)) continue
     const app = d.id.slice(0, d.id.indexOf('.'))
     ;(apps[app] ??= { actions: [] }).actions.push({ id: d.id, params: manifest.paramSpecs(d.id) })
   }

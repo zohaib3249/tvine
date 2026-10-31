@@ -18,6 +18,7 @@ import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { UNTRUSTED_TOOL } from '../shape/notation.js'
+import { hiddenFromAnon } from '../security/permissions.js'
 import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
 
 export interface McpOptions {
@@ -89,7 +90,7 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
   const taken = new Set(['read_page', 'expand', 'ui', 'do', 'request_control', 'release'])
   let typed: (McpTool & { def: ActionDef })[] = []
   for (const def of actions.all()) {
-    if (!mcpEnabled(def, settings) || def.rules?.humanOnly) continue   // humanOnly: no typed tool (dispatch refuses agents anyway)
+    if (!mcpEnabled(def, settings) || hiddenFromAnon(def)) continue   // humanOnly / staff / denyAgents: no typed tool (calls are checked anyway)
     const name = toolName(def.id)
     const props = jsonSchema(def.schema)
     const own = (props.properties ?? {}) as Record<string, unknown>

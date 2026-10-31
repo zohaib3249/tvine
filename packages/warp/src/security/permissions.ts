@@ -1,5 +1,5 @@
 import { DomainError } from '../core/errors.js'
-import { ANONYMOUS, type ActionCtx, type ActionId, type Permission, type PermissionCtx } from '../core/types.js'
+import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type Permission, type PermissionCtx } from '../core/types.js'
 
 export type { Permission, PermissionCtx }
 
@@ -15,6 +15,11 @@ export const isAuthenticated: Permission = (ctx) => ctx.user.isAuthenticated
 const active = (ctx: PermissionCtx) => ctx.user.isAuthenticated && ctx.user.isActive !== false
 export const isStaff: Permission = (ctx) => active(ctx) && ctx.user.isStaff === true
 export const isSuperuser: Permission = (ctx) => active(ctx) && ctx.user.isSuperuser === true
+
+// Public discovery (/tvine/manifest, MCP tools/list) is the anonymous agent's view (secreview-3 L1): leave out what
+// the static rules already say it can never call — staff/superuser-only, denyAgents, humanOnly. Calls stay checked.
+export const hiddenFromAnon = (def: ActionDef): boolean =>
+  !!def.rules?.humanOnly || (def.rules?.permissions ?? []).some((p) => p === isStaff || p === isSuperuser || deniesAgents(p))
 
 // Django user.has_perms: every codename ('catalog.change_product') granted. A user without hasPerm (anonymous,
 // a BYO user that has none) is denied.
