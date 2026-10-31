@@ -24,6 +24,7 @@ import { signBind } from './security/sign.js'
 import { checkBackends, defineSettings, merge, type SettingsInput } from './settings.js'
 import { closeRedis, configureRedis } from './redis/index.js'
 import { configureCaches } from './cache/index.js'
+import { configureMail } from './mail/index.js'
 import { channelTransport } from './transport/channel.js'
 import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
 import { corsLayer } from './transport/cors.js'
@@ -112,6 +113,7 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
+  configureMail(settings)
   return settings
 }
 

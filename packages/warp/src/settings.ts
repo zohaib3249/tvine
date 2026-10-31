@@ -207,8 +207,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
-  const test = process.env.NODE_ENV === 'test' || !!process.env.VITEST
-  const email = { ...DEFAULTS.email, backend: prod ? 'smtp' : test ? 'memory' : 'console' }
+  const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
   const base = { ...DEFAULTS, db: { ...DEFAULTS.db, url: resolveDbUrl() }, redis: redisFromEnv(), email, secret: ok ? secret : 'x'.repeat(32), logging: prod ? 'json' : 'pretty' }
   const merged = merge(base as Record<string, unknown>, rest as Record<string, unknown>)
   // every named cache (not only `default`) is completed from the cache defaults
@@ -219,6 +218,12 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   // merging these settings again (loadSettings) re-resolves the secret instead of tripping here.
   if (!ok) Object.defineProperty(settings, 'secret', { enumerable: false, get: () => { throw new Error(SECRET_HELP) } })
   return settings
+}
+
+// Django parity: smtp in production, the in-memory outbox under tests (locmem), console in dev
+export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
+  if (process.env.NODE_ENV === 'production') return 'smtp'
+  return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
 }
 
 const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
