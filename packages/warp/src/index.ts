@@ -1,5 +1,6 @@
 export { defineModel, modelRegistry, type Model } from './data/model.js'
 export { field, inc, dec, type Infer } from './data/fields.js'
+export { Paginator, type Page } from './data/paginator.js'
 export {
   F, Q, Value, Case, When, Coalesce, Lower, Upper, Length, Abs, Cast, TruncDay, TruncMonth, TruncYear,
   Sum, Count, Avg, Min, Max, Exists, OuterRef, Subquery, Prefetch, CheckConstraint, UniqueConstraint,

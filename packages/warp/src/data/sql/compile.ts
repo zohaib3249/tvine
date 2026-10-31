@@ -667,7 +667,8 @@ export function compileQuery(spec: QuerySpec, t: TableDef, d: Dialect): Compiled
   const count: Select = needSub
     ? { t: 'select', from: { ...select, where: base.where, having: base.having, order: undefined, limit: undefined, forUpdate: undefined, ...(select.cols ? {} : { cols: [raw('1')] }) }, as: 'c', cols: [fn('count', raw('*'))] }
     : { t: 'select', from: t.name, cols: [fn('count', raw('*'))], ...(select.joins ? { joins: select.joins } : {}), ...(base.where ? { where: base.where } : {}) }
-  return { count, page: spec.limit > 0 ? select : undefined, plan }
+  if (spec.offset && spec.cursor) throw invalid('a cursor page cannot also be sliced (offset)', 'cursor')
+  return { count, page: spec.limit > 0 ? (spec.offset ? { ...select, offset: spec.offset } : select) : undefined, plan }
 }
 
 // The plain read path (unchanged contract): a count over the filter, plus the page.

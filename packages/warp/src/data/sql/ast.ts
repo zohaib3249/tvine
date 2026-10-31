@@ -43,7 +43,7 @@ export type Join = { table: string; alias: string; on: Expr; inner?: boolean }
 export type ForUpdate = { nowait?: boolean; skipLocked?: boolean; of?: string[] }
 export type Select = {
   t: 'select'; from: string | Select; as?: string; cols?: Expr[]; joins?: Join[]; where?: Expr
-  groupBy?: Expr[]; having?: Expr; order?: OrderTerm[]; limit?: number
+  groupBy?: Expr[]; having?: Expr; order?: OrderTerm[]; limit?: number; offset?: number
   distinct?: boolean; distinctOn?: Expr[]; forUpdate?: ForUpdate
 }
 // rows: multi-row VALUES (bulkCreate); values: one row. ignoreConflicts: ON CONFLICT DO NOTHING (pg / sqlite)

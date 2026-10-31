@@ -7,6 +7,7 @@ import { liveManifest, paramSpecs } from '../core/actions.js'
 import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
+import { Paginator } from '../data/paginator.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
 import { hasDefault, isAuto, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
@@ -145,6 +146,9 @@ export abstract class GenericView<T extends object = any> extends View {
   permissions: Permission[] = []                    // runtime checks (getPermissions); static ones go in rules
   pageSize = 25
   maxPageSize = 100
+  // 'cursor' (keyset, default: stable under inserts, no OFFSET scan) | 'page' (Django Paginator: ?page=N,
+  // the result carries page / numPages / total)
+  pagination: 'cursor' | 'page' = 'cursor'
   filters?: string[]                                // Django lookups; default: the model's enum/index fields
   searchFields?: string[]                           // ?q=; default: the model's searchable fields
   ordering: string[] = []                           // allowed ?sort= values (each also as '-field')
@@ -166,7 +170,12 @@ export abstract class GenericView<T extends object = any> extends View {
     return qs
   }
 
-  paginateQueryset(qs: QuerySet<T>, ctx: ViewCtx): Promise<Paginated<T>> {
+  async paginateQueryset(qs: QuerySet<T>, ctx: ViewCtx): Promise<Paginated<T>> {
+    const size = Math.min(this.pageSize, this.maxPageSize)
+    if (this.pagination === 'page') {
+      const p = await new Paginator(qs, size).page(ctx.params.page ?? 1)
+      return { items: p.items, total: p.count, pageSize: size, page: p.number, numPages: p.numPages }
+    }
     const cursor = typeof ctx.params.cursor === 'string' ? ctx.params.cursor : undefined
     return qs.page({ cursor, size: Math.min(this.pageSize, this.maxPageSize) })
   }
@@ -440,7 +449,9 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     const listSchema = z.object({
       ...(effectiveSearch(gv).length && { q: z.string().optional() }),
       ...(sorts.length && { sort: z.enum(sorts as [string, ...string[]]).optional() }),
-      cursor: z.string().refine(c => { try { decodeCursor(c); return true } catch { return false } }, 'invalid cursor').optional(),
+      ...(gv.pagination === 'page'
+        ? { page: z.preprocess(v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v), z.number().int().min(1)).optional() }
+        : { cursor: z.string().refine(c => { try { decodeCursor(c); return true } catch { return false } }, 'invalid cursor').optional() }),
       ...lookups,
     }).strict()
     const lookupObj = z.object({ [gv.lookupParam]: valueSchema(lookupF) })

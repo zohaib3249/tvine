@@ -122,6 +122,10 @@ export function renderNode(node: SqlNode, d: Dialect, opts: RenderOpts = {}): St
     if (x.having) s += ` HAVING ${e(x.having)}`
     if (x.order?.length) s += ` ORDER BY ${x.order.map(order).join(', ')}`
     if (x.limit !== undefined) s += ` LIMIT ${e({ t: 'param', value: x.limit })}`
+    if (x.offset) {   // OFFSET needs a LIMIT on sqlite / mysql: their documented "no limit" spellings
+      if (x.limit === undefined && d.name !== 'postgres') s += d.name === 'sqlite' ? ' LIMIT -1' : ' LIMIT 18446744073709551615'
+      s += ` OFFSET ${e({ t: 'param', value: x.offset })}`
+    }
     if (x.forUpdate && d.name !== 'sqlite') {   // sqlite: no-op — BEGIN IMMEDIATE already holds its single writer lock
       const f = x.forUpdate
       s += ` FOR UPDATE${f.of?.length ? ` OF ${f.of.map(q).join(', ')}` : ''}${f.nowait ? ' NOWAIT' : f.skipLocked ? ' SKIP LOCKED' : ''}`

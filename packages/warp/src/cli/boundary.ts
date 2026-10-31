@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { build, type Metafile } from 'esbuild'
 
-const DATA_API = new Set(['defineModel', 'field', 'QuerySet', 'connections', 'atomic', 'configureDb'])
+const DATA_API = new Set(['defineModel', 'field', 'QuerySet', 'Paginator', 'connections', 'atomic', 'configureDb'])
 const FE_DIRS = ['app', 'src/app', 'components', 'src/components']
 const SKIP = new Set(['node_modules', '.next', 'dist', '.git', 'apps', 'coverage'])
 const CODE = /\.(m?[jt]sx?)$/

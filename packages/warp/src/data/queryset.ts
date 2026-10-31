@@ -14,6 +14,7 @@ export interface QuerySpec {
   order?: Order[]
   cursor?: string                  // opaque: base64url JSON of the last item's order-key values
   limit: number
+  offset?: number                  // rows skipped before the page (slice / Paginator); never with a cursor
   search?: { fields: string[]; term: string }
   // ---- advanced (engine sources only; orm-advanced.md) ----
   q?: QNode[]                      // Q filters, ANDed (a filter on an aggregate goes to HAVING)
@@ -44,6 +45,7 @@ export const CURSOR = Symbol('tvine.cursor')
 
 export interface Paginated<T> {
   items: T[]; total?: number; pageSize: number; nextCursor?: string
+  page?: number; numPages?: number                  // page-number mode (Paginator / pagination: 'page')
 }
 
 const DEFAULT_PAGE = 25
@@ -92,6 +94,7 @@ interface State {
   where: Where[]; order: Order[]; ordered?: boolean; search?: QuerySpec['search']
   q?: QNode[]; annotate?: [string, Expression][]; values?: string[]; list?: 'tuple' | 'flat'
   distinct?: true | string[]; related?: string[]; prefetch?: (string | PrefetchNode)[]; forUpdate?: QuerySpec['forUpdate']
+  slice?: { start: number; end?: number }          // Django qs[start:end] → OFFSET / LIMIT
 }
 
 export const MAX_IN = 1000          // every value is a bound param; engines cap params per statement
@@ -153,8 +156,28 @@ export class QuerySet<T extends object> {
   }
   private get pk(): string { return this.source.def ? Object.entries(this.source.def.fields).find(([n]) => n === 'id')?.[0] ?? 'id' : 'id' }
 
+  // Django refuses to filter / reorder / write a sliced queryset (the slice would apply first)
+  private unsliced(what: string): void {
+    if (this.state.slice) throw new Error(`cannot ${what} a queryset once a slice has been taken`)
+  }
+
+  // Django slicing qs[start:end] → LIMIT end-start OFFSET start (bound params). Lazy; non-negative only
+  // (Django has no negative indexing either). A slice of a slice narrows it.
+  slice(start: number, end?: number): QuerySet<T> {
+    const ok = (n: number) => Number.isInteger(n) && n >= 0
+    if (!ok(start) || (end !== undefined && !ok(end))) throw new DomainError('invalid_param', 'slice bounds must be non-negative integers')
+    const cur = this.state.slice ?? { start: 0 }
+    const s = cur.start + start
+    const ends = [cur.end, end === undefined ? undefined : cur.start + end].filter((x): x is number => x !== undefined)
+    const e = ends.length ? Math.max(s, Math.min(...ends)) : undefined
+    return this.with({ slice: e === undefined ? { start: s } : { start: s, end: e } })
+  }
+  offset(n: number): QuerySet<T> { return this.slice(n) }
+  limit(n: number): QuerySet<T> { return this.slice(0, n) }
+
   // filter({ a: 1, price__gt: 5, vendor__name: 'x' }) / filter(Q(...)) / filter(Exists(...)) / filter(Where[])
   filter(where: Partial<Record<keyof T & string, unknown>> | Lookups | Where[] | QNode | Expression): QuerySet<T> {
+    this.unsliced('filter')
     if (where instanceof QNode || where instanceof Expression) return this.with({ q: [...(this.state.q ?? []), toQ(where)] })
     if (Array.isArray(where)) return this.with({ where: [...this.state.where, ...toWhere(where)] })
     const { where: ws, q } = split(where as Lookups, this.source.def)
@@ -164,6 +187,7 @@ export class QuerySet<T extends object> {
   // One condition per plain-object call: NOT(a) AND NOT(b) differs from Django's NOT(a AND b). Chain
   // instead, or pass Q(...) — exclude(Q) is NOT(the whole Q), Django's semantics.
   exclude(where: Partial<Record<keyof T & string, unknown>> | Lookups | Where[] | QNode | Expression): QuerySet<T> {
+    this.unsliced('filter')
     if (where instanceof QNode || where instanceof Expression) return this.with({ q: [...(this.state.q ?? []), toQ(where).not()] })
     if (!Array.isArray(where)) {
       const keys = Object.keys(where)
@@ -179,6 +203,7 @@ export class QuerySet<T extends object> {
 
   // Replaces the previous order (Django order_by). 'field' asc, '-field' desc, F('f').desc({ nulls: 'last' }).
   order(...fields: (string | OrderBy)[]): QuerySet<T> {
+    this.unsliced('reorder')
     return this.with({ order: fields.map(parseOrder), ordered: true })
   }
 
@@ -242,6 +267,7 @@ export class QuerySet<T extends object> {
 
   async page(opts: { cursor?: string; size?: number } = {}, count = true): Promise<Paginated<T>> {
     if (this.state.values) throw new Error('values() querysets are not paginated: use all() / first()')
+    if (this.state.slice) throw new Error('a sliced queryset is not cursor-paginated: use all()')
     const size = clampSize(opts.size)
     const spec = this.spec(size + 1, opts.cursor)       // one extra row tells us if a next page exists
     const { items, total } = await this.source.query(count || !this.source.ext ? spec : { ...spec, count: false })
@@ -254,7 +280,18 @@ export class QuerySet<T extends object> {
     return { items: pageItems, ...(count ? { total } : {}), pageSize: size, nextCursor }
   }
 
+  // the slice as one LIMIT / OFFSET query (Django evaluates qs[a:b] in one SELECT)
+  private async sliced(limit: number): Promise<T[]> {
+    const { start, end } = this.state.slice!
+    const n = Math.min(limit, end === undefined ? Infinity : end - start)
+    if (n <= 0) return []
+    const { items } = await this.source.query({ ...this.spec(n), ...(start ? { offset: start } : {}), count: false })
+    if (this.state.prefetch?.length && !this.state.values) await this.ext('prefetchRelated').prefetch(items, this.state.prefetch)
+    return this.shape(items)
+  }
+
   async all(limit = Infinity): Promise<T[]> {
+    if (this.state.slice) return this.sliced(limit)
     if (this.state.values) {
       const { items } = await this.source.query({ ...this.spec(limit), count: false })
       return this.shape(items)
@@ -270,6 +307,7 @@ export class QuerySet<T extends object> {
   }
   // every row in ONE query (prefetch / inBulk): no cursor loop
   async fetchAll(): Promise<T[]> {
+    if (this.state.slice) return this.sliced(Infinity)
     const { items } = await this.source.query({ ...this.spec(Infinity), count: false })
     if (this.state.prefetch?.length && !this.state.values) await this.ext('prefetchRelated').prefetch(items, this.state.prefetch)
     return this.shape(items)
@@ -277,21 +315,24 @@ export class QuerySet<T extends object> {
 
   async update(patch: Partial<Record<keyof T & string, unknown>> | Record<string, unknown>): Promise<number> {
     if (!this.source.update) throw new Error('this data source is read-only')
+    this.unsliced('update')
     return this.source.update(this.state.where, patch, this.state.q)
   }
 
   async delete(): Promise<number> {
     if (!this.source.delete) throw new Error('this data source is read-only')
+    this.unsliced('delete')
     return this.source.delete(this.state.where, this.state.q)
   }
 
   async first(): Promise<T | undefined> {
-    if (this.state.values) return (await this.all(1))[0]
+    if (this.state.values || this.state.slice) return (await this.all(1))[0]
     return (await this.page({ size: 1 }, false)).items[0]
   }
 
   // the last row under the current order (Django last(): the order reversed, id tiebreak included)
   async last(): Promise<T | undefined> {
+    this.unsliced('reverse')
     const order = this.spec(0).order
     const rev = (order.length ? order : [{ field: this.pk, dir: 'asc' as const }])
       .map(o => ({ field: o.field, dir: o.dir === 'asc' ? 'desc' as const : 'asc' as const, ...(o.nulls ? { nulls: o.nulls === 'first' ? 'last' as const : 'first' as const } : {}) }))
@@ -300,16 +341,20 @@ export class QuerySet<T extends object> {
 
   async count(): Promise<number> {
     const { total } = await this.source.query({ ...this.spec(0), limit: 0 })
-    return total ?? (await this.all()).length
+    const n = total ?? (await this.with({ slice: undefined }).all()).length
+    const sl = this.state.slice
+    return sl ? Math.max(0, Math.min(n, sl.end ?? Infinity) - sl.start) : n
   }
 
   async exists(): Promise<boolean> {
+    if (this.state.slice) return (await this.all(1)).length > 0
     if (!this.source.ext) return (await this.count()) > 0
     return this.source.ext.exists(this.spec(1))
   }
 
   // aggregate({ total: Sum('price'), n: Count('id') }) → { total, n }
   async aggregate<A extends Record<string, Expression>>(aggs: A): Promise<{ [K in keyof A]: any }> {
+    this.unsliced('aggregate')
     return this.ext('aggregate').aggregate({ ...this.spec(0), order: [] }, Object.entries(aggs)) as Promise<{ [K in keyof A]: any }>
   }
 
