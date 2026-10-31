@@ -113,7 +113,7 @@ const useTable = defineWidget<Inner, S, C>({
         } }
     }
     if (p.virtual) c.scroll = { kind: 'scroll', params: { to: { type: 'number', min: 0, max: Math.max(0, items.length - 1), step: 1 } },
-      run: (x: { to: number }) => { p.scrollTo(x.to) } }
+      run: (x: { to: number }) => { if (!Number.isInteger(x.to)) throw invalid('to', 'to must be a whole number'); p.scrollTo(x.to) } }
     return c
   },
   headless: (p) => {
@@ -132,7 +132,7 @@ const useTable = defineWidget<Inner, S, C>({
 function Row<T>({ t, p, on, toggle, s }: { t: T; p: TableProps<T> & { disabled?: boolean }; on: boolean; toggle(id: string): void; s: S }) {
   const id = p.rowId(t), rec = t as Record<string, unknown>
   const data = Object.fromEntries(p.columns.map((c) => [c.key, rec[c.key] ?? null]))
-  const label = String(rec.name ?? rec.title ?? id)
+  const label = String(data.name ?? data.title ?? id)   // only published column values (never a field the app left out)
   const w = useWidget({ kind: 'data', label, data, ...(p.entity ? { entity: `${p.entity}:${id}` } : { id: `row:${id}` }) })
   const pick = p.selection && p.selection !== 'none'
   return part('tr', { ref: w.ref, ...w.props, 'aria-selected': pick ? on : undefined, 'data-state': on ? 'selected' : undefined, style: p.virtual && { height: p.virtual.rowHeight } }, p.slots?.row, s, <>

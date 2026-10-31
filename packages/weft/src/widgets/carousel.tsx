@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control, ControlCtx, Json } from '../widget/types.js'
-import { AutoOff, flag, inner, part, useControllable, type Slots, type SlotProps } from './_parts.js'
+import { AutoOff, flag, inner, invalid, part, useControllable, type Slots, type SlotProps } from './_parts.js'
 
 // widgets/carousel.md: APG Carousel on a native CSS scroll-snap viewport. Every slide is SSR'd and its
 // data is published, so a headless agent reads all slides with no control; the position is presentation,
@@ -28,7 +28,7 @@ const useCarousel = defineWidget<Inner, S, C>({
     const press = (ctx: ControlCtx, sel: string) => inner<HTMLButtonElement>(ctx, el(), sel).click()
     const c: C = {
       set: { kind: 'set', params: { index: { type: 'number', min: 0, max: Math.max(0, n - 1), step: 1 } },
-        run: async (a: { index: number }, ctx) => press(ctx, `[data-part=dot][data-index="${a.index}"]`) },
+        run: async (a: { index: number }, ctx) => { if (!Number.isInteger(a.index)) throw invalid('index', 'index must be a whole number'); press(ctx, `[data-part=dot][data-index="${a.index}"]`) } },
     }
     if (p.loop || i < n - 1) c.next = { kind: 'set', run: async (_a, ctx) => press(ctx, '[data-part=next]') }
     if (p.loop || i > 0) c.prev = { kind: 'set', run: async (_a, ctx) => press(ctx, '[data-part=prev]') }
