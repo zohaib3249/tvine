@@ -14,6 +14,7 @@ import type { QuerySet } from '../../data/queryset.js'
 import { modelNamed, referencesTo } from '../../data/registry.js'
 import { isStaff } from '../../security/permissions.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
+import { sanitizeHtml } from '../../shape/rich.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
 import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
 import {
@@ -120,7 +121,7 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
       continue
     }
     if (isPassword(n, f) && (values[n] === '' || values[n] == null)) continue   // blank = keep the password
-    const r = fromWire(n, f, values[n])
+    const r = fromWire(n, f, meta.kind === 'rich' && typeof values[n] === 'string' ? sanitizeHtml(values[n]) : values[n])   // never trust the browser's sanitizer
     if (!r.ok) { errors[n] = r.error; continue }
     if (f.kind === 'm2m') m2m[n] = r.value as unknown[]
     else data[f.key(n)] = r.value
