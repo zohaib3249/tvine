@@ -15,7 +15,7 @@ import type { ActionCtx, ActionDef, ChannelLayer, Command, Event, Middleware, Re
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
-import type { Limiter } from '../security/ratelimit.js'
+import { ipKey, type Limiter } from '../security/ratelimit.js'
 import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
@@ -340,8 +340,13 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   }
   // 3b. an action's own rate: a bucket keyed by sid + action id
   const def = server.actions.get(cmd.action)
-  if (def?.rules?.rate && !renderRead.has(request)) {
-    const rl = await server.limiter.check({ sid, action: def.id }, def.rules.rate)
+  // Renders skip only the default rate (3a, and the copy of it every discovered action carries); an action's OWN
+  // rate still holds, keyed by ip there (a render's session may be one-call).
+  // ponytail: an own rate equal to settings.limits.rate counts as the default on renders.
+  const r = def?.rules?.rate, dflt = settings.limits.rate
+  const own = !!r && (r.limit !== dflt.limit || r.windowMs !== dflt.windowMs)
+  if (r && (own || !renderRead.has(request))) {
+    const rl = await server.limiter.check({ sid: renderRead.has(request) ? `ip:${ipKey(request.ip)}` : sid, action: def!.id }, r)
     if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
   }
   // 4. resolve action
