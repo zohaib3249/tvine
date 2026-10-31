@@ -143,8 +143,21 @@ export function fkTo(i: InlineModelAdmin, parent: AnyModel): string | undefined 
 
 export const site = new AdminSite()
 
-// @admin.register(Order) (TC39 or legacy class decorator) — or admin.site.register(Order, OrderAdmin)
-export function register(...models: AnyModel[]) {
+// @admin.register(Order) (TC39 or legacy class decorator), admin.register(Order, OrderAdmin) (registers now),
+// or admin.site.register(Order, OrderAdmin). A ModelAdmin class passed as the last argument registers at once:
+// otherwise the call returned a decorator nobody applied and the models silently never showed up.
+const isAdminClass = (v: unknown): v is new () => ModelAdmin =>
+  typeof v === 'function' && (v === ModelAdmin || (v as { prototype?: unknown }).prototype instanceof ModelAdmin)
+export function register(...args: (AnyModel | (new () => ModelAdmin))[]) {
+  const last = args.at(-1)
+  if (isAdminClass(last)) {
+    const models = args.slice(0, -1) as AnyModel[]
+    if (!models.length) throw new TypeError('admin.register(Model, ModelAdminClass): pass at least one model before the admin class')
+    site.register(models, last)
+    return <C>(cls: C): C => cls   // already registered; a stray decorator use is a no-op
+  }
+  if (!args.length) throw new TypeError('admin.register(): pass the model(s) to register')
+  const models = args as AnyModel[]
   return <C extends new () => ModelAdmin>(cls: C, _ctx?: unknown): C => { site.register(models, cls); return cls }
 }
 
