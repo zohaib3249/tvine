@@ -19,7 +19,8 @@ export const SYSTEM_PAGES = [
   { page: 'security', title: 'Logins & security', icon: 'shield', superuser: true },
 ] as const
 export type SystemPage = (typeof SYSTEM_PAGES)[number]['page']
-export const systemPagesFor = (u: User | null) => (u?.isStaff || u?.isSuperuser ? SYSTEM_PAGES.filter((p) => !p.superuser || u.isSuperuser) : [])
+// inside the panel admin.site answered, so the user is staff even when auth.me failed; superuser pages need auth.me
+export const systemPagesFor = (u: User | null) => SYSTEM_PAGES.filter((p) => !p.superuser || !!u?.isSuperuser)
 
 type Status = 'ok' | 'warn' | 'error'
 const STATUS_TEXT: Record<Status, string> = { ok: 'Healthy', warn: 'Warning', error: 'Error' }

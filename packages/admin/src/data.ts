@@ -51,7 +51,7 @@ export async function loadRoute(call: Call, site: Site, r: Route, q: Query): Pro
     return undefined
   }
   if (r.name === 'index') {
-    const d = await loadDashboard(call, site)
+    const d = await loadDashboard(call, site, DEFAULT_RANGE)
     out.dashboard = d
     out.widgets = await loadWidgets(call, d.widgets.filter((w) => !d.layout?.hidden.includes(w.id)), DEFAULT_RANGE)
     return out
@@ -75,6 +75,7 @@ export type Size = 'sm' | 'md' | 'lg' | 'xl'
 export type DashWidget = {
   id: string; title: string; size: Size; type: 'line' | 'area' | 'bar' | 'stacked' | 'donut' | 'stat' | 'table' | 'activity' | 'custom' | 'value'
   data?: { id: string; params?: Record<string, unknown> }; refreshMs?: number; component?: string; model?: string
+  result?: unknown   // admin.dashboard already ran the data action (one call for the whole dashboard)
 }
 export type Layout = { order: string[]; hidden: string[]; sizes: Record<string, Size> }
 export type DashboardData = { widgets: DashWidget[]; layout: Layout | null; autoRefreshMs: number }
@@ -84,13 +85,14 @@ export const DEFAULT_RANGE: Range = '30d'
 // only the chart actions take a range; anything else gets its own params untouched
 const paramsOf = (w: DashWidget, range: Range) => ({ ...w.data!.params, ...(['admin.chart', 'admin.widget'].includes(w.data!.id) && { range }) })
 export async function loadWidgets(call: Call, ws: DashWidget[], range: Range): Promise<Record<string, unknown>> {
-  const live = ws.filter((w) => w.data)
+  const given = ws.filter((w) => 'result' in w)
+  const live = ws.filter((w) => w.data && !('result' in w))   // only custom widgets the dashboard could not run
   const res = await Promise.all(live.map((w) => call(w.data!.id, paramsOf(w, range))))
-  return Object.fromEntries(live.map((w, i) => [w.id, res[i]!.ok ? res[i]!.data : { error: (res[i] as { message: string }).message }]))
+  return Object.fromEntries([...given.map((w) => [w.id, w.result]), ...live.map((w, i) => [w.id, res[i]!.ok ? res[i]!.data : { error: (res[i] as { message: string }).message }])])
 }
 // admin.dashboard, or (an older backend / a test) the site's registered widgets
-export async function loadDashboard(call: Call, site: { widgets?: { id: string; title: string; size?: string; data?: { id: string; params?: Record<string, unknown> } | string; component?: string }[] }): Promise<DashboardData> {
-  const r = await call('admin.dashboard')
+export async function loadDashboard(call: Call, site: { widgets?: { id: string; title: string; size?: string; data?: { id: string; params?: Record<string, unknown> } | string; component?: string }[] }, range?: Range): Promise<DashboardData> {
+  const r = await call('admin.dashboard', range ? { range } : {})
   if (r.ok) return r.data as DashboardData
   return {
     autoRefreshMs: 60_000, layout: null,

@@ -33,26 +33,24 @@ export function Dashboard({ data }: { data?: RouteData }) {
   const [auto, setAuto] = useState(() => prefs.get('dashboard.auto', false))
   const [drag, setDrag] = useState<{ id: string; over?: string } | null>(null)
   const first = useRef(!!data?.widgets && JSON.stringify(range) === JSON.stringify(DEFAULT_RANGE))
-
-  useEffect(() => {
-    if (dash) return
-    let live = true
-    void loadDashboard(call, site).then((d) => { if (live) { setDash(d); setLayout(d.layout) } })
-    return () => { live = false }
-  }, [dash, call, site])
+  const laidOut = useRef(!!dash)
+  const seq = useRef(0)
+  // one admin.dashboard { range } call carries every built-in widget's result; only custom widgets call their own action
   const reload = async () => {
-    if (!dash) return
+    const n = ++seq.current
     setLoading(true)
-    const v = await loadWidgets(call, dash.widgets, range)
-    setVals(v); setLoading(false)
+    const d = await loadDashboard(call, site, range)
+    const v = await loadWidgets(call, d.widgets.filter((w) => !(layout ?? d.layout)?.hidden.includes(w.id)), range)
+    if (n !== seq.current) return
+    setDash(d); setVals(v); setLoading(false)
+    if (!laidOut.current) { laidOut.current = true; setLayout(d.layout) }
   }
   const rkey = JSON.stringify(range)
   useEffect(() => {
-    if (!dash) return
     if (first.current) { first.current = false; return }
     void reload()
-  }, [dash, rkey])   // eslint-disable-line react-hooks/exhaustive-deps
-  const every = Math.max(5_000, Math.min(dash?.autoRefreshMs ?? 60_000, ...(dash?.widgets.map((w) => w.refreshMs ?? Infinity) ?? [])))
+  }, [rkey])   // eslint-disable-line react-hooks/exhaustive-deps
+  const every = Math.max(10_000, dash?.autoRefreshMs || 60_000)   // one batched call per tick
   useEffect(() => {
     if (!auto) return
     const t = setInterval(() => { if (!document.hidden) void reload() }, every)
@@ -60,7 +58,7 @@ export function Dashboard({ data }: { data?: RouteData }) {
   })
   const tick = useRef(0)
   const live = useLive(auto && (user?.isStaff || user?.isSuperuser) ? 'admin:live' : null, (f) => {
-    if (f.type === 'tick' || Date.now() - tick.current < 5_000) return
+    if (f.type === 'tick' || Date.now() - tick.current < 10_000) return
     tick.current = Date.now(); void reload()
   })
 
@@ -222,24 +220,21 @@ export function ChartStrip({ model, filters }: { model: string; filters?: Record
   const [range, setRange] = useState<Range>(DEFAULT_RANGE)
   const [vals, setVals] = useState<Record<string, ChartData | { error: string }>>({})
   const [loading, setLoading] = useState(false)
-  useEffect(() => {
-    let live = true
-    setDefs(undefined); setVals({})
-    void call('admin.charts', { model }).then((r) => { if (live) setDefs(r.ok ? (r.data as { charts: ChartDef[] }).charts : []) })
-    return () => { live = false }
-  }, [model, call])
   const fkey = JSON.stringify(filters ?? {}) + JSON.stringify(range)
+  // one admin.charts call returns the definitions and (data: true) every chart's result for this range + filters
   useEffect(() => {
-    if (!open || !defs?.length) return
     let live = true
     setLoading(true)
-    void Promise.all(defs.map((d) => call('admin.chart', { model, chart: d.id, range, ...(filters && { filters }) }))).then((rs) => {
+    void call('admin.charts', { model, range, ...(filters && { filters }), data: open }).then((r) => {
       if (!live) return
-      setVals(Object.fromEntries(defs.map((d, i) => [d.id, rs[i]!.ok ? rs[i]!.data as ChartData : { error: (rs[i] as { message: string }).message }])))
       setLoading(false)
+      if (!r.ok) { setDefs([]); return }
+      const cs = (r.data as { charts: (ChartDef & { result?: ChartData | { error: string } })[] }).charts
+      setDefs(cs)
+      if (open) setVals(Object.fromEntries(cs.filter((c) => c.result).map((c) => [c.id, c.result!])))
     })
     return () => { live = false }
-  }, [open, defs, fkey])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [model, call, fkey, open])   // eslint-disable-line react-hooks/exhaustive-deps
   if (!defs?.length) return null
   const toggle = () => { setOpen((o) => { prefs.set(`charts:${model}:collapsed`, o); return !o }) }
   return (

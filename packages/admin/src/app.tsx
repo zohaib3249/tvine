@@ -24,6 +24,13 @@ export function AdminApp(p: AdminAppProps) {
   const call = useMemo<Call>(() => caller(p.api ?? browserApi), [p.api])
   const base = (p.base ?? '/admin').replace(/\/$/, '')
   const [site, setSite] = useState(p.site)
+  const [user, setUser] = useState(p.user ?? null)
+  // auth.me can fail on its own (a rate limit) while admin.site answered: retry once
+  useEffect(() => {
+    if (!site || user) return
+    const t = setTimeout(() => void call('auth.me').then((r) => { if (r.ok && r.data) setUser(r.data as User) }), 2000)
+    return () => clearTimeout(t)
+  }, [site])   // eslint-disable-line react-hooks/exhaustive-deps
   const [loc, setLoc] = useState({ segments: p.segments, query: p.query })
   const [data, setData] = useState<RouteData | undefined>(p.initial)
   const [tick, setTick] = useState(0)
@@ -82,7 +89,7 @@ export function AdminApp(p: AdminAppProps) {
   }, [p.user?.id])
 
   const ctx: Ctx = {
-    call, site: site!, user: p.user ?? null, base, route, query: loc.query, navigate, prefs,
+    call, site: site!, user, base, route, query: loc.query, navigate, prefs,
     setQuery: (q, o) => navigate(href(base, route, q), o),
     setDirty: (d) => { dirty.current = d },
     refresh: () => setTick((t) => t + 1),
