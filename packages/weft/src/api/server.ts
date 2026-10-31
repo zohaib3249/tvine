@@ -68,7 +68,7 @@ export const serverTransport: Transport = (id, params, opts) => {
   if (inproc) return inproc({ id, params, bind: opts?.bind, cmdId: opts?.cmdId })
   const url = process.env.TVINE_API_URL
   if (!url) throw new Error('@tvine/weft/api: no backend. Run the app with `tvine start`/`tvine dev` (one process), or set TVINE_API_URL (and TVINE_SECRET) to a `tvine start --api-only` server')
-  const secret = process.env.TVINE_SECRET
+  const secret = process.env.TVINE_SECRET?.split(',')[0]?.trim()   // a rotation list signs with its first (newest) key
   if (!secret) throw new Error('@tvine/weft/api: TVINE_API_URL is set but TVINE_SECRET is not (it signs x-tvine-forward)')
   return (forward ??= forwardTransport({ url, secret, cookieName: process.env.TVINE_COOKIE_NAME }))(id, params, opts)
 }

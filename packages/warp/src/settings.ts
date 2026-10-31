@@ -202,9 +202,11 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   const prod = process.env.NODE_ENV === 'production'
   const { secret: given, ...rest } = input
   // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below
-  const secret = given ?? process.env.TVINE_SECRET ?? (prod ? undefined : randomBytes(32).toString('hex'))
+  // TVINE_SECRET may be a comma-separated rotation list (new first): `new,old`
+  const env = process.env.TVINE_SECRET?.split(',').map((k) => k.trim()).filter(Boolean)
+  const secret = given ?? (env && (env.length === 1 ? env[0] : env)) ?? (prod ? undefined : randomBytes(32).toString('hex'))
   const keys = secret === undefined ? [] : [secret].flat()
-  const ok = keys.length > 0 && keys.every((k) => k.length >= 32)
+  const ok = keys.length > 0 && keys.every((k) => k.length >= 32) && new Set(keys).size === keys.length
   if (!ok && given !== undefined) throw new Error(SECRET_HELP)   // a wrong value in code: no reason to wait
   // settings.md: logging defaults to json in prod, pretty otherwise; explicit input wins.
   const email = { ...DEFAULTS.email, backend: emailBackendDefault() }
@@ -226,7 +228,7 @@ export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
   return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
 }
 
-const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
+const SECRET_HELP = 'TVINE_SECRET must be a random string of at least 32 chars; a rotation list (comma-separated, new first) needs each key >= 32 chars and no duplicates (fix: export TVINE_SECRET=$(openssl rand -hex 32))'
 
 // Every subsystem whose backend is 'redis' must name a configured connection. Run at boot (loadSettings,
 // tvine check), not in defineSettings: a page may import settings.ts during `next build` with no REDIS_URL.
