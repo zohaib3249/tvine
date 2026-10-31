@@ -7,6 +7,7 @@ import { defineAction } from '../../core/actions.js'
 import { DomainError } from '../../core/errors.js'
 import type { ActionDef } from '../../core/types.js'
 import type { Field, Fields, Kind, ModelDef } from '../../data/fields/index.js'
+import { hasDefault } from '../../data/fields.js'
 import type { Model } from '../../data/model.js'
 import { Count, Max, Min, Q, type QNode } from '../../data/expressions.js'
 import type { QuerySet } from '../../data/queryset.js'
@@ -94,12 +95,18 @@ async function valuesOf(a: Base, obj: Row): Promise<Row> {
     if (f.opts.hidden) continue
     if (f.kind === 'm2m') { out[n] = (await a.model.related(n, obj.id).all().fetchAll()).map((r: Row) => r.id); continue }
     out[n] = toWire(f, obj, n)
+    if (f.kind === 'fk' && out[n] != null) {   // { pk, text }: the form's chip shows the related object's name (forms take a bare pk too)
+      // ponytail: one query per fk per row; batch like relatedReprs if inlines grow large
+      const t = f.target!(), rel = (await modelNamed<AnyModel>(t.name)!.objects.inBulk([out[n]]))[String(out[n])] as Row | undefined
+      out[n] = { pk: String(out[n]), text: rel ? repr(adminOfDef(t), t, rel) : String(out[n]) }
+    }
   }
   return out
 }
 
 // input values → { data (row keys), m2m, errors }; only form fields that are not read-only
-function clean(a: Base, values: Row, creating: boolean, only?: string[]) {
+// `changed` (the LogEntry message) lists only fields whose value differs from `old` (Django form.changed_data)
+function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: Row) {
   const errors: Record<string, string> = {}
   const data: Row = {}, m2m: Record<string, unknown[]> = {}, changed: string[] = []
   const editable = (only ?? formFields(a)).filter((n) => a.model.fields[n] && !a.readonlyFields.includes(n))
@@ -109,7 +116,7 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[]) {
     const meta = fieldMeta(n, f, metaOpts(a))
     if (meta.readOnly) continue
     if (!(n in (values ?? {}))) {
-      if (creating && meta.required && !isPassword(n, f)) errors[n] = 'This field is required.'
+      if (creating && meta.required && !hasDefault(f) && !isPassword(n, f)) errors[n] = 'This field is required.'   // an omitted field with a default gets it
       continue
     }
     if (isPassword(n, f) && (values[n] === '' || values[n] == null)) continue   // blank = keep the password
@@ -117,7 +124,7 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[]) {
     if (!r.ok) { errors[n] = r.error; continue }
     if (f.kind === 'm2m') m2m[n] = r.value as unknown[]
     else data[f.key(n)] = r.value
-    changed.push(n)
+    if (!old || f.kind === 'm2m' || JSON.stringify(old[f.key(n)] ?? null) !== JSON.stringify(r.value ?? null)) changed.push(n)
   }
   return { data, m2m, errors, changed }
 }
@@ -377,12 +384,12 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
         continue
       }
       if (!(await (existing ? i.hasChangePermission(ctx, parent) : i.hasAddPermission(ctx, parent)))) throw forbidden()
-      const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk))
+      const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk), existing ?? undefined)
       if (Object.keys(c.errors).length) throw fieldErrors(c.errors, at)
       const row = existing ? await i.model.update(existing.id, c.data) : await i.model.create({ ...c.data, [fkKey]: parent.id })
       for (const [m, ids] of Object.entries(c.m2m)) await i.model.related(m, row.id).set(ids as (string | number)[])
       if (existing && !c.changed.length) continue
-      msg.push(existing ? { changed: { name: i.verboseName ?? labelOf(name), object: i.str(row), fields: c.changed } } : { added: { name: i.verboseName ?? labelOf(name), object: i.str(row) } })
+      msg.push(existing ? { changed: { name: i.verboseName ?? labelOf(name), object: i.str(row), fields: c.changed.map(labelOf) } } : { added: { name: i.verboseName ?? labelOf(name), object: i.str(row) } })
     }
     const total = await own.count()
     if (i.maxNum !== null && total > i.maxNum) throw bad(name, `at most ${i.maxNum} rows`)
@@ -424,7 +431,8 @@ export const meta = defineAction('meta', z.object({ model: modelKey }), async ({
   for (const i of site.inlinesOf(a)) {
     const fk = fkTo(i, a.model)!
     inlines.push({
-      name: inlineName(i), kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum, min: i.minNum,
+      name: inlineName(i), verboseName: i.verboseName ?? labelOf(i._key.split('.')[1]!), verboseNamePlural: i.verboseNamePlural ?? `${i.verboseName ?? labelOf(i._key.split('.')[1]!)}s`, kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum ?? 1000, min: i.minNum,   // Django's default max_num is 1000
+     
       canDelete: i.canDelete, meta: Object.fromEntries(Object.entries(formMeta(i)).filter(([n]) => n !== fk)), perms: await perms(i, ctx),
     })
   }
@@ -499,13 +507,13 @@ export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }
   const a = await gate(ctx, model, 'module')
   const obj = await objectOf(a, ctx, pk)
   if (!(await a.hasViewPermission(ctx, obj))) throw forbidden()
-  const inlines: Record<string, { rows: { pk: string; values: Row }[] }> = {}
+  const inlines: Record<string, { rows: Row[] }> = {}
   for (const i of site.inlinesOf(a)) {
     if (!(await i.hasViewPermission(ctx, obj))) continue
     const fk = fkTo(i, a.model)!
     const rows = await i.model.objects.filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
     const vs = []
-    for (const r of rows) { const v = await valuesOf(i, r); delete v[fk]; vs.push({ pk: String(r.id), values: v }) }
+    for (const r of rows) { const v = await valuesOf(i, r); delete v[fk]; vs.push({ pk: String(r.id), ...v }) }   // the payload's Row shape: { pk, ...values }
     inlines[inlineName(i)] = { rows: vs }
   }
   return { pk: String(obj.id), values: await valuesOf(a, obj), display: a.str(obj), inlines, perms: await perms(a, ctx, obj) }
@@ -546,7 +554,7 @@ async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) 
 }
 async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
   await storeFiles(a, ctx, p, stored)
-  const c = clean(a, p.values, creating)
+  const c = clean(a, p.values, creating, undefined, obj)
   if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
   const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
   for (const [n, ids] of Object.entries(c.m2m)) await a.model.related(n, row.id).set(ids as (string | number)[])
@@ -645,7 +653,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     const obj = objs.find((o) => String(o.id) === String(r.pk))
     if (!obj) { errors[String(r.pk)] = { pk: 'Not found.' }; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
-    const c = clean(a, r.values, false, a.listEditable)
+    const c = clean(a, r.values, false, a.listEditable, obj)
     if (Object.keys(c.errors).length) errors[String(r.pk)] = c.errors
     else work.push({ obj, c })
   }

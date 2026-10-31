@@ -183,6 +183,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
+  const admin = installed.includes('tvine.admin') ? await adminMount(settings, route) : undefined
   const isDev = process.env.NODE_ENV !== 'production'
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
@@ -214,6 +215,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     apiTransport(ctx, { route, tokens, asSession: (v) => internalOf(v, nonce) }),
     ...(urls ? [urlsTransport(ctx, urls, { route, tokens, asSession: (v) => internalOf(v, nonce) })] : []),
     httpTransport(ctx, { routes, match: route }),
+    ...(admin ? [admin] : []),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
   const startNext = () => (next ??= (async () => {
@@ -335,6 +337,24 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       await connections.closeAll()
       await closeRedis()
     },
+  }
+}
+
+// tvine.admin installed → the panel at settings.admin.path, served by Warp before Next (Django's admin.site.urls):
+// @tvine/admin's prebuilt shell + bundle, so the app needs no admin page. An app page whose route sits at that path
+// (app/admin/[[...path]]/page.tsx) wins: the request passes on to Next.
+async function adminMount(settings: Settings, route: (p: string) => string | undefined): Promise<Handler> {
+  const base = settings.admin.path.replace(/\/$/, '') || '/admin'
+  let mod: { adminHandler(o: { path: string; title?: string }): Handler }
+  try { mod = await fromApp('@tvine/admin/serve') }
+  catch (e) { throw new Error(`tvine.admin is installed but @tvine/admin cannot be loaded from ${process.cwd()}: pnpm add @tvine/admin (${(e as Error).message})`, { cause: e }) }
+  const serve = mod.adminHandler({ path: base, title: settings.admin.title })
+  return (req, res, next) => {
+    const p = pathOf(req)
+    if (p !== base && !p.startsWith(`${base}/`)) return next()
+    const own = route(p)
+    if (own !== undefined && (own === base || own.startsWith(`${base}/`))) return next()
+    serve(req, res, next)
   }
 }
 

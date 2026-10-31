@@ -53,7 +53,7 @@ export function ChangeForm({ meta, obj }: { meta: ModelMeta; obj?: ObjectData })
               {obj && perms.delete && link(href(base, { name: 'delete', model: meta.key, pk: obj.pk }), 'Delete', 'delete', 'trash', 'tva-btn-danger tva-btn-ghost')}
               <div className="flex-1" />
               {meta.perms.add && <button type="button" agentId="save-add" disabled={st.submitting} onClick={() => save('_addanother', st)} className="tva-btn hidden sm:inline-flex">Save and add another</button>}
-              <button type="button" agentId="save-continue" disabled={st.submitting} onClick={() => save('_continue', st)} className="tva-btn">Save and continue</button>
+              <button type="button" id="tva-save-continue" agentId="save-continue" disabled={st.submitting} onClick={() => save('_continue', st)} className="tva-btn">Save and continue</button>
               <button type="submit" agentId="save" disabled={st.submitting} onClick={() => { submitter.current = '_save' }} className="tva-btn tva-btn-primary">{st.submitting ? 'Saving…' : 'Save'}</button>
             </div>
           )} />

@@ -17,6 +17,7 @@ export interface FieldMeta {
 
 export interface InlineMeta {
   name: string; kind: 'tabular' | 'stacked'; model: string; fk: string; fields: string[]
+  verboseName?: string; verboseNamePlural?: string   // heading (Django inline verbose_name_plural); default: the name
   extra: number; max: number; min: number; canDelete: boolean
   meta: Record<string, FieldMeta> | { fields: Record<string, FieldMeta> }   // §2 leaves it open: both accepted
 }

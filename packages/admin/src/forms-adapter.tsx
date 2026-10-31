@@ -38,8 +38,8 @@ export function AdminModelForm({ meta, model, obj, call, readOnly, onSaved, onDi
   return (
     <WeftModelForm form={meta} values={obj?.values} inlines={obj?.inlines as never} readOnly={readOnly} layout="aligned"
       name={model.split('.').pop()} label={obj ? `Change ${obj.display}` : 'Add'} model={model}
-      search={async ({ field, q, page }) => {
-        const r = await call('admin.autocomplete', { model, field, q, page })
+      search={async ({ model: from, field, q, page }) => {   // from = the inline's model for an inline row's field
+        const r = await call('admin.autocomplete', { model: from ?? model, field, q, page })
         return r.ok ? (r.data as { results: { pk: string; text: string }[]; more: boolean }) : { results: [], more: false }
       }}
       call={{ id, args: keyArgs }}

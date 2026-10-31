@@ -1,5 +1,5 @@
 // FieldMeta from ORM field definitions (contract §2), wire conversion of values, and input validation.
-import { hasDefault, type Field, type Kind } from '../../data/fields.js'
+import { type Field, type Kind } from '../../data/fields.js'
 import { pkField, type ModelDef } from '../../data/fields/index.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
@@ -44,7 +44,7 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
   const kind = kindOf(n, f)
   const m: FieldMeta = {
     name: n, label: labelOf(n), kind,
-    required: f.kind !== 'm2m' && f.kind !== 'bool' && !hasDefault(f),
+    required: f.kind !== 'm2m' && f.kind !== 'bool' && !f.opts.optional && !f.opts.auto && f.kind !== 'id' && f.kind !== 'uuid',   // Django blank=False; a default is the add form's initial
     readOnly: o.readonly.includes(n) || f.kind === 'id' || !!f.opts.readOnly || !!f.opts.auto,
     nullable: !!f.opts.optional,
   }

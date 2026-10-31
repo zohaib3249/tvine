@@ -6,10 +6,23 @@ import type { ActionMeta, ActionResult, DeletePreview, Display, Facet, FilterMet
 import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
 import { DeleteTree } from './pages.js'
 
-export function show(v: Display | undefined, empty = '—'): ReactNode {
+// A list cell as Django shows it: choice labels (get_FOO_display), money with its currency, local dates.
+export function show(v: Display | undefined, empty = '—', f?: { kind?: string; choices?: { value: string; label: string }[] }): ReactNode {
   if (v === null || v === undefined || v === '') return <span className="text-muted">{empty}</span>
   if (typeof v === 'boolean') return <span className={v ? 'text-ok' : 'text-danger'} aria-label={v ? 'Yes' : 'No'}><Icon name={v ? 'check' : 'x'} /></span>
-  if (typeof v === 'object') return v.href ? <a href={v.href} className="text-accent hover:underline">{v.text}</a> : v.text
+  if (typeof v === 'object') {
+    const m = v as unknown as { value?: unknown; currency?: unknown }
+    if (typeof m.value === 'number' && typeof m.currency === 'string') {
+      try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: m.currency }).format(m.value) } catch { return `${m.value} ${m.currency}` }
+    }
+    return v.href ? <a href={v.href} className="text-accent hover:underline">{v.text}</a> : v.text
+  }
+  const label = f?.choices?.find((c) => c.value === String(v))?.label
+  if (label) return label
+  if (typeof v === 'string' && (f?.kind === 'datetime' || f?.kind === 'date')) {
+    const d = new Date(v)
+    if (!isNaN(+d)) return <time dateTime={v}>{f.kind === 'date' ? d.toLocaleDateString() : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time>
+  }
   return String(v)
 }
 const raw = (v: Display | undefined) => (v && typeof v === 'object' ? (v.value ?? v.text) : v)
@@ -208,8 +221,8 @@ function EditableTable({ meta, rows, cols, links, ordering, selected, setSelecte
                     cell = <>{cell}{err && <p role="alert" className="mt-0.5 text-xs text-danger">{err}</p>}</>
                   } else if (links.includes(c.name)) {
                     const to = href(base, { name: 'change', model: meta.key, pk: r.pk })
-                    cell = <a href={to} agentId="open" onClick={(e) => { e.preventDefault(); navigate(to) }} className="font-medium text-accent hover:underline">{show(r.values[c.name], meta.display.emptyValueDisplay)}</a>
-                  } else cell = show(r.values[c.name], meta.display.emptyValueDisplay)
+                    cell = <a href={to} agentId="open" onClick={(e) => { e.preventDefault(); navigate(to) }} className="font-medium text-accent hover:underline">{show(r.values[c.name], meta.display.emptyValueDisplay, { kind: c.kind, choices: meta.form.fields[c.name]?.choices })}</a>
+                  } else cell = show(r.values[c.name], meta.display.emptyValueDisplay, { kind: c.kind, choices: meta.form.fields[c.name]?.choices })
                   return <td key={c.name} className={cx('tva-td', c.kind && ['int', 'decimal', 'money'].includes(c.kind) && 'text-right')}>{cell}</td>
                 })}
               </Region>

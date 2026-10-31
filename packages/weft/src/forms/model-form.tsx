@@ -48,6 +48,8 @@ function initialRows(im: InlineMeta, given?: Row[] | { rows: Row[] }): Row[] {
 // Django ignores an untouched extra form; a deleted new row is simply dropped.
 const live = (rows: Row[]) => rows.filter((r) => !(r._new && (!r._touched || r.DELETE)))
 
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // Django capfirst
+
 export function ModelForm(props: ModelFormProps) {
   const { form, onSubmit, readOnly, layout = 'stacked', name = 'model', model, search, call, actions, top, className, slots } = props
   const init = useMemo(() => formValues(form.fields, props.values), [form, props.values])
@@ -180,7 +182,7 @@ export function InlineFormset(p: InlineFormsetProps) {
   const kind = p.kind ?? im.kind
   const fs = inlineFields(im.meta), cols = im.fields.filter((f) => fs[f])
   const kept = rows.filter((r) => !r.DELETE).length
-  const canAdd = !readOnly && rows.length < im.max
+  const canAdd = !readOnly && rows.length < (im.max ?? Infinity)   // null = no limit
   const canRemove = (r: Row) => !readOnly && (r._new || im.canDelete) && (r.DELETE || kept > im.min)
   const add = () => { if (canAdd) onChange([...rows, newRow(im)]) }
   const remove = (key: string) => {
@@ -206,9 +208,9 @@ export function InlineFormset(p: InlineFormsetProps) {
   const rowErr = (i: number) => errors[String(i)] && <p className="tf-hint tf-hint-error" role="alert">{errors[String(i)]}</p>
 
   return <w.Scope>
-    <section ref={w.ref} {...w.props} className={['tf-inline', p.className].filter(Boolean).join(' ')} data-tvine-widget="inline" data-kind={kind} aria-label={im.name}>
+    <section ref={w.ref} {...w.props} className={['tf-inline', p.className].filter(Boolean).join(' ')} data-tvine-widget="inline" data-kind={kind} aria-label={cap(im.verboseNamePlural ?? im.name)}>
       {w.embed}
-      <h3 className="tf-legend">{im.name}</h3>
+      <h3 className="tf-legend">{cap(im.verboseNamePlural ?? im.name)}</h3>
       {kind === 'tabular'
         ? <div className="tf-table-wrap"><table className="tf-table">
             <thead><tr>{cols.map((c) => <th key={c} scope="col">{fs[c]!.label}{fs[c]!.required && <span className="tf-req" aria-hidden="true"> *</span>}</th>)}<th><span className="tf-sr-only">Delete</span></th></tr></thead>

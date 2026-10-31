@@ -351,8 +351,8 @@ function Shortcuts() {
       const typing = (e.target as HTMLElement)?.closest?.('input,textarea,select,[contenteditable=true]')
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchEvent(new CustomEvent('tva:palette')); return }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-        const form = document.getElementById('tva-form') as HTMLFormElement | null
-        if (form) { e.preventDefault(); form.requestSubmit(form.querySelector<HTMLButtonElement>('button[name=_continue]') ?? undefined) }
+        const b = document.getElementById('tva-save-continue')
+        if (b) { e.preventDefault(); b.click() }
         return
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return
