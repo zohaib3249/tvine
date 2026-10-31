@@ -16,6 +16,7 @@ import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
+import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
 import type { Ctx } from '../serialize/envelope.js'
 import { validate } from '../views/generic.js'
@@ -69,7 +70,7 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   const closers: (() => unknown)[] = []
   if (!o.channels && 'close' in channels) closers.push(() => (channels as { close(): unknown }).close())
   const ctx: ServerCtx = {
-    ...o, channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
+    ...o, snapshot: async (page, sid) => markCalls(await o.snapshot(page, sid), o.actions), channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
     hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
     appMiddleware: o.appMiddleware ?? new Map(),
     sessions: o.sessions ?? sessionsFor(settings, { channels }, log),
@@ -87,6 +88,18 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   }
   setOnCommitErrorHandler((e) => log('error', 'onCommit hook failed', { error: errStr(e) }))
   return ctx
+}
+
+// Plain-call controls (headless {call}) whose action refuses agents (denyAgents, mcp:false, humanOnly) get
+// h.agent=false: not listed headless and refused by `ui`, like a signed handle's agent:false (dispatch still enforces).
+function markCalls(s: Snapshot, actions: ServerCtx['actions']): Snapshot {
+  for (const w of s.widgets ?? []) for (const c of Object.values(w.ctl ?? {})) {
+    const h = c.h as { call?: unknown; agent?: boolean } | undefined
+    const def = typeof h?.call === 'string' ? actions.get(h.call) : undefined
+    const r = def?.rules
+    if (r && (r.mcp === false || r.humanOnly || r.permissions?.some((p) => !!(p as { [AGENTS_DENIED]?: true })[AGENTS_DENIED]))) h!.agent = false
+  }
+  return s
 }
 
 // Requests whose caller discards snapshots (the human <Form>: formResult only reads ok/err/goto).

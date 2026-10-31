@@ -100,7 +100,7 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
       const c: CtlFrag | undefined = w?.ctl && Object.hasOwn(w.ctl, s.control) ? w.ctl[s.control] : undefined
       // missing, disabled and agent-denied controls answer alike (can't be probed)
       const handle = (c?.h as { params?: { id?: unknown; bind?: unknown; agent?: unknown } } | undefined)?.params
-      if (!c || c.enabled === false || handle?.agent === false) return fail(i, s, 'unknown_action', 'no such control on this page; re-read the page for widget ids and controls')
+      if (!c || c.enabled === false || handle?.agent === false || (c.h as { agent?: unknown } | undefined)?.agent === false) return fail(i, s, 'unknown_action', 'no such control on this page; re-read the page for widget ids and controls')
       const h = c.h as Record<string, unknown> | undefined
       if (!h) return fail(i, s, 'unknown_action', 'this control changes the page only in a browser tab (no headless path)', { reason: 'in_tab_only' })
       const bad = checkArgs(c.in, s.args)

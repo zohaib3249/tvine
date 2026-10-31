@@ -86,7 +86,7 @@ function fromWidget(w: WidgetFrag, headless: boolean): T {
   const hide = new Set(w.hidden ?? [])
   const data = w.data && fmtData(Object.fromEntries(Object.entries(w.data).filter(([k]) => !hide.has(k))))
   // h.params.agent === false: the control's server action is not agent-callable → not listed
-  const callable = (c: CtlFrag) => (c.h as { params?: { agent?: unknown } } | undefined)?.params?.agent !== false
+  const callable = (c: CtlFrag) => { const h = c.h as { params?: { agent?: unknown }; agent?: unknown } | undefined; return h?.params?.agent !== false && h?.agent !== false }
   // headless: only controls with a headless path; a form field's control (h.field: set it in the form's submit) never works alone
   const alone = (c: CtlFrag) => c.h !== undefined && typeof (c.h as { field?: unknown }).field !== 'string'
   const ctl = w.ho ? [] : Object.entries(w.ctl ?? {}).filter(([, c]) => c.enabled !== false && callable(c) && (!headless || alone(c))).map(([k, c]) => signature(k, c))

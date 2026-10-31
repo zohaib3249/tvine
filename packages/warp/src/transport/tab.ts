@@ -63,6 +63,7 @@ export class TabHub {
   private askRate = new RateLimiter({ limit: 5, windowMs: 60_000 })     // request_control per agent sid / per ip
   private codeRate = new RateLimiter({ limit: 5, windowMs: 60_000 })    // pairing tries per tab / per ip
   private cmdRate = new RateLimiter({ limit: 10, windowMs: 3_334 })     // forwarded commands per tab: 10 burst, 3/s
+  private readRate = new RateLimiter({ limit: 30, windowMs: 1_000 })    // read_page/expand per tab: their own, generous 30/s
   readonly helloRate = new RateLimiter({ limit: 30, windowMs: 10_000 })  // hello (mints sessions) per ip
   readonly tabRate = new RateLimiter({ limit: 30, windowMs: 10_000 })    // request/approve/result per tab (release is exempt)
   private timer: ReturnType<typeof setInterval>
@@ -168,8 +169,8 @@ export class TabHub {
     const tab = h && this.tabs.get(h.tabId)
     if (!h || !tab) return fail('domain', 'not_connected', 'no tab under your control: call request_control')
     if (!tab.send) return fail('expired_sid', 'tab_closed', 'the tab is disconnected; retry shortly or call request_control again')
-    // reads (read_page/expand) are free; only ui/do spend the per-tab bucket
-    const rl = op === 'read' || op === 'expand' ? { ok: true as const } : this.cmdRate.check({ sid: `tab:${tab.id}` })
+    // reads (read_page/expand) have their own generous bucket; ui/do spend the command bucket
+    const rl = (op === 'read' || op === 'expand' ? this.readRate : this.cmdRate).check({ sid: `tab:${tab.id}` })
     if (!rl.ok) return { ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` }
     h.used = Date.now()
     const cmdId = token(), sid = tab.sid
