@@ -27,3 +27,4 @@ export { Table, type TableBulk, type TableColumn, type TableProps } from './tabl
 export { Card, type CardProps } from './card.js'
 export { CartBadge, type CartBadgeProps } from './cart-badge.js'
 export { Carousel, type CarouselProps, type CarouselSlide } from './carousel.js'
+export { SortableList, type SortableListProps } from './sortable-list.js'
