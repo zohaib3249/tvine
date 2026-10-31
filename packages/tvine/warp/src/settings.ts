@@ -222,6 +222,8 @@ const schema: z.ZodType<Settings> = z.object({
   secret: z.union([z.string(), z.array(z.string())]),
   auth: z.object({
     user: fn<(req: Request) => Promise<TvineUser | null>>().optional(),
+    userModel: z.string().regex(/^[a-z][a-z0-9_]*\.[A-Za-z]\w*$/, "'app.Model', e.g. 'accounts.User'").optional(),
+    backends: z.array(z.unknown()).min(1).optional(),
     hashers: z.array(z.object({ algorithm: z.string(), encode: fn<PasswordHasher['encode']>(), verify: fn<PasswordHasher['verify']>(), mustUpdate: fn<PasswordHasher['mustUpdate']>() })).min(1).optional(),
     validators: z.array(fn<PasswordValidator>()).optional(),
     login: z.object({ maxFailures: z.number().int().positive(), accountMaxFailures: z.number().int().positive(), ipMaxFailures: z.number().int().positive(), windowMs: z.number().positive(), lockoutMs: z.number().positive() }).partial().optional(),

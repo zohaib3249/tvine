@@ -10,10 +10,13 @@ import { sendMail } from '../../mail/index.js'
 import { denyAgents, isAuthenticated } from '../../security/permissions.js'
 import {
   AuthUser, checkResetToken, checkSecondFactor, hasSecondFactor, INVALID, login, logout, makeResetToken, newRecoveryCodes,
-  newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser,
+  newToken, newTotpSecret, normCode, recentlyAuthenticated, revokeTokens, safeUser, totpStep, totpUri, uidOf, userOfUid, type SafeUser, type UserRow,
 } from './backend.js'
 import { base32, sha256 } from './crypto.js'
-import { RecoveryCode, Token, Totp, User, UserSession } from './models.js'
+import { getUserModel, RecoveryCode, Token, Totp, UserSession, userMeta } from './models.js'
+import { authenticate } from './user.js'
+const User = { get: (id: number) => getUserModel().get(id), update: (id: number, p: Record<string, unknown>) => getUserModel().update(id, p as never), get objects() { return getUserModel().objects } }
+const emailOf = (r: object): string | null => { const ef = userMeta().emailField; return ef ? ((r as Record<string, unknown>)[ef] as string | null) ?? null : null }
 import { dropOtherSessions, forgetSession, listSessions } from './sessions.js'
 import { checkNewDevice, securityNotice } from './notify.js'
 import { exportToMedia } from './privacy.js'
@@ -69,25 +72,24 @@ const loginFailed = (ctx: ActionCtx, username: string, why: string) =>
 // or out. An agent on its own sid (HTTP/MCP) still may: that session is its own.
 const notInTab: Permission = (ctx) => !(ctx.agent?.is && ['channel', 'webmcp', 'inspector'].includes(String(ctx.agent.via)))
 
+// Django LoginView: authenticate() over settings.auth.backends, then the second factor, then login()
 export const loginAction = defineAction('login', z.object({
-  username: z.string().min(1).max(150),
+  username: z.string().min(1).max(254).optional(),
+  email: z.string().min(1).max(254).optional(),
   password: pw(),
   otp: z.string().max(32).optional(),
-}), async ({ username, password, otp }, ctx): Promise<SafeUser> => {
-  const t = throttleOf(ctx.settings), ip = ctx.request.ip
-  await locked(ctx, username)
-  const row = await User.objects.filter({ username: username.normalize('NFKC') }).first()
-  const { ok, upgrade } = row?.isActive ? await checkPassword(password, row.password, ctx.settings) : { ok: await dummyCheck(password, ctx.settings), upgrade: false }
-  if (!row || !ok) { await t.fail(username, ip); loginFailed(ctx, username, 'password'); throw INVALID() }
+}).refine((p) => p.username !== undefined || p.email !== undefined, { message: 'send username or email', path: ['username'] }),
+async ({ otp, ...credentials }, ctx): Promise<SafeUser> => {
+  const ident = (credentials.username ?? credentials.email)!, t = throttleOf(ctx.settings), ip = ctx.request.ip
+  const row = (await authenticate(ctx, credentials)) as UserRow | null
+  if (!row) throw INVALID()
   if (await hasSecondFactor(row.id)) {
     if (!otp) throw new DomainError('otp_required', 'enter the code from your authenticator app (or a recovery code) as otp')
-    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { await t.fail(username, ip); loginFailed(ctx, username, 'otp'); throw INVALID() }
+    if (!(await checkSecondFactor(ctx.settings, row.id, otp))) { await t.fail(ident, ip); loginFailed(ctx, ident, 'otp'); throw INVALID() }
   }
-  await t.succeed(username, ip)
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
-  const current = upgrade ? await User.update(row.id, { password: await makePassword(password, ctx.settings) }) : row
-  await checkNewDevice(ctx.settings, row, ctx.request)
-  return safeUser(await login(ctx, current))
+  await checkNewDevice(ctx.settings, { id: row.id, username: String((row as Record<string, unknown>)[userMeta().usernameField]), email: emailOf(row) }, ctx.request)
+  return safeUser(await login(ctx, row))
 }, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab] })
 
 export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab] })
@@ -124,10 +126,12 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
   if (!(await resetRate(ctx.settings).check({ sid: `reset:${want}:${ctx.request.ip}` })).ok) return null
   if (!(await accountRate(ctx.settings).check({ sid: `reset:${want}` })).ok) return null
   // case-insensitive (Django get_users: email__iexact): contains narrows in SQL, the exact match is here
-  const rows = (await User.objects.filter([{ field: 'email', op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
-    .filter((r) => r.email?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
+  const ef = userMeta().emailField, uf = userMeta().usernameField
+  if (!ef) return null   // a user model without an email field: no reset by email
+  const rows = (await User.objects.filter([{ field: ef, op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
+    .filter((r) => emailOf(r)?.normalize('NFKC').trim().toLowerCase() === want && r.password && !r.password.startsWith('!'))
   if (!rows.length) return null
-  const out = rows.map((r) => ({ user: { id: String(r.id), username: r.username, email: r.email! }, email: r.email!, uid: uidOf(r), token: makeResetToken(ctx.settings, r), request: ctx.request }))
+  const out = rows.map((r) => ({ user: { id: String(r.id), username: String((r as Record<string, unknown>)[uf]), email: emailOf(r)! }, email: emailOf(r)!, uid: uidOf(r), token: makeResetToken(ctx.settings, r), request: ctx.request }))
   // settings.auth.sendPasswordReset wins; otherwise the default mail through settings.email (sendMail)
   const sender = send ?? ((e: (typeof out)[number]) => sendResetMail(e, ctx.settings.auth?.resetUrl))
   onCommit(() => {

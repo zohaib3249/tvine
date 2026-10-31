@@ -4,7 +4,8 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { importApp } from '../../core/actions.js'
 import { installedApps } from '../../core/apps.js'
-import type { Migration } from './operations.js'
+import { makeOp, type Migration } from './operations.js'
+import { userModelApp, userSwapped, userTable } from '../swappable.js'
 
 // Migration and models modules are TypeScript: importApp loads them through esbuild; tests use vitest.
 // A Loader returns the module namespace (migrations use its `default`).
@@ -40,7 +41,24 @@ export class MigrationGraph {
         g.add(app, name, mod)
       }
     }
+    if (userSwapped()) g.swapUser()
     return g
+  }
+
+  // Django swappable AUTH_USER_MODEL: tvine.auth's shipped migrations point their user fks at the configured model,
+  // never create auth_user, and run after the user app's first migration. The rewritten ops change the checksums,
+  // so switching the model after auth was migrated is caught (migrate / tvine check) instead of silently drifting.
+  swapUser(): void {
+    const table = userTable(), first = this.inApp(userModelApp()).map(n => n.name).sort()[0]
+    for (const n of this.inApp('auth')) {
+      const deps = n.migration.dependencies.some(([a]) => a === 'auth') || !first ? n.migration.dependencies : [...n.migration.dependencies, [userModelApp(), first] as [string, string]]
+      const operations = n.migration.operations.flatMap(op => {
+        if ('model' in op && op.model === 'auth_user') return []
+        const { stateForwards: _s, databaseForwards: _f, databaseBackwards: _b, ...data } = op
+        return [makeOp(JSON.parse(JSON.stringify(data), (k, v) => (k === 'to' && v === 'auth_user' ? table : v)))]
+      })
+      n.migration = { dependencies: deps, operations }
+    }
   }
 
   add(app: string, name: string, migration: Migration): void {

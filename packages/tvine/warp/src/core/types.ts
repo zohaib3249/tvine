@@ -97,6 +97,7 @@ export interface ReadonlyHeaders {
 // request.md: request.user (Django request.user). Always present on Request.
 export interface TvineUser {
   isAuthenticated: boolean
+  isAnonymous?: boolean
   id?: string
   name?: string
   claims?: Record<string, unknown>      // whatever the dev's resolver returns
@@ -107,7 +108,7 @@ export interface TvineUser {
   scopes?: readonly string[]            // token-authenticated: what the token may run ('*', 'read', 'app.*', 'app.x')
   hasPerm?(perm: string, obj?: unknown): Promise<boolean>
 }
-export const ANONYMOUS: TvineUser = Object.freeze({ isAuthenticated: false })
+export const ANONYMOUS: TvineUser = Object.freeze({ isAuthenticated: false, isAnonymous: true })
 
 export interface UploadedFile { field: string; key: string; url: string; type: string; size: number }
 
@@ -335,6 +336,11 @@ export interface RedisConnection { url: string; tls?: boolean; prefix?: string; 
 // (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.
 export interface AuthSettings {
   user?: (req: Request) => Promise<TvineUser | null>   // null/absent → tvine.auth (if installed) or ANONYMOUS
+  // Django AUTH_USER_MODEL: 'app.Model' (default 'auth.User'); pick it before the first migrate
+  userModel?: string
+  // Django AUTHENTICATION_BACKENDS, tried in order: 'tvine.auth.ModelBackend' (default), 'tvine.auth.EmailBackend', a
+  // dotted path 'accounts.backends.LdapBackend' (an export of apps/accounts/backends.ts), or the object / class
+  backends?: unknown[]
   hashers?: PasswordHasher[]           // first = preferred; others verify (and get upgraded on login)
   validators?: PasswordValidator[]
   login?: { maxFailures?: number; accountMaxFailures?: number; ipMaxFailures?: number; windowMs?: number; lockoutMs?: number }

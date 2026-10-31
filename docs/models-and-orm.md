@@ -98,6 +98,10 @@ Key handling: [auth-and-security.md](auth-and-security.md).
 
 ### Meta
 
+**The user.** Point an fk at the configured user model, never at `User` directly: `owner: field.fk(getUserModel)`
+(from `tvine/auth`). That's Django's `ForeignKey(settings.AUTH_USER_MODEL)`, and it follows `settings.auth.userModel`
+(see auth-and-security.md, "Custom user model").
+
 The third argument to `defineModel`:
 
 ```ts

@@ -10,7 +10,7 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
 import { installedApps, unlistedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
-import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
+import { discoverModels, makeMigrations, migrate, migrateCheck, userModelChanged, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport, unawaitedReads } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
@@ -307,9 +307,10 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         connections.configure(settings)
         try {
           await discoverModels(apps, { installed: settings.installedApps })   // every model registered (Meta.personalData)
-          const { User } = await import('./contrib/auth/models.js')
+          const { getUserModel, userMeta } = await import('./contrib/auth/models.js')
+          const User = getUserModel()
           const { exportData, eraseData } = await import('./contrib/auth/privacy.js')
-          const u = await User.objects.filter({ username }).first()
+          const u = await User.objects.filter({ [userMeta().usernameField]: username }).first()
           if (!u) throw new Usage(`no user named ${username}`)
           if (what === 'export') {
             const json = JSON.stringify(await exportData(u.id), null, 2)
@@ -361,6 +362,8 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         for (const l of unawaitedReads(apps)) io.err(`tvine check: warning: ORM read without await (a Promise, not rows): ${l}`)
         const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
         for (const a of unlistedApps(apps, installed)) io.err(`tvine check: warning: app '${a}' exists but is not in installedApps`)
+        const swapped = installed.includes('tvine.auth') ? await userModelChanged(url, apps, { installed }) : undefined
+        if (swapped) { io.err(`tvine check: ${swapped}`); return 1 }
         if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)
         return 0
@@ -471,6 +474,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const settings = await loadSettings()
         if (!settings.installedApps.includes('tvine.auth')) throw new Error("tvine.auth is not installed: add 'tvine.auth' to settings.installedApps")
         const m = await import('./contrib/auth/management.js')
+        await discoverModels(apps, { installed: settings.installedApps })   // a custom settings.auth.userModel
         connections.configure(settings)
         try {
           return cmd === 'createsuperuser'

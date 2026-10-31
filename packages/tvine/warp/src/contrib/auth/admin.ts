@@ -9,7 +9,8 @@ import { eraseData } from './privacy.js'
 import { site } from '../admin/sites.js'
 import { logAction } from '../admin/views.js'
 import { CHANGE } from '../admin/models.js'
-import { Group, User, UserSession } from './models.js'
+import { getUserModel, Group, User, USER_FIELDS, userMeta, UserSession } from './models.js'
+import { concrete } from '../../data/fields.js'
 import { setPassword } from './users.js'
 import { AuthUser, recentlyAuthenticated } from './backend.js'
 import { securityNotice } from './notify.js'
@@ -59,7 +60,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
   readonlyFields = ['lastLogin', 'dateJoined']
   fieldsets: ModelAdmin['fieldsets'] = [
     [null, { fields: ['username', 'password'] }],
-    ['Personal info', { fields: ['email'] }],
+    ['Personal info', { fields: ['firstName', 'lastName', 'email'] }],
     ['Permissions', { fields: ['isActive', 'isStaff', 'isSuperuser'] }],
     ['Important dates', { fields: ['lastLogin', 'dateJoined'] }],
   ]
@@ -99,5 +100,28 @@ export class GroupAdmin extends ModelAdmin {
   ordering = ['name']
 }
 
-site.register(User, UserAdmin)
+// Django UserAdmin on get_user_model(), adapted to it: its usernameField, and a custom model's own fields in an
+// "Additional info" fieldset / the list. A project that registers its user model in its own admin.ts (project apps
+// load first) keeps that registration.
+export function userAdminFor(model: typeof User): typeof UserAdmin {
+  const uf = userMeta(model).usernameField, names = concrete(model.fields).map(([n]) => n)
+  const has = (f: string) => names.includes(f)
+  const extra = concrete(model.fields).filter(([n, f]) => !(n in USER_FIELDS) && !f.opts.hidden && n !== uf).map(([n]) => n)
+  return class extends UserAdmin {
+    listDisplay = [uf, ...['email', 'isStaff', 'isActive'].filter((f) => has(f) && f !== uf)]
+    searchFields = [uf, ...['email', 'firstName', 'lastName'].filter((f) => has(f) && f !== uf)]
+    ordering = [uf]
+    readonlyFields = ['lastLogin', 'dateJoined'].filter(has)
+    fieldsets: ModelAdmin['fieldsets'] = [
+      [null, { fields: [uf, 'password'] }],
+      ['Personal info', { fields: ['firstName', 'lastName', 'email'].filter((f) => has(f) && f !== uf) }],
+      ...(extra.length ? [['Additional info', { fields: extra }] as [string, { fields: string[] }]] : []),
+      ['Permissions', { fields: ['isActive', 'isStaff', 'isSuperuser'] }],
+      ['Important dates', { fields: ['lastLogin', 'dateJoined'].filter(has) }],
+    ].filter(([, f]) => (f as { fields: string[] }).fields.length) as ModelAdmin['fieldsets']
+    str(u: Record<string, unknown>) { return String(u[uf]) }
+  }
+}
+const theUser = getUserModel()
+if (!site.isRegistered(theUser)) site.register(theUser, theUser === User ? UserAdmin : userAdminFor(theUser))
 site.register(Group, GroupAdmin)

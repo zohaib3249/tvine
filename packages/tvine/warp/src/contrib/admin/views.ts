@@ -19,6 +19,7 @@ import { sanitizeHtml } from '../../shape/rich.js'
 import { refuseHumanOnly } from '../../data/fields/inputs.js'
 import { makePassword, validatePassword } from '../auth/passwords.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
+import { userTable } from '../../data/swappable.js'
 import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
 import {
   checkPerm, displayOf, isFilterClass, type ActionResult, type AdminAction, type Ctx, type InlineModelAdmin, type ListFilterClass,
@@ -722,12 +723,12 @@ export const history = defineAction('history', z.object({ model: modelKey, pk: p
   const obj = await objectOf(a, ctx, pk)
   if (!(await a.hasViewPermission(ctx, obj))) throw forbidden()
   const rows = await LogEntry.objects.filter({ contentType: a._key, objectId: String(pk) }).order('actionTime', 'id').all(MAX_PKS)
-  const User = modelNamed<AnyModel>('auth_user')
+  const User = modelNamed<AnyModel>(userTable())
   const ids = [...new Set(rows.map((r) => r.userId).filter((x) => /^\d+$/.test(x)))].map(Number)
   const users = User && ids.length ? await User.objects.inBulk(ids) : {}
   const FLAG = { 1: 'add', 2: 'change', 3: 'delete' } as Record<number, string>
   return rows.map((r) => ({
-    id: r.id, actionTime: r.actionTime.toISOString(), user: { id: r.userId, name: (users[r.userId] as Row | undefined)?.username ?? r.userId },
+    id: r.id, actionTime: r.actionTime.toISOString(), user: { id: r.userId, name: (users[r.userId] as { getUsername?(): string } | undefined)?.getUsername?.() ?? r.userId },
     actionFlag: r.actionFlag, action: FLAG[r.actionFlag], objectRepr: r.objectRepr, changeMessage: r.changeMessage,
   }))
 }, read)

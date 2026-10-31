@@ -7,10 +7,12 @@ import { ANONYMOUS, type ActionCtx, type Request, type Session, type Settings, t
 import { MAX_IN, type Where } from '../../data/queryset.js'
 import { base32, checksum, hotp, mac, macOk, random62, same, seal, sha256, unseal } from './crypto.js'
 import { recordSession, sessionAlive } from './sessions.js'
-import { Group, GroupPermission, Permission, RecoveryCode, Token, Totp, User, UserGroup, UserPermission } from './models.js'
+import { getUserModel, Group, RecoveryCode, Token, Totp, User, USER_FIELDS, UserGroup, userMeta } from './models.js'
+import { permissionsOf, userHasPerm, type userMethods } from './user.js'
+import { concrete, keyOf } from '../../data/fields.js'
 
 export type UserRow = NonNullable<Awaited<ReturnType<typeof User.get>>>
-export interface SafeUser { id: string; username: string; email: string | null; isStaff: boolean; isSuperuser: boolean }
+export interface SafeUser { id: string; username: string; email: string | null; isStaff: boolean; isSuperuser: boolean; [extra: string]: unknown }
 
 export const SESSION_USER = '_auth_user_id', SESSION_HASH = '_auth_user_hash', SESSION_AT = '_auth_login_at'
 
@@ -24,10 +26,17 @@ const inChunks = async <R>(ids: unknown[], fn: (chunk: unknown[]) => Promise<R[]
 }
 const where = (field: string, value: unknown[]): Where[] => [{ field, op: 'in', value }]
 
+// a custom user model's own fields (not the built-in ones, not hidden): on request.user and in auth.me / safeUser
+const extraFields = (): string[] => {
+  const m = getUserModel()
+  return concrete(m.fields).filter(([n, f]) => !(n in USER_FIELDS) && !f.opts.hidden).map(([n, f]) => keyOf(n, f))
+}
+
 // Django's User on request.user. Never holds the password hash. Permission/group sets load once per object
-// (= per request), like Django's _perm_cache.
+// (= per request), like Django's _perm_cache. `username` is the model's usernameField value.
 export class AuthUser implements TvineUser {
   readonly isAuthenticated = true
+  readonly isAnonymous = false
   readonly id: string
   readonly name: string
   readonly username: string
@@ -35,14 +44,22 @@ export class AuthUser implements TvineUser {
   readonly isActive: boolean
   readonly isStaff: boolean
   readonly isSuperuser: boolean
+  readonly firstName: string
+  readonly lastName: string
+  readonly extra: Record<string, unknown> = {}
   #perms?: Promise<Set<string>>
   #groups?: Promise<string[]>
   #settings: Settings
 
   tokenKey?: string   // via 'token': the key of the token this request runs on
   constructor(row: UserRow, settings: Settings, readonly via: 'session' | 'token', readonly scopes?: readonly string[]) {
-    this.id = String(row.id); this.name = this.username = row.username; this.email = row.email
+    const r = row as Record<string, unknown>, meta = userMeta()
+    this.id = String(row.id); this.name = this.username = String(r[meta.usernameField])
+    this.email = meta.emailField ? (r[meta.emailField] as string | null) ?? null : null
     this.isActive = row.isActive; this.isStaff = row.isStaff; this.isSuperuser = row.isSuperuser
+    this.firstName = String(r.firstName ?? ''); this.lastName = String(r.lastName ?? '')
+    for (const k of extraFields()) this.extra[k] = r[k]
+    Object.assign(this, Object.fromEntries(Object.entries(this.extra).filter(([k]) => !(k in this))))   // user.phone
     this.#settings = settings
     if (!scopes) delete (this as { scopes?: unknown }).scopes   // `'scopes' in user` stays false for session users
   }
@@ -55,32 +72,25 @@ export class AuthUser implements TvineUser {
   }
 
   // every codename granted through the user or its groups (Django get_all_permissions); inactive → none
-  allPermissions(): Promise<Set<string>> {
-    return (this.#perms ??= (async () => {
-      if (!this.isActive) return new Set<string>()
-      if (this.isSuperuser) return new Set((await Permission.objects.all()).map((p) => p.codename))
-      const own = (await UserPermission.objects.filter({ userId: Number(this.id) }).all()).map((r) => r.permissionId)
-      const gids = (await UserGroup.objects.filter({ userId: Number(this.id) }).all()).map((r) => r.groupId)
-      const viaGroups = (await inChunks(gids, (c) => GroupPermission.objects.filter(where('groupId', c)).all())).map((r) => r.permissionId)
-      const ids = [...new Set([...own, ...viaGroups])]
-      return new Set((await inChunks(ids, (c) => Permission.objects.filter(where('id', c)).all())).map((p) => p.codename))
-    })())
-  }
-
-  // Django semantics: active superuser → everything; with an object only settings.auth.objectPermission answers
-  async hasPerm(perm: string, obj?: unknown): Promise<boolean> {
-    if (!this.isActive) return false
-    if (obj !== undefined) {
-      if (this.isSuperuser) return true
-      const f = this.#settings.auth?.objectPermission
-      return f ? !!(await f(this, perm, obj)) : false
-    }
-    return this.isSuperuser || (await this.allPermissions()).has(perm)
-  }
+  allPermissions(): Promise<Set<string>> { return (this.#perms ??= permissionsOf(this)) }
+  getAllPermissions(): Promise<Set<string>> { return this.allPermissions() }
+  getGroupPermissions(): Promise<Set<string>> { return permissionsOf(this, true) }
+  hasPerm(perm: string, obj?: unknown): Promise<boolean> { return userHasPerm(this, () => this.allPermissions(), perm, obj, this.#settings) }
   async hasPerms(perms: string[], obj?: unknown): Promise<boolean> {
     for (const p of perms) if (!(await this.hasPerm(p, obj))) return false
     return true
   }
+  async hasModulePerms(app: string): Promise<boolean> {
+    if (!this.isActive) return false
+    return this.isSuperuser || [...(await this.allPermissions())].some((p) => p.startsWith(`${app}.`))
+  }
+  getUsername(): string { return this.username }
+  getFullName(): string { return [this.firstName, this.lastName].filter(Boolean).join(' ').trim() }
+  // the hash is never on request.user: these read the row
+  async checkPassword(raw: string): Promise<boolean> { return !!(await this.row())?.checkPassword(raw) }
+  async hasUsablePassword(): Promise<boolean> { return !!(await this.row())?.hasUsablePassword() }
+  // the full ORM row (with its methods: setPassword, setUnusablePassword…)
+  row(): Promise<(UserRow & typeof userMethods) | undefined> { return getUserModel().get(this.id) as never }
 
   // the BYO convention (request.user.claims) carries the same flags, so code written against either reads them
   get claims(): Record<string, unknown> { return { username: this.username, email: this.email, isStaff: this.isStaff, isSuperuser: this.isSuperuser, isActive: this.isActive } }
@@ -88,8 +98,11 @@ export class AuthUser implements TvineUser {
   toJSON(): SafeUser { return safeUser(this) }
 }
 
-export const safeUser = (u: { id: string | number; username: string; email: string | null; isStaff: boolean; isSuperuser: boolean }): SafeUser =>
-  ({ id: String(u.id), username: u.username, email: u.email, isStaff: u.isStaff, isSuperuser: u.isSuperuser })
+// auth.me's shape: the built-in five plus a custom user model's own non-hidden fields
+export const safeUser = (u: AuthUser | UserRow): SafeUser => {
+  const a = u instanceof AuthUser ? u : new AuthUser(u, {} as Settings, 'session')
+  return { id: a.id, username: a.username, email: a.email, isStaff: a.isStaff, isSuperuser: a.isSuperuser, ...a.extra }
+}
 
 // ---- session binding ---------------------------------------------------------------------------------
 // Django HASH_SESSION_KEY: bound to the password hash, so a password change logs out every other session.
@@ -98,7 +111,7 @@ export const sessionHash = (s: Settings, passwordHash: string) => mac(s, 'sessio
 export async function sessionUser(settings: Settings, session: Session): Promise<UserRow | undefined> {
   const id = session.data.get(SESSION_USER), hash = session.data.get(SESSION_HASH)
   if (id === undefined) return undefined
-  const row = typeof id === 'string' && /^\d+$/.test(id) ? await User.get(Number(id)) : undefined
+  const row = typeof id === 'string' && /^\d+$/.test(id) ? await getUserModel().get(Number(id)) : undefined
   if (row && row.isActive && typeof hash === 'string' && macOk(settings, 'session', row.password, hash) && await sessionAlive(session, row.id)) return row
   session.data.delete(SESSION_USER); session.data.delete(SESSION_HASH)   // stale binding: flushed like Django
   return undefined
@@ -114,7 +127,7 @@ export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
   ctx.session.data.set(SESSION_HASH, sessionHash(ctx.settings, row.password))
   cycleSession(ctx)
   await recordSession(ctx, row.id)   // auth.sessions: listed, revocable
-  const fresh = await User.update(row.id, { lastLogin: new Date() })
+  const fresh = await getUserModel().update(row.id, { lastLogin: new Date() })
   const user = new AuthUser(fresh, ctx.settings, 'session')
   ctx.request.user = user
   return user
@@ -160,7 +173,7 @@ export async function tokenUser(settings: Settings, token: string): Promise<Auth
   if (!m || checksum(token.slice(0, token.lastIndexOf('_'))) !== m[3]) return undefined
   const row = await Token.objects.filter({ key: m[1] }).first()
   if (!row || !same(sha256(token), row.digest) || row.revoked || (row.expiresAt && row.expiresAt.getTime() <= Date.now())) return undefined
-  const user = await User.get(row.userId)
+  const user = await getUserModel().get(row.userId)
   if (!user?.isActive) return undefined
   // at most once a minute, outside the request's transaction; a failed stamp never fails the request
   if (!row.lastUsed || Date.now() - row.lastUsed.getTime() > LAST_USED_MS) void Token.objects.filter({ id: row.id }).update({ lastUsed: new Date() }).catch(() => undefined)
@@ -185,7 +198,7 @@ export function backendFor(settings: Settings): AuthBackend {
 
 // ---- password reset tokens -------------------------------------------------------------------------
 // <ts base36>-<hmac>: bound to the password hash (single use: a reset changes it), lastLogin and email.
-const resetData = (r: UserRow, ts: number) => [r.id, r.password, r.lastLogin?.getTime() ?? '', r.email ?? '', ts].join('|')
+const resetData = (r: UserRow, ts: number) => { const ef = userMeta().emailField; return [r.id, r.password, r.lastLogin?.getTime() ?? '', (ef && (r as Record<string, unknown>)[ef]) ?? '', ts].join('|') }
 export const uidOf = (r: UserRow) => Buffer.from(String(r.id)).toString('base64url')
 export const userOfUid = (uid: string) => { const id = Buffer.from(uid, 'base64url').toString(); return /^\d{1,15}$/.test(id) ? Number(id) : undefined }
 export function makeResetToken(s: Settings, r: UserRow, now = Date.now()): string {

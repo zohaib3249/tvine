@@ -32,6 +32,14 @@ export function hasPerm(...perms: string[]): Permission {
   }
 }
 
+// Django's view decorators as permissions (permissions: [...] on an action, a view, @action):
+export const loginRequired: Permission = isAuthenticated                                        // login_required
+export const staffMemberRequired: Permission = isStaff                                          // staff_member_required (active staff)
+export const permissionRequired = (...perms: string[]): Permission => hasPerm(...perms)         // permission_required
+// user_passes_test: any check on the user (and the call); a throw denies
+export const userPassesTest = (test: (user: PermissionCtx['user'], ctx: PermissionCtx) => boolean | Promise<boolean>): Permission =>
+  async (ctx) => !!(await test(ctx.user, ctx))
+
 // '<app>.<action>_<model>'; a model named '<app>_x' drops the prefix (auth_user → auth.change_user)
 export const permCodename = (app: string, action: string, model: string) =>
   `${app}.${action}_${model.startsWith(`${app}_`) ? model.slice(app.length + 1) : model}`
