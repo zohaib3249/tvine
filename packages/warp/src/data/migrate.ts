@@ -12,7 +12,7 @@ import { contribLabels, installedApps } from '../core/apps.js'
 import { appSignals } from '../core/middleware.js'
 import { openConn, type Connection } from './db.js'
 import { checkRelations } from './registry.js'
-import { IntField, TextField } from './fields/index.js'
+import { IntField, isAuto, TextField } from './fields/index.js'
 import type { Model } from './model.js'
 import { and, bin, col, inList, param } from './sql/ast.js'
 import type { Dialect, Statement } from './sql/dialect.js'
@@ -149,7 +149,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   }
   // Django --noinput: existing rows would have no value (auto datetimes are backfilled at migrate time)
   for (const o of Object.values(changes).flat()) {
-    if (o.kind === 'addField' && o.field.kind !== 'm2m' && !o.field.opts.optional && o.field.opts.default === undefined && !o.field.opts.auto) {
+    if (o.kind === 'addField' && o.field.kind !== 'm2m' && !o.field.opts.optional && o.field.opts.default === undefined && !isAuto(o.field.opts)) {
       throw new Error(`field ${o.model}.${o.name} is required and has no default: add default:, make it optional, or add it in two steps`)
     }
   }

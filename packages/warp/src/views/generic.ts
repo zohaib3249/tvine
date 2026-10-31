@@ -8,7 +8,7 @@ import { DomainError } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
 import { deniesAgents, permissionCtx, runPermissions } from '../security/permissions.js'
 import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Where } from '../data/queryset.js'
-import { hasDefault, pkField, type Field, type Kind } from '../data/fields.js'
+import { hasDefault, isAuto, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
@@ -97,7 +97,8 @@ function valueSchema(f: AnyField): z.ZodTypeAny {
     // The field's lookup()/toDb converts to cents.
     case 'money': return z.preprocess(v => (typeof v === 'string' && /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : v), z.number())
       .refine(v => (f.zod() as z.AnyZodObject).shape.value.safeParse(v).success, 'money value must have at most 2 decimals')
-    case 'id': case 'int': case 'float': return num
+    case 'id': case 'int': case 'float': case 'duration': return num
+    case 'date': case 'time': case 'decimal': case 'email': case 'url': case 'slug': return f.zod()
     case 'fk': return pkField(f.target!())[1].kind === 'id' ? num : z.string()
     case 'bool': return z.preprocess(toBool, z.boolean())
     case 'datetime': return z.preprocess(v => (typeof v === 'string' || typeof v === 'number' ? new Date(v) : v), z.date())
@@ -370,7 +371,7 @@ function defaultSerializer<T extends object>(v: GenericView<T>): Serializer<T> {
 // Write-protected by the model: readOnly, or hidden unless writeOnly; plus generated keys.
 function modelReadOnly(model: Model<any, any>): Set<string> {
   return new Set(Object.entries(model.fields as Record<string, AnyField>)
-    .filter(([, f]) => f.kind === 'id' || f.kind === 'uuid' || f.opts.auto || f.opts.readOnly || (f.opts.hidden && !f.opts.writeOnly))
+    .filter(([, f]) => f.kind === 'id' || f.kind === 'uuid' || isAuto(f.opts) || f.opts.readOnly || (f.opts.hidden && !f.opts.writeOnly))
     .map(([n, f]) => f.key(n)))
 }
 
@@ -432,7 +433,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       const { field, op } = parseLookup(l)
       if (!op) fail(`filter "${l}": unknown lookup (use exact, __lt, __lte, __gt, __gte, __in, __contains, __ne)`)
       const f = need(`filter "${l}"`, field)
-      if (op === 'contains' && f.kind !== 'text') fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
+      if (op === 'contains' && !['text', 'email', 'url', 'slug'].includes(f.kind)) fail(`filter "${l}": __contains needs a text field ("${field}" is ${f.kind})`)
       lookups[l] = lookupSchema(f, op!).optional()
     }
     const sorts = gv.ordering.flatMap(f => [f, `-${f}`])

@@ -4,7 +4,7 @@
 // Migrations: native ALTER COLUMN — never a rebuild; the whole migration runs in one transaction.
 import type { SqlNode } from '../ast.js'
 import { checkIdent, pgObjectName, renderNode, type Dialect, type Statement } from '../dialect.js'
-import { ddlLiteral } from '../../fields/base.js'
+import { ddlLiteral, isAuto } from '../../fields/base.js'
 import { addAutoDatetime, alterGuard, defaultRender, indexDiff, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, type FieldSpec, type ProjectState } from '../../schema/state.js'
 import type { FkField } from '../../fields/fk.js'
@@ -78,7 +78,7 @@ export const postgres: Dialect = {
     if (op.kind === 'alterField') return alterField(op, from, to)
     if (op.kind === 'renameField' || op.kind === 'renameModel') return [...defaultRender(op, postgres, from, to), ...renameUniques(op, from)]
     const o = op.kind === 'addField' ? op.field.opts : undefined
-    if (op.kind === 'addField' && op.field.kind === 'datetime' && o?.auto && !o.optional && o.default === undefined) {
+    if (op.kind === 'addField' && (op.field.kind === 'datetime' || op.field.kind === 'date') && o && isAuto(o) && !o.optional && o.default === undefined) {
       return addAutoDatetime(op, postgres, from, to, postgres.render({ t: 'alterTable', name: op.model, alterColumn: { name: op.name, action: 'SET NOT NULL' } }))
     }
     return defaultRender(op, postgres, from, to)

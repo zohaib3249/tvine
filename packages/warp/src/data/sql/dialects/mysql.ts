@@ -8,7 +8,7 @@
 // inline REFERENCES); renames keep their names — and unique key names — in step.
 import { createHash } from 'node:crypto'
 import { renderNode, checkIdent, type Dialect, type Statement } from '../dialect.js'
-import { ddlLiteral } from '../../fields/base.js'
+import { ddlLiteral, isAuto } from '../../fields/base.js'
 import { fkName } from '../../fields/fk.js'
 import { addAutoDatetime, alterGuard, defaultRender, indexDiff, indexesOf, type Operation } from '../../schema/operations.js'
 import { fieldOf, findModel, type FieldSpec, type ProjectState } from '../../schema/state.js'
@@ -68,7 +68,7 @@ const fit = (name: string) => name.length <= 64 ? name : `${name.slice(0, 55)}_$
 
 function addField(op: Op<'addField'>, from: ProjectState, to: ProjectState): Statement[] {
   const o = op.field.opts
-  const main = op.field.kind === 'datetime' && o.auto && !o.optional && o.default === undefined
+  const main = (op.field.kind === 'datetime' || op.field.kind === 'date') && isAuto(o) && !o.optional && o.default === undefined
     ? addAutoDatetime(op, mysql, from, to, alter(op.model, `MODIFY COLUMN ${modifyDDL(op.field, op.name, to)[0]}`))
     : defaultRender(op, mysql, from, to)
   return [...main, ...fks(to, op.model, op.model, op.name).map(f => alter(op.model, `ADD ${f.ddl}`))]

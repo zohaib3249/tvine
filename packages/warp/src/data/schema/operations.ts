@@ -3,7 +3,7 @@
 //   databaseForwards(dialect, from, to)  — the SQL, via dialect.renderOperation (sqlite rebuilds
 //                                          tables for what it cannot ALTER; see dialects/sqlite.ts)
 // Column DDL always comes from the Field (columnDDL / dbType): fields own it, ops only collect.
-import { throughOf, type DbName, type Field, type Kind } from '../fields/index.js'
+import { isAuto, throughOf, type DbName, type Field, type Kind } from '../fields/index.js'
 import { isNull, param, type Expr, type SqlNode } from '../sql/ast.js'
 import { checkIdent, objectName, type Dialect, type Statement } from '../sql/dialect.js'
 import { ddlScope } from '../sql/compile.js'
@@ -420,7 +420,7 @@ const irreversible = (o: OpData, why: string) => new Error(`cannot roll back ${o
 export function inverse(o: OpData, before: ProjectState): OpData {
   const m = (name: string) => findModel(before, name)?.model
   const refill = (model: string, name: string, f: FieldSpec) => {
-    if (f.kind !== 'm2m' && f.kind !== 'id' && f.kind !== 'uuid' && !f.opts.optional && f.opts.default === undefined && !f.opts.auto) {
+    if (f.kind !== 'm2m' && f.kind !== 'id' && f.kind !== 'uuid' && !f.opts.optional && f.opts.default === undefined && !isAuto(f.opts)) {
       throw irreversible(o, `${model}.${name} is required and has no default, so existing rows could not be re-filled (add a default, or write a runSQL migration)`)
     }
   }

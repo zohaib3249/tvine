@@ -20,7 +20,7 @@ type AnyField = Field<any, boolean, Kind, boolean>
 export const emptyState = (): ProjectState => ({ apps: {} })
 
 // boolean flags that mean nothing when false; `default: false` is a real value and stays
-const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto'])
+const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto', 'autoNow', 'autoNowAdd'])
 // view-only flags (generic views' serializers) and the reverse accessor name: no DDL, so they never
 // enter state or migrations
 const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly', 'relatedName'])

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { DomainError } from '../core/errors.js'
 import { QuerySet } from './queryset.js'
 import { aggregateRows, atomic, bulkUpdate, engineSource, existsRows, insertMany, insertRow } from './engine.js'
-import { concrete, hasDefault, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
+import { concrete, hasDefault, isAuto, keyOf, pkField, rowSchema, type Create, type Fields, type ModelMeta, type Row } from './fields.js'
 import { defineChecked } from './registry.js'
 import { prefetch, related, type RelatedManager } from './related.js'
 import { checkIdent } from './sql/dialect.js'
@@ -51,7 +51,7 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
       const k = keyOf(n, f)
       if (row[k] !== undefined) continue
       if (f.kind === 'uuid') row[k] = randomUUID()
-      else if (f.opts.auto && f.kind === 'datetime') row[k] = new Date()
+      else if (isAuto(f.opts) && (f.kind === 'datetime' || f.kind === 'date')) row[k] = new Date()
       else if (f.opts.default !== undefined) row[k] = f.opts.default
     }
     return row
@@ -72,7 +72,10 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
     create: async data => insertRow(def, prepare(data as Record<string, unknown>)),
     get: id => source.get(id),
     async update(id, patch) {
-      const n = await objects.filter({ id }).update(patch)
+      // Django auto_now: Model.update is save(); a QuerySet.update() leaves the field alone (Django too)
+      const now: Record<string, unknown> = {}
+      for (const [n, f] of concrete(fields)) if (f.opts.autoNow && !(keyOf(n, f) in patch)) now[keyOf(n, f)] = new Date()
+      const n = await objects.filter({ id }).update({ ...now, ...patch })
       const row = n ? await source.get(id) : undefined
       if (!row) throw new DomainError('domain', `${name} ${id} not found`)
       return row

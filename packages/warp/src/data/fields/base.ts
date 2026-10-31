@@ -7,6 +7,7 @@ import type { Dialect } from '../sql/dialect.js'
 import type { Op } from '../queryset.js'
 
 export type Kind = 'id' | 'uuid' | 'text' | 'int' | 'float' | 'bool' | 'money' | 'enum' | 'datetime' | 'json' | 'image' | 'fk' | 'm2m'
+  | 'date' | 'time' | 'duration' | 'decimal' | 'email' | 'url' | 'slug' | 'file'
 export type OnDelete = 'CASCADE' | 'PROTECT' | 'SET_NULL' | 'SET_DEFAULT' | 'RESTRICT' | 'DO_NOTHING'
 export type DbName = Dialect['name']
 
@@ -19,7 +20,13 @@ export interface Opts {
   hidden?: boolean                      // left out of generic views' default serializer output
   readOnly?: boolean                    // generic views: never accepted as create/update input
   writeOnly?: boolean                   // generic views: accepted as input, never output (overrides hidden's write-protect)
-  auto?: boolean                        // datetime only: default now
+  auto?: boolean                        // datetime only: default now (= autoNowAdd)
+  autoNowAdd?: boolean                  // date / datetime: set to now on create (Django auto_now_add)
+  autoNow?: boolean                     // date / datetime: set to now on create and on Model.update (Django auto_now)
+  maxLength?: number                    // email / url / slug (Django max_length; defaults 254 / 200 / 50)
+  maxDigits?: number                    // decimal (Django max_digits, default 12)
+  decimalPlaces?: number                // decimal (Django decimal_places, default 2)
+  uploadTo?: string                     // file / image: storage key prefix, e.g. 'avatars' (Django upload_to)
   onDelete?: OnDelete                   // fk only (default RESTRICT); orm-advanced.md §4
   relatedName?: string                  // fk / m2m: the reverse accessor name (default `<model>_set`); no DDL
 }
@@ -107,6 +114,9 @@ export function ddlLiteral(v: unknown): string {
 
 // every entry runs in a conformance suite (sqlite always; postgres / mysql via scripts/test-*.sh)
 export const byDb = (d: Dialect, t: Record<DbName, string>) => t[d.name]
+
+// a "now" default: legacy `auto`, autoNowAdd or autoNow (create fills it; migrations backfill existing rows)
+export const isAuto = (o: Opts) => !!(o.auto || o.autoNowAdd || o.autoNow)
 
 export const keyOf = (name: string, f: Field<any, boolean, Kind, boolean>) => f.key(name)
 // fields that own column(s) — everything but m2m
