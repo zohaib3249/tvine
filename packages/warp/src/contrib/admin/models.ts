@@ -16,3 +16,12 @@ export const LogEntry = defineModel('admin_logentry', {
   actionFlag: field.int(),
   changeMessage: field.json(),
 })
+
+// per-user admin preferences (saved filters, column choices): bounded JSON per key (views.ts caps size + count)
+export const AdminPref = defineModel('admin_pref', {
+  id: field.id(),
+  userId: field.text(),
+  key: field.text(),
+  value: field.json(),
+  updatedAt: field.datetime({ auto: true }),
+}, { unique: [['userId', 'key']] })

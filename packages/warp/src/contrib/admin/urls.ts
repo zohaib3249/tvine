@@ -8,6 +8,9 @@ export const appName = 'admin'
 export const urlpatterns = [
   ...site.customUrls(),
   path('api/site/', v.siteAction, { name: 'site' }),
+  path('api/recent/', v.recent, { name: 'recent' }),
+  path('api/search/', v.search, { name: 'search' }),
+  path('api/prefs/', v.prefs, { name: 'prefs', methods: ['POST'] }),
   path('api/<str:model>/meta/', v.meta, { name: 'meta' }),
   path('api/<str:model>/autocomplete/', v.autocomplete, { name: 'autocomplete' }),
   path('api/<str:model>/', v.list, { name: 'changelist' }),

@@ -14,5 +14,12 @@ export default migration({
       actionFlag: field.int(),
       changeMessage: field.json(),
     }),
+    ops.createModel('admin_pref', {
+      id: field.id(),
+      userId: field.text(),
+      key: field.text(),
+      value: field.json(),
+      updatedAt: field.datetime({ auto: true }),
+    }, { unique: [['userId', 'key']] }),
   ],
 })

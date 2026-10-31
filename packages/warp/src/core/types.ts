@@ -161,6 +161,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
   rawParams?: boolean               // run() validates its own params (class views); dispatch passes them unparsed
+  multipart?: { maxBytes: number }  // POST /tvine/api/<id> may be multipart: a `params` JSON part + file parts (all files ≤ maxBytes)
 }
 export interface ActionRules {
   anonymous?: boolean               // default true in v1

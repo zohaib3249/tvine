@@ -8,12 +8,13 @@ import { DomainError } from '../../core/errors.js'
 import type { ActionDef } from '../../core/types.js'
 import type { Field, Fields, Kind, ModelDef } from '../../data/fields/index.js'
 import type { Model } from '../../data/model.js'
-import { Count, Q, type QNode } from '../../data/expressions.js'
+import { Count, Max, Min, Q, type QNode } from '../../data/expressions.js'
 import type { QuerySet } from '../../data/queryset.js'
 import { modelNamed, referencesTo } from '../../data/registry.js'
 import { isStaff } from '../../security/permissions.js'
+import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
-import { ADDITION, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
+import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
 import {
   checkPerm, displayOf, isFilterClass, type ActionResult, type AdminAction, type Ctx, type InlineModelAdmin, type ListFilterClass,
   type ListParams, type ModelAdmin,
@@ -271,6 +272,37 @@ async function relatedReprs(a: ModelAdmin, rows: Row[], cols: Col[]): Promise<Ma
   return out
 }
 
+// dateHierarchy facets (the UI's drill-down): `<f>__year` counts, then `__month` once a year is chosen, then `__day`
+async function hierarchyFacets(a: ModelAdmin, ctx: Ctx, p: ListParams): Promise<Record<string, { value: string; label: string; count: number }[]>> {
+  const dh = a.dateHierarchy!, key = a.model.fields[dh]!.key(dh), f = p.filters ?? {}
+  const base = applyHierarchy(a, await changelistQs(a, ctx, { ...p, filters: Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${dh}__`))) }), {})
+  const range = (from: Date, to: Date) => base.filter({ [`${key}__gte`]: from, [`${key}__lt`]: to }).count()
+  const y = f[`${dh}__year`], m = f[`${dh}__month`]
+  const out: { value: string; label: string; count: number }[] = []
+  if (y === undefined) {
+    const { lo, hi } = await base.aggregate({ lo: Min(key), hi: Max(key) })
+    if (!lo) return { [`${dh}__year`]: [] }
+    // ponytail: one COUNT per year, capped at 50 years
+    for (let yr = Math.max(new Date(lo).getFullYear(), new Date(hi).getFullYear() - 49); yr <= new Date(hi).getFullYear(); yr++) {
+      const n = await range(new Date(yr, 0, 1), new Date(yr + 1, 0, 1))
+      if (n) out.push({ value: String(yr), label: String(yr), count: n })
+    }
+    return { [`${dh}__year`]: out }
+  }
+  if (m === undefined) {
+    for (let mo = 0; mo < 12; mo++) {
+      const n = await range(new Date(+y, mo, 1), new Date(+y, mo + 1, 1))
+      if (n) out.push({ value: String(mo + 1), label: new Date(+y, mo, 1).toLocaleString('en', { month: 'long' }), count: n })
+    }
+    return { [`${dh}__month`]: out }
+  }
+  for (let d = 1; d <= new Date(+y, +m, 0).getDate(); d++) {
+    const n = await range(new Date(+y, +m - 1, d), new Date(+y, +m - 1, d + 1))
+    if (n) out.push({ value: String(d), label: String(d), count: n })
+  }
+  return { [`${dh}__day`]: out }
+}
+
 // ---- delete collector (Django NestedObjects) --------------------------------------------------------------
 type Tree = { model: string; pk: string; repr: string; children: Tree[] }
 type Prot = { model: string; pk: string; repr: string; field: string }
@@ -408,7 +440,7 @@ export const meta = defineAction('meta', z.object({ model: modelKey }), async ({
       listDisplay: cols.map(({ name, label, sortable, kind }) => ({ name, label, sortable, kind })),
       listDisplayLinks: a.listDisplayLinks ?? [cols[0]!.name], listEditable: a.listEditable, listPerPage: a.listPerPage, listMaxShowAll: a.listMaxShowAll,
       dateHierarchy: a.dateHierarchy, searchHelp: a.searchFields.length ? a.searchHelpText ?? `Search by ${a.searchFields.map((s) => labelOf(s.replace(/^[\^=@]/, '').replace(/__/g, ' '))).join(', ')}` : null,
-      search: a.searchFields.length > 0, emptyValueDisplay: a.emptyValueDisplay, actions, filters, saveOnTop: a.saveOnTop, actionsOnTop: a.actionsOnTop,
+      search: a.searchFields.length > 0, showFullResultCount: a.showFullResultCount, sortableBy: a.sortableBy, showFacets: a.showFacets, emptyValueDisplay: a.emptyValueDisplay, actions, filters, saveOnTop: a.saveOnTop, actionsOnTop: a.actionsOnTop,
     },
     form: { fieldsets: (a.fieldsets ?? [[null, { fields: formFields(a) }]]).map(([title, f]) => ({ title, classes: f.classes ?? [], description: f.description ?? null, fields: f.fields })), fields, inlines },
     perms: await perms(a, ctx), urls: site.customUrlMeta(a), agents: a.agents,
@@ -457,7 +489,10 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
       for (const [value, label] of ch) facets[s.name]!.push({ value, label, count: await (await applyFilter(a, ctx, base, s, value)).count() })
     }
   }
-  return { rows: out, count, page, pages: Math.max(1, Math.ceil(count / size)), ...(facets && { facets }) }
+  if (a.dateHierarchy && !a.changelist) (facets ??= {}) && Object.assign(facets, await hierarchyFacets(a, ctx, p))
+  const filtered = !!(p.q?.trim() || Object.keys(p.filters ?? {}).length)
+  const fullCount = a.showFullResultCount && filtered && !a.changelist ? await a.getQueryset(ctx).count() : undefined
+  return { rows: out, count, page, pages: Math.max(1, Math.ceil(count / size)), ...(fullCount !== undefined && { fullCount }), ...(facets && { facets }) }
 }, read)
 
 export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
@@ -477,10 +512,40 @@ export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }
 }, read)
 
 const saveParams = z.object({ model: modelKey, pk: pkParam.optional(), values: z.record(z.unknown()).default({}), inlines: z.record(z.array(z.object({ pk: pkParam.optional(), DELETE: z.boolean().optional() }).passthrough()).max(MAX_PKS)).optional() })
+// multipart file parts (transport/api.ts): `<field>` or `<inline>.<i>.<field>`, each checked against its field's
+// upload limits (FieldMeta.upload: accept, maxBytes) and stored; the value becomes the storage key
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const FILE_MAX = 5 * 1024 * 1024
+const typesOf = (accept: string) => accept.split(',').map((t) => t.trim()).flatMap((t) => (t === 'image/*' ? IMAGE_TYPES : [t]))
+async function storeFiles(a: ModelAdmin, ctx: Ctx, p: z.infer<typeof saveParams>, stored: string[]): Promise<void> {
+  for (const part of filePartsOf(ctx.request)) {
+    const m = /^(?:(\w+)\.(\d{1,4})\.)?(\w+)$/.exec(part.field)
+    const owner: Base | undefined = !m ? undefined : m[1] ? site.inlinesOf(a).find((i) => inlineName(i) === m[1]) : a
+    const f = owner && formFields(owner).includes(m![3]!) ? owner.model.fields[m![3]!] : undefined
+    const up = f && fieldMeta(m![3]!, f, metaOpts(owner!)).upload
+    if (!up) throw bad(part.field, 'not a file field of this form')
+    const file = await storePart(part, { maxBytes: up.maxBytes ?? FILE_MAX, types: typesOf(up.accept) }, ctx.settings.media)
+    stored.push(file.key)
+    if (!m![1]) p.values[m![3]!] = file.key
+    else {
+      const rows = ((p.inlines ??= {})[m![1]] ??= [])
+      ;(rows[+m![2]!] ??= {})[m![3]!] = file.key
+    }
+  }
+}
 async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) {
   const a = await gate(ctx, p.model, 'module')
   const obj = creating ? undefined : await objectOf(a, ctx, p.pk)
   if (!(await (creating ? a.hasAddPermission(ctx) : a.hasChangePermission(ctx, obj)))) throw forbidden()
+  const stored: string[] = []
+  try { return await saveChecked(a, p, ctx, creating, obj, stored) } catch (e) {
+    const disk = new DiskStorage(ctx.settings.media.dir, ctx.settings.media.route)
+    await Promise.all(stored.map((k) => disk.delete(k)))   // the request rolled back: no orphan files
+    throw e
+  }
+}
+async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
+  await storeFiles(a, ctx, p, stored)
   const c = clean(a, p.values, creating)
   if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
   const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
@@ -490,8 +555,10 @@ async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) 
   await logAction(ctx, a._key, row.id, a.str(row), creating ? ADDITION : CHANGE, msg)
   return { ok: true, pk: String(row.id) }
 }
-export const create = defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), staff)
-export const update = defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), staff)
+// files ride as multipart (transport/api.ts); 50 MB per request, each file capped by its field
+const MULTIPART = { maxBytes: 50 * 1024 * 1024 }
+export const create = Object.assign(defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), staff), { multipart: MULTIPART })
+export const update = Object.assign(defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), staff), { multipart: MULTIPART })
 
 const pksParams = z.object({ model: modelKey, pks: z.array(pkParam).max(MAX_PKS) })
 export const remove = defineAction('delete', pksParams, async ({ model, pks }, ctx) => {
@@ -573,21 +640,62 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
   const a = await gate(ctx, p.model, 'change')
   const objs = await selected(a, ctx, p.rows.map((r) => r.pk))
   const work = []
-  const errors: { pk: string; errors: Record<string, string> }[] = []
+  const errors: Record<string, Record<string, string>> = {}
   for (const r of p.rows) {
     const obj = objs.find((o) => String(o.id) === String(r.pk))
-    if (!obj) { errors.push({ pk: String(r.pk), errors: { pk: 'Not found.' } }); continue }
+    if (!obj) { errors[String(r.pk)] = { pk: 'Not found.' }; continue }
     if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
     const c = clean(a, r.values, false, a.listEditable)
-    if (Object.keys(c.errors).length) errors.push({ pk: String(r.pk), errors: c.errors })
+    if (Object.keys(c.errors).length) errors[String(r.pk)] = c.errors
     else work.push({ obj, c })
   }
-  if (errors.length) return { ok: false, updated: 0, errors }   // Django formset: one invalid row saves nothing
+  if (Object.keys(errors).length) return { ok: false, updated: 0, errors }   // Django formset: one invalid row saves nothing
   for (const { obj, c } of work) {
     if (!c.changed.length) continue
     const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
     await logAction(ctx, a._key, row.id, a.str(row), CHANGE, [{ changed: { fields: c.changed.map(labelOf) } }])
   }
-  return { ok: true, updated: work.filter((w) => w.c.changed.length).length, errors: [] }
+  return { ok: true, updated: work.filter((w) => w.c.changed.length).length, errors: {} }
 }, staff)
 
+
+// ---- dashboard + palette + per-user prefs ---------------------------------------------------------------
+const FLAGS: Record<number, string> = { 1: 'add', 2: 'change', 3: 'delete' }
+// the current user's recent LogEntry rows (Django admin index "Recent actions")
+export const recent = defineAction('recent', z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) }), async ({ limit }, ctx) => {
+  const rows = await LogEntry.objects.filter({ userId: String(ctx.request.user.id ?? '') }).order('-actionTime', '-id').all(limit)
+  return rows.map((r) => ({ id: r.id, actionTime: r.actionTime.toISOString(), model: r.contentType, pk: r.objectId, objectRepr: r.objectRepr, actionFlag: r.actionFlag, action: FLAGS[r.actionFlag], changeMessage: r.changeMessage }))
+}, read)
+
+// ⌘K palette: every model with searchFields this user may view, top N each (getQueryset-scoped)
+export const search = defineAction('search', z.object({ q: z.string().min(1).max(200), limit: z.coerce.number().int().min(1).max(20).default(5) }), async ({ q, limit }, ctx) => {
+  const out = []
+  for (const a of site.admins()) {
+    if (!a.searchFields.length || a.changelist || (a.agents === false && ctx.request.agent.is) || !(await a.hasViewPermission(ctx))) continue
+    const rows = await applySearch(a, a.getQueryset(ctx), q).order(...(a.ordering ?? ['-id'])).all(limit)
+    if (rows.length) out.push({ model: a._key, name: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(a._key.split('.')[1]!)}s`, results: rows.map((r: Row) => ({ pk: String(r.id), text: a.str(r) })) })
+  }
+  return { results: out }
+}, read)
+
+// per-user prefs (saved filters, column choices): get → every key; set → one key (value null deletes)
+const PREF_BYTES = 16 * 1024, PREF_KEYS = 100
+export const prefs = defineAction('prefs', z.object({ key: z.string().regex(/^[\w.:-]{1,100}$/).optional(), value: z.unknown().optional() }), async ({ key, value }, ctx) => {
+  const userId = String(ctx.request.user.id ?? '')
+  if (!userId) throw forbidden()
+  const mine = AdminPref.objects.filter({ userId })
+  if (key !== undefined && value !== undefined) {
+    const prev = await mine.filter({ key }).first()
+    if (value === null) { if (prev) await AdminPref.delete(prev.id) }
+    else {
+      const size = Buffer.byteLength(JSON.stringify(value))
+      if (size > PREF_BYTES) throw bad('value', `at most ${PREF_BYTES} bytes`)
+      if (prev) await AdminPref.update(prev.id, { value, updatedAt: new Date() })
+      else {
+        if ((await mine.count()) >= PREF_KEYS) throw bad('key', `at most ${PREF_KEYS} saved preferences`)
+        await AdminPref.create({ userId, key, value })
+      }
+    }
+  }
+  return Object.fromEntries((await mine.all(PREF_KEYS)).map((r) => [r.key, r.value]))
+}, staff)

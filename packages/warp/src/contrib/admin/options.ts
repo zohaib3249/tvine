@@ -29,7 +29,7 @@ export function display(o: DisplayOpts) {
 export const displayOf = (fn: unknown): DisplayOpts | undefined => (fn as Displayed | undefined)?.[DISPLAY]
 
 // ---- actions ----------------------------------------------------------------------------------------
-export interface ActionResult { message?: string; level?: 'info' | 'success' | 'warning' | 'error'; download?: { filename: string; contentType: string; content: string } }
+export interface ActionResult { message?: string; level?: 'info' | 'success' | 'warning' | 'error'; download?: string | { url?: string; data?: string; filename: string; contentType: string } }   // a url, or inline data (text / base64)
 // queryset = the selected rows (getQueryset-scoped); pks = their primary keys as strings
 export type AdminActionFn = (admin: ModelAdmin, ctx: Ctx, queryset: QuerySet<any>, pks: string[]) => Promise<void | ActionResult>
 // permissions: 'view' | 'add' | 'change' | 'delete' or any name X → ModelAdmin.hasXPermission(ctx) (Django allowed_permissions)
