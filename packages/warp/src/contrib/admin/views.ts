@@ -13,6 +13,7 @@ import { Count, Max, Min, Q, type QNode } from '../../data/expressions.js'
 import type { QuerySet } from '../../data/queryset.js'
 import { modelNamed, referencesTo } from '../../data/registry.js'
 import { isStaff } from '../../security/permissions.js'
+import { scoped as scopedBy } from '../../security/scope.js'
 import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
 import { sanitizeHtml } from '../../shape/rich.js'
 import { makePassword, validatePassword } from '../auth/passwords.js'
@@ -62,6 +63,13 @@ const perms = async (a: Base, ctx: Ctx, obj?: object) => ({
 const repr = (a: Base | undefined, def: ModelDef, obj: Row): string =>
   a ? a.str(obj) : (['name', 'title', 'username', 'email'].map((k) => obj[k]).find((v) => typeof v === 'string' && v) ?? `${def.name} object (${String(obj.id)})`)
 const adminOfDef = (def: ModelDef) => site.admins().find((x) => x.model.name === def.name)
+// THE row scope of the admin: an admin's (or inline's) getQueryset; a related model's own admin's getQueryset, the
+// bare model only when it has no admin. Every row read below comes from here (a test pins it).
+function scoped(x: Base | ModelDef, ctx: Ctx): QuerySet<any> {
+  if ('getQueryset' in x) return scopedBy(x, ctx)
+  const ta = adminOfDef(x)
+  return ta ? scopedBy(ta, ctx) : modelNamed<AnyModel>(x.name)!.objects   // scope: ok (no admin, no scope hook)
+}
 
 export async function logAction(ctx: Ctx, key: string, pk: unknown, objectRepr: string, actionFlag: number, changeMessage: unknown[]): Promise<void> {
   await LogEntry.create({
@@ -95,14 +103,14 @@ async function withChoices(a: Base, ctx: Ctx, fields: Record<string, FieldMeta>)
   for (const m of Object.values(fields)) {
     if (!m.relation || m.relation.autocomplete || m.relation.rawId || m.readOnly) continue
     const t = a.model.fields[m.name]!.target!(), ta = adminOfDef(t)
-    const qs = ta ? ta.getQueryset(ctx).order(...(ta.ordering ?? ['id'])) : modelNamed<AnyModel>(t.name)!.objects.order('id')
+    const qs = scoped(t, ctx).order(...(ta?.ordering ?? ['id']))
     m.choices = (await qs.all(RELATED_CHOICES)).map((r: Row) => ({ value: String(r.id), label: repr(ta, t, r) }))
   }
   return fields
 }
 
 // stored row → form values (never a hidden field, so never a password hash)
-async function valuesOf(a: Base, obj: Row): Promise<Row> {
+async function valuesOf(a: Base, ctx: Ctx, obj: Row): Promise<Row> {
   const out: Row = {}
   for (const n of formFields(a)) {
     const f = a.model.fields[n]
@@ -112,7 +120,7 @@ async function valuesOf(a: Base, obj: Row): Promise<Row> {
     out[n] = toWire(f, obj, n)
     if (f.kind === 'fk' && out[n] != null) {   // { pk, text }: the form's chip shows the related object's name (forms take a bare pk too)
       // ponytail: one query per fk per row; batch like relatedReprs if inlines grow large
-      const t = f.target!(), rel = (await modelNamed<AnyModel>(t.name)!.objects.inBulk([out[n]]))[String(out[n])] as Row | undefined
+      const t = f.target!(), rel = (await scoped(t, ctx).inBulk([out[n]]))[String(out[n])] as Row | undefined
       out[n] = { pk: String(out[n]), text: rel ? repr(adminOfDef(t), t, rel) : String(out[n]) }
     }
   }
@@ -160,7 +168,7 @@ async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clea
     const ids = [...new Set((Array.isArray(v) ? v : [v]) as (string | number)[])]
     if (!ids.length) continue
     const t = f.target!(), ta = adminOfDef(t)
-    const qs = ta ? ta.getQueryset(ctx) : modelNamed<AnyModel>(t.name)!.objects
+    const qs = scoped(t, ctx)
     if ((await qs.filter({ id__in: ids }).count()) !== ids.length) c.errors[n] = 'Select a valid choice. That choice is not one of the available choices.'
   }
 }
@@ -188,12 +196,12 @@ async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, str
   if (s.kind === 'date') return [...DATE_CHOICES, ...nulls]
   if (f.kind === 'enum') return [...(f.values ?? []).map((v: string): [string, string] => [v, labelOf(v)]), ...nulls]
   if (s.kind === 'related') {
-    const t = f.target!(), tm = modelNamed<AnyModel>(t.name)!
-    return [...(await tm.objects.all(200)).map((r: Row): [string, string] => [String(r.id), repr(adminOfDef(t), t, r)]), ...nulls]
+    const t = f.target!()
+    return [...(await scoped(t, ctx).all(200)).map((r: Row): [string, string] => [String(r.id), repr(adminOfDef(t), t, r)]), ...nulls]
   }
   // AllValuesFieldListFilter: the distinct values in use
   const key = f.key(s.field!)
-  const vals = await a.getQueryset(ctx).values(key).distinct().order(key).all(200)   // Django: model_admin.get_queryset(request)
+  const vals = await scoped(a, ctx).values(key).distinct().order(key).all(200)   // Django: model_admin.get_queryset(request)
   return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
 }
 // Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
@@ -285,7 +293,7 @@ function columns(a: ModelAdmin): Col[] {
 }
 
 async function changelistQs(a: ModelAdmin, ctx: Ctx, p: ListParams, skip?: string): Promise<QuerySet<any>> {
-  let qs = applySearch(a, a.getQueryset(ctx), p.q ?? '')
+  let qs = applySearch(a, scoped(a, ctx), p.q ?? '')
   const specs = filterSpecs(a)
   const filters = p.filters ?? {}
   for (const [k, v] of Object.entries(filters)) {
@@ -319,13 +327,13 @@ function orderOf(a: ModelAdmin, qs: QuerySet<any>, ordering: string[] | undefine
   return qs.order(...keys)
 }
 
-async function relatedReprs(a: ModelAdmin, rows: Row[], cols: Col[]): Promise<Map<string, Map<string, string>>> {
+async function relatedReprs(a: ModelAdmin, ctx: Ctx, rows: Row[], cols: Col[]): Promise<Map<string, Map<string, string>>> {
   const out = new Map<string, Map<string, string>>()
   for (const c of cols) {
     const f = a.model.fields[c.name]
     if (f?.kind !== 'fk') continue
     const t = f.target!(), ids = [...new Set(rows.map((r) => r[f.key(c.name)]).filter((v) => v != null))]
-    const objs = ids.length ? await modelNamed<AnyModel>(t.name)!.objects.inBulk(ids) : {}
+    const objs = ids.length ? await scoped(t, ctx).inBulk(ids) : {}
     out.set(c.name, new Map(Object.entries(objs).map(([k, o]) => [k, repr(adminOfDef(t), t, o as Row)])))
   }
   return out
@@ -370,7 +378,8 @@ async function collect(def: ModelDef, objs: Row[], depth = 0): Promise<{ tree: T
     if (od === 'SET_NULL' || od === 'SET_DEFAULT' || od === 'DO_NOTHING') continue
     const src = modelNamed<AnyModel>(r.source.name)
     if (!src) continue
-    const rows = await src.objects.filter({ [`${key}__in`]: objs.map((o) => o.id) }).all(od === 'CASCADE' ? MAX_PKS : 20)
+    // Django NestedObjects: a cascade sees every row, scoped or not
+    const rows = await src.objects.filter({ [`${key}__in`]: objs.map((o) => o.id) }).all(od === 'CASCADE' ? MAX_PKS : 20)   // scope: ok
     if (od !== 'CASCADE') {   // PROTECT / RESTRICT (the fk default): the database refuses, so nothing is deleted
       for (const x of rows) protectedRows.push({ model: site.keyOf(r.source), pk: String(x.id), repr: repr(adminOfDef(r.source), r.source, x), field: r.field })
       continue
@@ -390,7 +399,7 @@ async function selected(a: ModelAdmin, ctx: Ctx, pks: unknown[]): Promise<Row[]>
   if (pks.length > MAX_PKS) throw bad('pks', `at most ${MAX_PKS}`)
   const ids = pks.map((p) => { const id = coercePk(a.model, p); if (id === undefined) throw bad('pks', `"${String(p)}" is not a valid key`); return id })
   if (!ids.length) return []
-  return a.getQueryset(ctx).filter({ id__in: ids }).all(MAX_PKS)
+  return scoped(a, ctx).filter({ id__in: ids }).all(MAX_PKS)
 }
 
 async function deleteRows(a: ModelAdmin, ctx: Ctx, objs: Row[]): Promise<{ deleted: number; protected?: Prot[] }> {
@@ -416,7 +425,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
     if (!rows) continue
     if (!Array.isArray(rows) || rows.length > MAX_PKS) throw bad(name, 'rows must be a list')
     const fk = fkTo(i, a.model)!, fkKey = i.model.fields[fk]!.key(fk)
-    const own = i.getQueryset(ctx).filter({ [fkKey]: parent.id })
+    const own = scoped(i, ctx).filter({ [fkKey]: parent.id })
     for (const [n, r] of rows.entries()) {
       const at = `${name}.${n}.`
       const existing = r.pk !== undefined ? await own.filter({ id: coercePk(i.model, r.pk) ?? -1 }).first() : undefined
@@ -522,7 +531,7 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
     if (page > 1 && (page - 1) * size >= count) throw bad('page', 'no such page')
     rows = await orderOf(a, qs, p.ordering).slice((page - 1) * size, page * size).all()   // LIMIT/OFFSET
   }
-  const rel = await relatedReprs(a, rows, cols)
+  const rel = await relatedReprs(a, ctx, rows, cols)
   const out = []
   for (const r of rows) {
     const values: Row = {}
@@ -546,7 +555,7 @@ export const list = defineAction('list', listParams, async (p, ctx) => {
   }
   if (a.dateHierarchy && !a.changelist) (facets ??= {}) && Object.assign(facets, await hierarchyFacets(a, ctx, p))
   const filtered = !!(p.q?.trim() || Object.keys(p.filters ?? {}).length)
-  const fullCount = a.showFullResultCount && filtered && !a.changelist ? await a.getQueryset(ctx).count() : undefined
+  const fullCount = a.showFullResultCount && filtered && !a.changelist ? await scoped(a, ctx).count() : undefined
   return { rows: out, count, page, pages: Math.max(1, Math.ceil(count / size)), ...(fullCount !== undefined && { fullCount }), ...(facets && { facets }) }
 }, read)
 
@@ -558,12 +567,12 @@ export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }
   for (const i of site.inlinesOf(a)) {
     if (!(await i.hasViewPermission(ctx, obj))) continue
     const fk = fkTo(i, a.model)!
-    const rows = await i.getQueryset(ctx).filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
+    const rows = await scoped(i, ctx).filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
     const vs = []
-    for (const r of rows) { const v = await valuesOf(i, r); delete v[fk]; vs.push({ pk: String(r.id), ...v }) }   // the payload's Row shape: { pk, ...values }
+    for (const r of rows) { const v = await valuesOf(i, ctx, r); delete v[fk]; vs.push({ pk: String(r.id), ...v }) }   // the payload's Row shape: { pk, ...values }
     inlines[inlineName(i)] = { rows: vs }
   }
-  return { pk: String(obj.id), values: await valuesOf(a, obj), display: a.str(obj), inlines, perms: await perms(a, ctx, obj) }
+  return { pk: String(obj.id), values: await valuesOf(a, ctx, obj), display: a.str(obj), inlines, perms: await perms(a, ctx, obj) }
 }, read)
 
 const saveParams = z.object({ model: modelKey, pk: pkParam.optional(), values: z.record(z.unknown()).default({}), inlines: z.record(z.array(z.object({ pk: pkParam.optional(), DELETE: z.boolean().optional() }).passthrough()).max(MAX_PKS)).optional() })
@@ -668,7 +677,7 @@ export const action = defineAction('action', z.object({
   }
   const ids = a.changelist ? pks : (await selected(a, ctx, pks)).map((r) => String(r.id))
   // always the selected rows only (options.ts AdminActionFn): a custom changelist's pks narrow the queryset too
-  const qs = a.getQueryset(ctx).filter({ id__in: ids.map((i) => coercePk(a.model, i)).filter((k) => k !== undefined) })
+  const qs = scoped(a, ctx).filter({ id__in: ids.map((i) => coercePk(a.model, i)).filter((k) => k !== undefined) })
   const res = (await x.fn(a, ctx, qs, ids)) ?? {}
   for (const id of ids) await logAction(ctx, a._key, id, `${a._key} ${id}`, CHANGE, [{ action: x.name }])
   return { message: res.message ?? `${x.description}: ${ids.length} item(s).`, level: res.level ?? 'success', ...(res.download && { download: res.download }) }
@@ -685,7 +694,7 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
   if (!(await target.hasViewPermission(ctx))) throw forbidden()
   if (target.agents === false && ctx.request.agent.is) throw forbidden()
   const size = 20
-  const qs = applySearch(target, target.getQueryset(ctx), p.q).order(...(target.ordering ?? ['id']))
+  const qs = applySearch(target, scoped(target, ctx), p.q).order(...(target.ordering ?? ['id']))
   const rows = await qs.slice((p.page - 1) * size, p.page * size + 1).all()   // one extra row tells `more`
   return { results: rows.slice(0, size).map((r: Row) => ({ pk: String(r.id), text: target.str(r) })), more: rows.length > size }
 }, read)
@@ -744,7 +753,7 @@ export const search = defineAction('search', z.object({ q: z.string().min(1).max
   const out = []
   for (const a of site.admins()) {
     if (!a.searchFields.length || a.changelist || (a.agents === false && ctx.request.agent.is) || !(await a.hasViewPermission(ctx))) continue
-    const rows = await applySearch(a, a.getQueryset(ctx), q).order(...(a.ordering ?? ['-id'])).all(limit)
+    const rows = await applySearch(a, scoped(a, ctx), q).order(...(a.ordering ?? ['-id'])).all(limit)
     if (rows.length) out.push({ model: a._key, name: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(a._key.split('.')[1]!)}s`, results: rows.map((r: Row) => ({ pk: String(r.id), text: a.str(r) })) })
   }
   return { results: out }

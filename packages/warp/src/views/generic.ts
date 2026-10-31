@@ -3,6 +3,7 @@
 // its hooks / @action method on a fresh `Object.create(view)`, so `this.x = …` never leaks between
 // requests, and gets a fresh ViewCtx (action + validated params).
 import { z } from 'zod'
+import { scoped } from '../security/scope.js'
 import { liveManifest, paramSpecs } from '../core/actions.js'
 import { DomainError, zodErrors } from '../core/errors.js'
 import { ANONYMOUS, type ActionCtx, type ActionDef, type ActionId, type ActionRules, type Permission } from '../core/types.js'
@@ -180,7 +181,7 @@ export abstract class GenericView<T extends object = any> extends View {
 
   async getObject(ctx: ViewCtx): Promise<T> {
     const v = ctx.params[this.lookupParam]
-    const obj = await this.filterQueryset(this.getQueryset(ctx), ctx).filter({ [this.lookupField]: v } as never).first()
+    const obj = await this.filterQueryset(scoped(this, ctx), ctx).filter({ [this.lookupField]: v } as never).first()
     if (!obj) throw new DomainError('not_found', `${this.model.name} ${String(v)} not found`, this.lookupParam)
     await this.checkObjectPermissions(ctx, obj)
     return obj
@@ -484,7 +485,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     const bodies: Record<GeneratedAction, (v: Self, raw: unknown, ctx: ViewCtx) => Promise<unknown>> = {
       list: async (v, raw, ctx) => {
         ctx.params = validate(listSchema, raw, true)
-        const page = await v.paginateQueryset(v.filterQueryset(v.getQueryset(ctx), ctx), ctx)
+        const page = await v.paginateQueryset(v.filterQueryset(scoped(v, ctx), ctx), ctx)
         return { ...page, items: page.items.map(o => out(v, ctx, o)) }
       },
       get: async (v, raw, ctx) => {
