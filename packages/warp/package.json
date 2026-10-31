@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./auth": {
+      "types": "./dist/contrib/auth/index.d.ts",
+      "import": "./dist/contrib/auth/index.js"
+    },
     "./migrations": {
       "types": "./dist/data/migrations.d.ts",
       "import": "./dist/data/migrations.js"

@@ -95,11 +95,11 @@ export class SessionStore {
     return cookie
   }
 
-  bump(sid: Sid, source: 'human' | 'agent' = 'human'): Rev {
+  bump(sid: Sid, source: 'human' | 'agent' = 'human', action?: string): Rev {
     const s = this.byId.get(sid)
     if (!s) throw new Error(`bump: unknown sid ${sid}`)
     s.rev++
-    this.channels.group(`sid:${sid}`).send(ev.update(sid, s.rev, source))
+    this.channels.group(`sid:${sid}`).send(ev.update(sid, s.rev, source, action))
     return s.rev
   }
 
@@ -139,6 +139,33 @@ export class SessionStore {
   }
 
   get size(): number { return this.byId.size }
+
+  // Session fixation (Django cycle_key): a NEW Session object (same data, rev) under a fresh sid. The old one is
+  // evicted like an expired one (cookies, channel group, snapshots, limiter/idempotency via onEvict) and stays a
+  // dead object: anyone still holding it (a command queued on the old sid) must re-check with isLive() and never
+  // learns the new sid. The caller hands out the new sid / cookie.
+  rotate(old: Session): Session {
+    if (this.byId.get(old.sid) !== old) throw new Error(`rotate: unknown sid ${old.sid}`)
+    this.evict(old.sid)
+    const now = Date.now()
+    const s: Session = { ...old, sid: nanoid(), data: old.data, lastSeen: now }
+    old.data = new Map()   // the dead object keeps nothing
+    this.byId.set(s.sid, s)
+    for (const w of this.watchers) w(s.sid, 'created')
+    for (const r of this.rotations) r(old.sid, s.sid)
+    return s
+  }
+
+  // old sid → new sid after a rotate() (state that must follow the session, e.g. the tab hub's agent marking).
+  // Never hands the new sid to holders of the old one; listeners must not throw.
+  private rotations: ((from: Sid, to: Sid) => void)[] = []
+  onRotate(fn: (from: Sid, to: Sid) => void): () => void {
+    this.rotations.push(fn)
+    return () => { this.rotations = this.rotations.filter((r) => r !== fn) }
+  }
+
+  // still the live session under its own sid (not rotated away, evicted or expired)
+  isLive(s: Session): boolean { return (this.once.get(s.sid) ?? this.byId.get(s.sid)) === s && this.alive(s) }
 
   // Drop a session now (e.g. one created for a render that was then refused): the normal evict path.
   delete(sid: Sid): void { if (this.byId.has(sid)) this.evict(sid) }

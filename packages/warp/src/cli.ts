@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createInterface } from 'node:readline/promises'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { appModule } from './core/actions.js'
 import { installedApps } from './core/apps.js'
@@ -15,8 +16,18 @@ import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import { mcpEnabled } from './transport/mcp.js'
 
-export interface Io { out(s: string): void; err(s: string): void; exit(code: number): void }
-const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c) }
+export interface Io {
+  out(s: string): void; err(s: string): void; exit(code: number): void
+  prompt?(question: string, o?: { hidden?: boolean }): Promise<string>   // interactive commands (createsuperuser)
+}
+const stdio: Io = { out: (s) => console.log(s), err: (s) => console.error(s), exit: (c) => process.exit(c), prompt: process.stdin.isTTY ? ttyPrompt : undefined }
+
+// one line from the terminal; hidden: nothing typed is echoed (passwords)
+async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+  if (o.hidden) (rl as unknown as { _writeToOutput(s: string): void })._writeToOutput = (s) => { if (s.startsWith(question)) process.stdout.write(question) }
+  try { return await rl.question(question) } finally { if (o.hidden) process.stdout.write('\n'); rl.close() }
+}
 
 const USAGE = `usage: tvine <command> [--apps ./apps]
   start [--port 3000] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
@@ -30,6 +41,8 @@ const USAGE = `usage: tvine <command> [--apps ./apps]
   migrate [--check] [--plan] [--fake]
   sqlmigrate <app> <migration>
   showmigrations
+  createsuperuser [--username u] [--email e] [--noinput]   (tvine.auth; --noinput reads TVINE_SUPERUSER_USERNAME/_EMAIL/_PASSWORD)
+  changepassword <username>                                 (tvine.auth)
   worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
                                 (SIGTERM: stop claiming, finish or release running jobs within the grace)
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead`
@@ -48,6 +61,8 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, Infinity] },   // targets refused below, loudly
   sqlmigrate: { options: {}, args: [2, 2] },
   showmigrations: { options: {}, args: [0, 0] },
+  createsuperuser: { options: { username: str, email: str, noinput: bool }, args: [0, 0] },
+  changepassword: { options: {}, args: [1, 1] },
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
   tasks: { options: { status: str, queue: str, limit: str, dead: bool }, args: [0, 2] },
 }
@@ -106,7 +121,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
-    if (args.length < spec.args[0]) throw new Usage(`usage: tvine ${cmd} <app> <migration>`)
+    if (args.length < spec.args[0]) throw new Usage(cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
     loadEnv()
     switch (cmd) {
@@ -237,6 +252,18 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const conn = openConn(settings.db.url)   // the connected dialect, as Django does
         try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps })) } finally { await conn.driver.close() }
         return 0
+      }
+      case 'createsuperuser':
+      case 'changepassword': {
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.auth')) throw new Error("tvine.auth is not installed: add 'tvine.auth' to settings.installedApps")
+        const m = await import('./contrib/auth/management.js')
+        connections.configure(settings)
+        try {
+          return cmd === 'createsuperuser'
+            ? await m.createsuperuser({ username: o.username as string | undefined, email: o.email as string | undefined, noinput: !!o.noinput, settings, prompt: io.prompt }, io)
+            : await m.changepassword({ username: args[0]!, settings, prompt: io.prompt }, io)
+        } finally { await connections.closeAll() }
       }
       default: {   // showmigrations
         const settings = await loadSettings()

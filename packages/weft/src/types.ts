@@ -44,4 +44,5 @@ export interface Command {
   bind?: string
   cmdId?: string
   rev?: number
+  agentCmd?: { cmdId?: string; via?: string }   // downgrade-only agent marker (control-protocol.md)
 }

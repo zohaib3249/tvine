@@ -26,6 +26,7 @@ export function AutoOff({ children }: { children?: ReactNode }) {
 const AUTO = new WeakSet<object>()
 // For snapshot builders (W4): an auto entry that is currently not visible/usable must be left out entirely.
 export const autoExcluded = (spec: WidgetSpec): boolean => AUTO.has(spec) && !!spec.disabled
+export const isAuto = (spec: WidgetSpec): boolean => AUTO.has(spec)   // the dev gallery's "auto vs declared"
 
 // --- controls: dispatch through the element so its own handlers run -----------------------------
 type C = Control<any, any>

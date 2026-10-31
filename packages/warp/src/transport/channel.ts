@@ -5,6 +5,7 @@ import { clientIp } from '../core/request.js'
 import { ev } from '../core/events.js'
 import { render } from '../serialize/envelope.js'
 import { ipKey } from '../security/ratelimit.js'
+import type { Frame, TabHub } from './tab.js'
 
 // transport-channel.md: GET /tvine/channel, SSE push of session events (or the inspector group).
 const HEARTBEAT_MS = 25_000
@@ -19,6 +20,7 @@ export interface ChannelDeps {
   isDev: boolean
   clock?: Clock
   watchInspector?: () => () => void   // called per open inspector stream; returns its release (the feed refcount)
+  tabs?: TabHub                       // transport/tab: `?tab=` cookie streams become controllable tabs
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1'])
@@ -26,6 +28,14 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 // DNS rebinding: a foreign page resolving its own name to 127.0.0.1 still sends its own Host.
 const localHost = (h: string | undefined) => {
   try { return h !== undefined && LOCAL_HOSTS.has(new URL(`http://${h}`).hostname) } catch { return false }
+}
+
+// The inspector rule (dev surfaces only): socket loopback (never X-Forwarded-For), no proxy header (a local reverse
+// proxy makes every client look like 127.0.0.1), and a loopback Host. `listen(port)` binds every interface.
+export function localOnly(req: IncomingMessage): boolean {
+  const hdr = (n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
+  const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
+  return !proxied && LOOPBACK.has(clientIp(null, req.socket.remoteAddress ?? '', 0)) && localHost(hdr('host'))
 }
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
@@ -54,10 +64,8 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const ip = ipKey(clientIp(hdr('x-forwarded-for') ?? null, remote, settings.trustProxy))   // IPv6 per /64, like rate buckets
 
     const inspector = url.searchParams.get('group') === 'inspector'
-    // Inspector feed: dev only, AND socket loopback (never X-Forwarded-For), AND no proxy header (a local
-    // reverse proxy makes every client look like 127.0.0.1), AND a loopback Host. `listen(port)` binds every interface.
-    const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some((n) => hdr(n) !== undefined)
-    if (inspector && (!isDev || proxied || !LOOPBACK.has(clientIp(null, remote, 0)) || !localHost(hdr('host')))) return json(403, ev.err('domain', 'forbidden'))
+    // Inspector feed: dev only, AND loopback only (localOnly).
+    if (inspector && (!isDev || !localOnly(req))) return json(403, ev.err('domain', 'forbidden'))
 
     // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)
@@ -65,11 +73,17 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const lookup = (f: SessionStore['resolve']) => (cookie !== undefined && f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
     const resolve = () => lookup(sessions.resolve)
     const session = inspector ? undefined : resolve()
+    const byCookieSession = () => session !== undefined && cookie !== undefined && sessions.peek({ cookie }) === session
+    // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
+    const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && byCookieSession()
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
     const sid = session?.sid ?? ''
-    const ctx = () => ({ sid, rev: session?.rev ?? 0, page: '' })
+    // I3: a stream authenticated by the httpOnly cookie never carries the sid (page script, XSS included, must
+    // not learn it); an agent's sid-keyed stream already knows its own sid.
+    const byCookie = byCookieSession()
+    const ctx = () => ({ sid: byCookie ? '' : sid, rev: session?.rev ?? 0, page: '' })
 
-    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), sid)
+    if ((open.get(ip) ?? 0) >= settings.limits.sseConnPerIp) return json(429, ev.err('rate_limited', 'too many open streams'), byCookie ? '' : sid)   // I3: never the cookie session's sid
 
     const group = channels.group(inspector ? 'inspector' : `sid:${sid}`)
     req.socket.setTimeout(0) // SSE is exempt from request timeouts
@@ -77,7 +91,13 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
 
     let closed = false
-    const frame = (e: Event, id?: number) => {
+    // events name their sid themselves (update, snapshot): blanked too on a cookie stream
+    const hide = (e: Event): Event => !byCookie ? e
+      : e.kind === 'update' ? { ...e, sid: '' }
+      : e.kind === 'snapshot' ? { ...e, snapshot: { ...e.snapshot, sid: '' } }
+      : e.kind === 'err' && e.snapshot ? { ...e, snapshot: { ...e.snapshot, sid: '' } } : e
+    const frame = (ev0: Event, id?: number) => {
+      const e = hide(ev0)
       res.write(`${id !== undefined ? `id: ${id}\n` : ''}event: ${e.kind}\ndata: ${render([e], 'json', settings, { ctx: ctx() }).replace(/\n/g, '')}\n\n`)
       if (res.writableLength > MAX_BUF) close()
     }
@@ -85,11 +105,12 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     const safe = (fn: () => void) => { try { fn() } catch { close() } }
     let unsub = () => {}
     let release = () => {}
+    let untab = () => {}
     let timer: unknown
     const close = (graceful = false) => {
       if (closed) return
       closed = true
-      unsub(); release(); clock.clearInterval(timer)
+      unsub(); release(); untab(); clock.clearInterval(timer)
       open.set(ip, (open.get(ip) ?? 1) - 1)
       if (!open.get(ip)) open.delete(ip)
       // Forced close destroys the socket: end() would wait for a non-reading client to drain its buffer.
@@ -99,6 +120,14 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     req.on('close', () => close())
     res.on('error', () => close())
     open.set(ip, (open.get(ip) ?? 0) + 1) // after 'close' is wired: no leak window
+
+    if (asTab && !closed) {
+      // tab frames (hello/request/control/release/cmd) go to this stream only, never to the session group;
+      // JSON.stringify keeps every value on one data line (no frame injection from an agent's name)
+      const tf: Frame = (event, data) => { if (!closed) safe(() => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`) }) }
+      const tabId = deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined, (url.searchParams.get('doc') ?? '').slice(0, 64))
+      untab = () => deps.tabs!.gone(tabId, tf)
+    }
 
     const last = hdr('last-event-id')
     if (last !== undefined && /^\d+$/.test(last)) {

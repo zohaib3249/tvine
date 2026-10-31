@@ -41,6 +41,9 @@ export interface Command {
   cmdId?: string                    // idempotency key
   rev?: Rev                         // optimistic concurrency (stale_rev)
   auth?: string                     // RESERVED v2
+  // control-protocol.md: a client marks a request it sends FOR an agent. Downgrade-only: it can make a
+  // request agent (is=true), never human. via: 'webmcp' (in-browser agent) | 'channel' (remote agent via a tab)
+  agentCmd?: { cmdId?: string; via?: string }
 }
 
 export type Event =
@@ -51,6 +54,7 @@ export type Event =
       retryAfterMs?: number }       // rate_limited
   | { kind: 'goto'; url: string }
   | { kind: 'update'; rev: Rev; sid: Sid; source: 'human' | 'agent' | 'job'   // v2 live; 'job': tvine.tasks progress
+      action?: ActionId                                                // an agent's server action (presence outlines its widget)
       job?: JobUpdate }                                                // tvine.tasks: a background job of this session moved
   | { kind: 'patch'; rev: Rev; changes: unknown }                       // v2 live
 
@@ -84,6 +88,12 @@ export interface TvineUser {
   id?: string
   name?: string
   claims?: Record<string, unknown>      // whatever the dev's resolver returns
+  // Filled by tvine.auth (docs/design/contrib/auth.md §4); a BYO resolver may set them too.
+  isActive?: boolean
+  isStaff?: boolean
+  isSuperuser?: boolean
+  scopes?: readonly string[]            // token-authenticated: what the token may run ('*', 'read', 'app.*', 'app.x')
+  hasPerm?(perm: string, obj?: unknown): Promise<boolean>
 }
 export const ANONYMOUS: TvineUser = Object.freeze({ isAuthenticated: false })
 
@@ -100,7 +110,7 @@ export interface Request {
   id: string                            // request id (x-request-id / traceparent trace-id)
   agent: {
     is: boolean
-    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'human'
+    via: 'http' | 'mcp' | 'webmcp' | 'channel' | 'inspector' | 'human'   // inspector: dev gallery try-it (dev only)
     client?: string                     // UA string or MCP clientInfo.name
     verified?: { directory: string; keyid: string }   // v1.1: Web Bot Auth
   }
@@ -135,6 +145,7 @@ export interface PermissionCtx {
   agent?: Request['agent']           // request.agent; denyAgents reads agent.is
   auth?: unknown                     // RESERVED v2 (claims from Command.auth)
   ip: string
+  readOnly?: boolean                 // the action is rules.readOnly (token scope 'read')
 }
 export type Permission = (ctx: PermissionCtx) => boolean | Promise<boolean>
 export type Middleware = (cmd: Command, ctx: ActionCtx,
@@ -159,6 +170,7 @@ export interface ActionRules {
   destructive?: boolean             // MCP destructiveHint
   atomic?: boolean                  // false = opt out of the per-request transaction (core-dispatch.md)
   bind?: string[]                   // params that may ONLY come from the signed bind (bind then required)
+  secretResult?: boolean            // the result is a one-time secret (a new API token, TOTP secret): blanked in hook payloads
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
 }
 
@@ -189,7 +201,8 @@ export interface Settings {
   }
   logging: 'json' | 'pretty' | 'none'
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
-  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number }
+  // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
+  agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
   frontend: { boundary: 'error' | 'warn' }   // W2b reads it: FE/DB boundary violations fail (error) or warn
   audit: boolean                    // v1.1
   // tvine.tasks (docs/design/contrib/tasks.md §Settings): lease / visibility timeout, claim poll, progress relay poll,
@@ -197,5 +210,27 @@ export interface Settings {
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
-  auth?: { user?: (req: Request) => Promise<TvineUser | null> }   // settings.md; null/absent → ANONYMOUS
+  auth?: AuthSettings
 }
+
+// settings.auth: `user` is the BYO resolver (overrides everything); the rest configures tvine.auth
+// (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.
+export interface AuthSettings {
+  user?: (req: Request) => Promise<TvineUser | null>   // null/absent → tvine.auth (if installed) or ANONYMOUS
+  hashers?: PasswordHasher[]           // first = preferred; others verify (and get upgraded on login)
+  validators?: PasswordValidator[]
+  login?: { maxFailures?: number; accountMaxFailures?: number; ipMaxFailures?: number; windowMs?: number; lockoutMs?: number }
+  resetTimeoutMs?: number
+  sendPasswordReset?: (e: { user: { id: string; username: string; email: string }; email: string; uid: string; token: string; request: Request }) => unknown
+  objectPermission?: (user: TvineUser, perm: string, obj: unknown) => boolean | Promise<boolean>
+  tokens?: { defaultDays?: number; maxDays?: number }
+  totp?: { issuer?: string }
+}
+export interface PasswordHasher {
+  algorithm: string
+  encode(password: string): Promise<string>
+  verify(password: string, encoded: string): Promise<boolean>
+  mustUpdate(encoded: string): boolean   // weaker parameters than this hasher's: rehash on next login
+}
+// Returns the problems (empty = ok). user: the attributes similarity checks look at.
+export type PasswordValidator = (password: string, user?: Record<string, unknown>) => string[]
