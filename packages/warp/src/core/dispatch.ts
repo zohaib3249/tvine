@@ -255,6 +255,10 @@ type Hold = { settled?: Promise<unknown> }   // the handler's own promise, which
 
 async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string, hold: Hold): Promise<Event[]> {
   const { settings } = server, { sid } = session
+  // C1: resolved before the queue; while it waited, a login/logout may have rotated this session away (or it
+  // expired). Refuse without any sid or snapshot: the new sid belongs to whoever ran the rotating command.
+  if (!server.sessions.isLive(session)) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
+  let live = session   // the session after this command (a rotation replaces it)
   // 2b. idempotency replay
   if (cmd.cmdId) {
     const r = server.idempotency.replay(sid, cmd.cmdId, hash)
@@ -311,12 +315,12 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
         if (!def.rules?.readOnly) server.sessions.bump(sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
         // session fixation: the handler asked for a new sid (cycleSession, e.g. login); the reply carries it
-        if (wantsCycle(staged)) { server.sessions.rotate(session); markRotated(request, session) }
+        if (wantsCycle(staged)) { live = server.sessions.rotate(session); markRotated(request, live) }
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
       if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
-      const s = await snap(server, request, session.sid)   // the new sid when the session was rotated
+      const s = await snap(server, request, live.sid)   // the new sid when the session was rotated
       return (committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))])
     }
     const inner = async function* (): AsyncIterable<Event> {
