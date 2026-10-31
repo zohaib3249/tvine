@@ -3,13 +3,13 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Dialog, Drawer, toast } from '@tvine/weft/widgets'
 import { href, listParams, queryOf, toggleSort, urlFor } from './routes.js'
 import type { ActionMeta, ActionResult, DeletePreview, Display, Facet, FilterMeta, ListResult, ModelMeta, Row } from './types.js'
-import { Empty, ErrorBox, Icon, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
+import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
 import { DeleteTree } from './pages.js'
 
 export function show(v: Display | undefined, empty = '—'): ReactNode {
   if (v === null || v === undefined || v === '') return <span className="text-muted">{empty}</span>
   if (typeof v === 'boolean') return <span className={v ? 'text-ok' : 'text-danger'} aria-label={v ? 'Yes' : 'No'}><Icon name={v ? 'check' : 'x'} /></span>
-  if (typeof v === 'object') return v.href ? <a href={v.href} className="text-brand hover:underline">{v.text}</a> : v.text
+  if (typeof v === 'object') return v.href ? <a href={v.href} className="text-accent hover:underline">{v.text}</a> : v.text
   return String(v)
 }
 const raw = (v: Display | undefined) => (v && typeof v === 'object' ? (v.value ?? v.text) : v)
@@ -43,7 +43,7 @@ export function Changelist({ meta, list, error }: { meta: ModelMeta; list?: List
     <Slotted slot="changelist" meta={meta}>
       <Region id="admin:changelist" label={meta.namePlural} state={{ count: list?.count ?? 0, page: list?.page ?? 1, selected: allPages ? list?.count ?? 0 : selected.size }} className={slotClass('changelist')}>
         <div className="mb-4 flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{meta.namePlural}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{cap(meta.namePlural)}</h1>
           {list && <span className="tva-chip">{list.count.toLocaleString()}</span>}
           <div className="flex-1" />
           {modelUrls.map((u) => <a key={u.name} href={urlFor(base, meta.key, u.path, {})} agentId={`url-${u.name}`} onClick={(e) => { e.preventDefault(); navigate(urlFor(base, meta.key, u.path, {})) }} className="tva-btn">{u.title}</a>)}
@@ -208,7 +208,7 @@ function EditableTable({ meta, rows, cols, links, ordering, selected, setSelecte
                     cell = <>{cell}{err && <p role="alert" className="mt-0.5 text-xs text-danger">{err}</p>}</>
                   } else if (links.includes(c.name)) {
                     const to = href(base, { name: 'change', model: meta.key, pk: r.pk })
-                    cell = <a href={to} agentId="open" onClick={(e) => { e.preventDefault(); navigate(to) }} className="font-medium text-brand hover:underline">{show(r.values[c.name], meta.display.emptyValueDisplay)}</a>
+                    cell = <a href={to} agentId="open" onClick={(e) => { e.preventDefault(); navigate(to) }} className="font-medium text-accent hover:underline">{show(r.values[c.name], meta.display.emptyValueDisplay)}</a>
                   } else cell = show(r.values[c.name], meta.display.emptyValueDisplay)
                   return <td key={c.name} className={cx('tva-td', c.kind && ['int', 'decimal', 'money'].includes(c.kind) && 'text-right')}>{cell}</td>
                 })}
@@ -270,9 +270,9 @@ function ActionBar({ meta, selected, allPages, setAllPages, total, pageRows, don
       <button type="button" agentId="run" className="tva-btn h-8" disabled={!action || n === 0 || busy} onClick={go}>{busy ? 'Running…' : 'Go'}</button>
       <span className="text-muted" aria-live="polite">{n} of {total} selected</span>
       {selected.size === pageRows && total > pageRows && !allPages && (
-        <button type="button" agentId="select-all" className="font-medium text-brand hover:underline" onClick={() => setAllPages(true)}>Select all {total.toLocaleString()} {meta.namePlural.toLowerCase()}</button>
+        <button type="button" agentId="select-all" className="font-medium text-accent hover:underline" onClick={() => setAllPages(true)}>Select all {total.toLocaleString()} {meta.namePlural.toLowerCase()}</button>
       )}
-      {allPages && <button type="button" agentId="clear-selection" className="font-medium text-brand hover:underline" onClick={() => setAllPages(false)}>Clear selection</button>}
+      {allPages && <button type="button" agentId="clear-selection" className="font-medium text-accent hover:underline" onClick={() => setAllPages(false)}>Clear selection</button>}
       <Dialog name="confirm-action" label="Confirm action" open={!!confirm} onOpenChange={(o) => { if (!o) setConfirm(null) }} slots={{ trigger: { className: 'hidden' } }}>
         {confirm && <>
           <h2 className="pr-8 text-lg font-semibold">{del ? `Delete ${n} ${n === 1 ? meta.name : meta.namePlural}?` : confirm.a.description}</h2>
@@ -335,7 +335,7 @@ function FilterGroup({ f, facets, value, pick }: { f: FilterMeta; facets?: Facet
     return (
       <li key={v ?? '_all'}>
         <button type="button" agentId={`${f.name}-${v ?? 'all'}`} aria-pressed={on} onClick={() => pick(v)}
-          className={cx('flex w-full items-center gap-2 rounded-md px-2 py-1 text-left', on ? 'bg-brand-soft font-medium text-brand' : 'hover:bg-sunken')}>
+          className={cx('flex w-full items-center gap-2 rounded-md px-2 py-1 text-left', on ? 'bg-brand-soft font-medium text-accent' : 'hover:bg-sunken')}>
           <span className="flex-1 truncate">{label}</span>{count !== undefined && <span className="text-xs text-muted tabular-nums">{count}</span>}
         </button>
       </li>

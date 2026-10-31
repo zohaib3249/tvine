@@ -24,6 +24,7 @@ export type AdminConfig = {
 let config: AdminConfig = {}
 export function configureAdmin(c: AdminConfig): void { config = { ...config, ...c, components: { ...config.components, ...c.components }, fieldWidgets: { ...config.fieldWidgets, ...c.fieldWidgets } } }
 export const getConfig = () => config
+export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // Django capfirst
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 export const slotClass = (s: Slot) => config.classNames?.[s]
 
@@ -77,7 +78,7 @@ export const Skeleton = ({ rows = 6 }: { rows?: number }) => (
 export function Empty({ title, children, icon = 'box' }: { title: string; children?: ReactNode; icon?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <div className="grid size-12 place-items-center rounded-full bg-brand-soft text-brand"><Icon name={icon} size={22} /></div>
+      <div className="grid size-12 place-items-center rounded-full bg-brand-soft text-accent"><Icon name={icon} size={22} /></div>
       <p className="text-base font-semibold">{title}</p>
       {children && <div className="max-w-sm text-muted">{children}</div>}
     </div>

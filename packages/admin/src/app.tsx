@@ -5,7 +5,7 @@ import { Dialog, Drawer, Menu, Toaster, toast } from '@tvine/weft/widgets'
 import { caller, keyOf, loadRoute, type Call, type RouteData } from './data.js'
 import { href, parse, type Query, type Route } from './routes.js'
 import type { ModelMeta, Site, User } from './types.js'
-import { AdminCtx, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
+import { AdminCtx, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
 import { Changelist } from './changelist.js'
 import { ChangeForm } from './form.js'
 import { AppIndex, Dashboard, DeleteView, HistoryView, Login } from './pages.js'
@@ -173,7 +173,7 @@ export function Nav({ id, onPick }: { id: string; onPick?: () => void }) {
           <div key={a.label}>
             <a href={href(base, { name: 'app', app: a.label })} agentId={`app-${a.label}`} onClick={(e) => { e.preventDefault(); onPick?.(); navigate(href(base, { name: 'app', app: a.label })) }}
               className="mb-1 block px-2 text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-fg">{a.name}</a>
-            {models.map((m) => <div key={m.key}>{link(href(base, { name: 'changelist', model: m.key }), m.namePlural, m.key, cur === m.key, 'grid')}</div>)}
+            {models.map((m) => <div key={m.key}>{link(href(base, { name: 'changelist', model: m.key }), cap(m.namePlural), m.key, cur === m.key, 'grid')}</div>)}
           </div>
         )
       })}
@@ -209,7 +209,7 @@ function Topbar({ onTheme, theme }: { onTheme(): void; theme: string }) {
         </button>
         {site.siteUrl && <a href={site.siteUrl} agentId="view-site" className="tva-btn tva-btn-ghost hidden md:inline-flex"><Icon name="ext" />View site</a>}
         <Menu name="user" label="Account"
-          trigger={<span className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand">{(user?.username ?? '?').slice(0, 1).toUpperCase()}</span><span className="hidden max-w-32 truncate sm:inline">{user?.username}</span></span>}
+          trigger={<span className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-accent">{(user?.username ?? '?').slice(0, 1).toUpperCase()}</span><span className="hidden max-w-32 truncate sm:inline">{user?.username}</span></span>}
           slots={{ trigger: { className: 'tva-btn tva-btn-ghost px-2' } }}
           items={[
             ...(site.siteUrl ? [{ id: 'site', label: 'View site', onSelect: () => location.assign(site.siteUrl!) }] : []),
@@ -228,7 +228,7 @@ function Crumbs({ meta, obj }: { meta?: ModelMeta; obj?: string }) {
   if ('model' in route) {
     const [app] = route.model.split('.')
     items.push([site.apps.find((a) => a.label === app)?.name ?? app, href(base, { name: 'app', app })])
-    items.push([meta?.namePlural ?? modelOf(site, route.model)?.namePlural ?? route.model.split('.')[1], route.name === 'changelist' ? undefined : href(base, { name: 'changelist', model: route.model })])
+    items.push([cap(meta?.namePlural ?? modelOf(site, route.model)?.namePlural ?? route.model.split('.')[1]), route.name === 'changelist' ? undefined : href(base, { name: 'changelist', model: route.model })])
     if (route.name === 'add') items.push([`Add ${meta?.name ?? ''}`])
     if ('pk' in route) items.push([obj ?? route.pk, route.name === 'change' ? undefined : href(base, { name: 'change', model: route.model, pk: route.pk })])
     if (route.name === 'delete' || route.name === 'history') items.push([route.name === 'delete' ? 'Delete' : 'History'])
@@ -301,7 +301,7 @@ function Palette({ onTheme }: { onTheme(): void }) {
     if (!open) return []
     const out: Cmd[] = []
     for (const a of site.apps) for (const m of a.models) {
-      if (m.perms.view) out.push({ id: `model:${m.key}`, label: m.namePlural, hint: a.name, icon: 'grid', run: go(href(base, { name: 'changelist', model: m.key })) })
+      if (m.perms.view) out.push({ id: `model:${m.key}`, label: cap(m.namePlural), hint: a.name, icon: 'grid', run: go(href(base, { name: 'changelist', model: m.key })) })
       if (m.perms.add) out.push({ id: `add:${m.key}`, label: `Add ${m.name}`, hint: 'Action', icon: 'plus', run: go(href(base, { name: 'add', model: m.key })) })
     }
     for (const pg of site.pages ?? []) out.push({ id: `page:${pg.path}`, label: pg.title, hint: pg.section ?? 'Page', icon: pg.icon ?? 'file', run: go(href(base, { name: 'page', path: pg.path })) })
@@ -331,7 +331,7 @@ function Palette({ onTheme }: { onTheme(): void }) {
         {shown.map((c, i) => (
           <li key={c.id}>
             <button type="button" role="option" agentId={c.id} aria-selected={i === hi} onMouseEnter={() => setHi(i)} onClick={c.run}
-              className={cx('flex w-full items-center gap-3 rounded-md px-3 py-2 text-left', i === hi && 'bg-brand-soft text-brand')}>
+              className={cx('flex w-full items-center gap-3 rounded-md px-3 py-2 text-left', i === hi && 'bg-brand-soft text-accent')}>
               <Icon name={c.icon} /><span className="flex-1 truncate">{c.label}</span><span className="text-xs text-muted">{c.hint}</span>
             </button>
           </li>

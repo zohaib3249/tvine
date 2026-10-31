@@ -4,7 +4,7 @@ import { toast } from '@tvine/weft/widgets'
 import type { Call, RouteData } from './data.js'
 import { href } from './routes.js'
 import type { DeleteNode, DeletePreview, LogEntry, ModelMeta, ObjectData, SiteApp, User } from './types.js'
-import { Empty, ErrorBox, Icon, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
+import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, slotClass, useAdmin } from './ui.js'
 import { CustomComponent } from './app.js'
 
 function AppCard({ a }: { a: SiteApp }) {
@@ -14,15 +14,15 @@ function AppCard({ a }: { a: SiteApp }) {
   return (
     <section className="tva-card overflow-hidden">
       <h2 className="flex items-center justify-between border-b border-line px-4 py-3 font-semibold">
-        <a href={href(base, { name: 'app', app: a.label })} agentId={`app-${a.label}`} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'app', app: a.label })) }} className="hover:text-brand">{a.name}</a>
+        <a href={href(base, { name: 'app', app: a.label })} agentId={`app-${a.label}`} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'app', app: a.label })) }} className="hover:text-accent">{a.name}</a>
       </h2>
       <ul className="divide-y divide-line">
         {models.map((m) => (
           <li key={m.key} className="flex items-center gap-2 px-4 py-2.5">
             {m.perms.view
-              ? <a href={href(base, { name: 'changelist', model: m.key })} agentId={m.key} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'changelist', model: m.key })) }} className="flex-1 font-medium hover:text-brand">{m.namePlural}</a>
-              : <span className="flex-1 font-medium">{m.namePlural}</span>}
-            {m.perms.add && <a href={href(base, { name: 'add', model: m.key })} agentId={`add-${m.key}`} aria-label={`Add ${m.name}`} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'add', model: m.key })) }} className="tva-btn tva-btn-ghost h-7 px-2 text-brand"><Icon name="plus" size={14} />Add</a>}
+              ? <a href={href(base, { name: 'changelist', model: m.key })} agentId={m.key} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'changelist', model: m.key })) }} className="flex-1 font-medium hover:text-accent">{cap(m.namePlural)}</a>
+              : <span className="flex-1 font-medium">{cap(m.namePlural)}</span>}
+            {m.perms.add && <a href={href(base, { name: 'add', model: m.key })} agentId={`add-${m.key}`} aria-label={`Add ${m.name}`} onClick={(e) => { e.preventDefault(); navigate(href(base, { name: 'add', model: m.key })) }} className="tva-btn tva-btn-ghost h-7 px-2 text-accent"><Icon name="plus" size={14} />Add</a>}
           </li>
         ))}
       </ul>

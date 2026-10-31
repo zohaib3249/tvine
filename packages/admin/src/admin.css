@@ -17,6 +17,7 @@
   --color-brand: var(--tva-brand);
   --color-brand-fg: var(--tva-brand-fg);
   --color-brand-soft: var(--tva-brand-soft);
+  --color-accent: var(--tva-accent);
   --color-danger: var(--tva-danger);
   --color-ok: var(--tva-ok);
   --color-warn: var(--tva-warn);
@@ -28,12 +29,14 @@
   --tva-bg: #f6f7f9; --tva-surface: #fff; --tva-sunken: #f1f3f6; --tva-line: #e3e6eb;
   --tva-fg: #0f172a; --tva-muted: #5b6474; --tva-danger: #dc2626; --tva-ok: #15803d; --tva-warn: #b45309;
   --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 12%, transparent);
+  --tva-accent: var(--tva-brand);
   color-scheme: light;
 }
 .tva[data-theme="dark"] {
   --tva-bg: #0b0e14; --tva-surface: #121722; --tva-sunken: #0f141d; --tva-line: #232a38;
   --tva-fg: #e6e9ef; --tva-muted: #98a2b3; --tva-danger: #f87171; --tva-ok: #4ade80; --tva-warn: #fbbf24;
   --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 22%, transparent);
+  --tva-accent: color-mix(in oklab, var(--tva-brand) 55%, white);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -41,6 +44,7 @@
     --tva-bg: #0b0e14; --tva-surface: #121722; --tva-sunken: #0f141d; --tva-line: #232a38;
     --tva-fg: #e6e9ef; --tva-muted: #98a2b3; --tva-danger: #f87171; --tva-ok: #4ade80; --tva-warn: #fbbf24;
     --tva-brand-soft: color-mix(in oklab, var(--tva-brand) 22%, transparent);
+  --tva-accent: color-mix(in oklab, var(--tva-brand) 55%, white);
     color-scheme: dark;
   }
 }
@@ -64,6 +68,7 @@
   .tva button, .tva [role="button"], .tva a, .tva summary, .tva label:has(input) { cursor: pointer; }
   .tva a { color: inherit; text-decoration: none; }
   .tva table { border-collapse: collapse; }
+  .tva ul, .tva ol { list-style: none; }
   .tva svg { display: block; flex-shrink: 0; }
   .tva :focus-visible { outline: 2px solid var(--tva-brand); outline-offset: 2px; border-radius: 4px; }
   .tva ::placeholder { color: var(--tva-muted); opacity: .8; }
@@ -94,13 +99,13 @@
   .tva-input:focus { outline: none; border-color: var(--tva-brand); box-shadow: 0 0 0 3px var(--tva-brand-soft); }
   .tva-input[aria-invalid="true"] { border-color: var(--tva-danger); }
   .tva-card { background: var(--tva-surface); border: 1px solid var(--tva-line); border-radius: calc(var(--tva-radius) + 4px); box-shadow: 0 1px 2px rgb(16 24 40 / .04); }
-  .tva-chip { display: inline-flex; align-items: center; gap: .25rem; height: 1.5rem; padding: 0 .5rem; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--tva-brand-soft); color: var(--tva-brand); }
+  .tva-chip { display: inline-flex; align-items: center; gap: .25rem; height: 1.5rem; padding: 0 .5rem; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--tva-brand-soft); color: var(--tva-accent); }
   .tva-kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 0 .35rem; border: 1px solid var(--tva-line); border-bottom-width: 2px; border-radius: 4px; color: var(--tva-muted); background: var(--tva-surface); }
   .tva-skel { background: linear-gradient(90deg, var(--tva-sunken), var(--tva-line), var(--tva-sunken)); background-size: 200% 100%; animation: tva-shimmer 1.2s infinite linear; border-radius: 6px; }
   @keyframes tva-shimmer { to { background-position: -200% 0; } }
   .tva-nav-link { display: flex; align-items: center; gap: .6rem; padding: .4rem .6rem; border-radius: var(--tva-radius); color: var(--tva-muted); font-weight: 500; }
   .tva-nav-link:hover { background: var(--tva-sunken); color: var(--tva-fg); }
-  .tva-nav-link[aria-current="page"] { background: var(--tva-brand-soft); color: var(--tva-brand); }
+  .tva-nav-link[aria-current="page"] { background: var(--tva-brand-soft); color: var(--tva-accent); }
   .tva-th { position: sticky; top: 0; z-index: 1; background: var(--tva-sunken); text-align: left; font-size: 12px; font-weight: 600; color: var(--tva-muted); text-transform: uppercase; letter-spacing: .03em; padding: .55rem .75rem; border-bottom: 1px solid var(--tva-line); white-space: nowrap; }
   .tva-td { padding: .55rem .75rem; border-bottom: 1px solid var(--tva-line); font-variant-numeric: tabular-nums; vertical-align: middle; }
   .tva-row:hover .tva-td { background: color-mix(in oklab, var(--tva-sunken) 70%, transparent); }
