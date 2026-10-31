@@ -18,9 +18,12 @@ import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } f
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
+import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
 import { defineSettings, merge, type SettingsInput } from './settings.js'
 import { channelTransport } from './transport/channel.js'
+import { addVary, hookResponse, weakIfNoneMatch } from './transport/compress.js'
+import { corsLayer } from './transport/cors.js'
 import { discoveryTransport, loadNextRoutes, type RouteInfo } from './transport/discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './transport/guards.js'
 import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/api.js'
@@ -129,6 +132,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
+  if (fe && !opts.dev) for (const w of nextBuildWarnings(fe.nextDir, settings)) say(`WARNING: ${w}`, 'warn')
   if (!actions.all().length && process.env.NODE_ENV === 'production') {
     say(`WARNING: no actions found under ${appsDir} (apps/<app>/views.ts, .js or .mjs); agents will see pages with nothing to do`, 'warn')
   }
@@ -177,7 +181,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
   }
+  // security/headers + transport/cors + transport/compress (server/security-headers.md): boot-checked here
+  const sec = securityHeaders(settings, { isDev })
+  const cors = corsLayer(settings)
   const chain: Handler[] = [
+    ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
     discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now() }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
@@ -203,12 +211,17 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ? (req, res) => { void startNext().then((n) => n.handle(req, res)).catch(fail(res)) }
     : (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found') }
 
+  // the paths this server itself answers (embedded mode hands everything else to the host app)
+  const mediaRoot = settings.media.route.replace(/\/$/, '')
+  const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
+    p === mediaRoot || p.startsWith(`${mediaRoot}/`) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   const handler: AgentServer['handler'] = (req, res, done) => {
     let i = 0
+    let unhook = () => {}
     const step = () => {
       const h = chain[i++]
       if (h) h(req, res, step)
-      else if (done) done()
+      else if (done) { unhook(); done() }   // the host app's response: its own headers
       else frontend(req, res)
     }
     // nothing a client sends may throw out of here (a throw in a 'request' listener kills the process)
@@ -218,6 +231,26 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[STAMP] = `${nonce}:${httpsOf(req, settings) ? 1 : 0}:${clientIp(xff, req.socket.remoteAddress ?? '', settings.trustProxy)}`
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
+      // embedded: CORS only for paths this server answers; the host app's own paths are the host's business
+      const ours = !done || ownPath(pathOf(req))
+      if (ours && cors.preflight(req, res)) return
+      const corsPlan = ours ? cors.request(req) : undefined
+      const plan = sec.begin(req, httpsOf(req, settings))
+      weakIfNoneMatch(req)
+      // a real node response only (a test double without header methods is passed through untouched)
+      if (typeof res.getHeader === 'function') {
+        unhook = hookResponse(req, res, {
+          compression: settings.compression,
+          onHeaders: () => {
+            sec.apply(res, plan)
+            if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
+              for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
+              if (corsPlan.dropSetCookie) res.removeHeader('set-cookie')   // no cookie went in: none comes back
+              addVary(res, 'Origin')
+            }
+          },
+        })
+      }
       step()
     } catch (e) { fail(res)(e) }
   }
