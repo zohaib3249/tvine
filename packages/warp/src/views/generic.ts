@@ -107,8 +107,9 @@ function valueSchema(f: AnyField): z.ZodTypeAny {
     default: return z.string()
   }
 }
+const MAX_TERM = 200   // q / __contains: a LIKE pattern is never unbounded
 function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
-  if (op === 'contains') return z.string()
+  if (op === 'contains') return z.string().max(MAX_TERM)
   if (op === 'in') return z.preprocess(v => (typeof v === 'string' ? v.split(',') : v), z.array(valueSchema(f)).max(MAX_IN))
   return valueSchema(f)
 }
@@ -445,7 +446,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
     }
     const sorts = gv.ordering.flatMap(f => [f, `-${f}`])
     const listSchema = z.object({
-      ...(effectiveSearch(gv).length && { q: z.string().optional() }),
+      ...(effectiveSearch(gv).length && { q: z.string().max(MAX_TERM).optional() }),
       ...(sorts.length && { sort: z.enum(sorts as [string, ...string[]]).optional() }),
       ...(gv.pagination === 'page'
         ? { page: z.preprocess(v => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v), z.number().int().min(1)).optional() }
