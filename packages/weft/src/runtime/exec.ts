@@ -4,7 +4,7 @@ import { listed } from '../widget/vocabulary.js'
 import { getOverlay, POINTED } from '../presence/overlay.js'
 import { agentState } from './fragment.js'
 import { getRegistry, type Entry } from './registry.client.js'
-import { agentNavigate } from './nav.js'
+import { agentNavigate, currentPage, settle } from './nav.js'
 
 // control-protocol.md: the in-tab executor. A `ui` command = steps run in order, stop at the first
 // failure, nothing undone; the result lists exactly the steps that ran. Every step goes through
@@ -121,7 +121,11 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
     const e = typeof target === 'string' ? reg.get(target) : undefined
     if (e?.spec.humanOnly) return fail({ code: 'human_only', reason: 'human_only', message: humanOnlyMessage(e.spec.humanOnly) })
     const c = e && callable(e, control)
-    // Missing, hidden, disabled, bound to an agent-off action, or behind an open modal ([inert], as tree()): the same answer.
+    // A disabled widget (a busy form, a variant still loading): visible state, so say so — the agent retries.
+    // A control switched off on its own (enabled:false: inc at max, agent-off action) stays 'unknown'.
+    const off = e && !c && e.spec.disabled && Object.hasOwn(e.spec.controls ?? {}, control) && (e.spec.controls![control]!.headless as { params?: ActionHandle } | undefined)?.params?.agent !== false
+    if (off && !e.el?.closest('[inert]')) return fail({ code: 'domain', reason: 'disabled', message: `${control} on ${target} is disabled right now; retry shortly or read_page` })
+    // Missing, hidden, bound to an agent-off action, or behind an open modal ([inert], as tree()): the same answer.
     if (!e || !c || e.el?.closest('[inert]')) return fail({ code: 'unknown_action', message: `unknown control ${control} on ${target}` })
     const ps = (c.params ?? {}) as Record<string, ParamSpec>
     safe[i] = e.spec.sensitive ? maskAll(args) : Object.fromEntries(Object.entries(args).map(([k, v]) => [k, ps[k]?.secret ? MASK : v]))
@@ -146,6 +150,13 @@ async function execute(cmd: UiCommand, cmdId: string, o: ExecOptions, hold: (cal
       })
       hold(call)
       const result = await race(call, Math.min(limits.stepTimeoutMs, deadline - Date.now()), signal)
+      // URL-driven control (headless {url}): answer after its navigation re-rendered the page (T3), not before
+      const url = c.headless && 'url' in c.headless ? c.headless.url : undefined
+      if (url) {
+        const u = new URL(currentPage(), 'http://x'), v = args.value
+        if (v === undefined || v === null || v === '') u.searchParams.delete(url); else u.searchParams.set(url, String(v))
+        await settle(u.pathname + u.search, signal, 1_000)
+      }
       const now = reg.get(target)
       const s = now && agentState(now.spec)
       steps.push({ i, target, ok: true, ...(s !== undefined && { state: s }), ...(result !== undefined && { result }) })

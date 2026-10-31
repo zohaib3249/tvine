@@ -37,10 +37,11 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 // Settle rule: wait until the URL equals `target` (when given), then until the registry has been
 // quiet for quietMs and no pending region is mounted; capped at capMs. Returns the pending count at
 // the end (> 0 → the agent should re-read).
-export async function settle(target?: string, signal?: AbortSignal): Promise<{ pending: number }> {
-  const end = Date.now() + navLimits.capMs
+// urlWaitMs: give up early when the URL has not reached `target` by then (a control that may not navigate).
+export async function settle(target?: string, signal?: AbortSignal, urlWaitMs = navLimits.capMs): Promise<{ pending: number }> {
+  const end = Date.now() + navLimits.capMs, urlEnd = Date.now() + urlWaitMs
   let urlAt = target === undefined ? 0 : -1
-  while (Date.now() < end && !signal?.aborted) {
+  while (Date.now() < end && !signal?.aborted && (urlAt >= 0 || Date.now() < urlEnd)) {
     // A URL we have not seen yet counts as a change: its route's widgets may still be mounting.
     const now = currentPage()
     if (now !== lastUrl) { lastUrl = now; touch() }
