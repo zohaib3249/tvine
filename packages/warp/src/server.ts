@@ -37,6 +37,7 @@ import { TabHub, tabTransport } from './transport/tab.js'
 import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
+import { adminSnapshot } from './contrib/admin/agent.js'
 
 type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
 export type HeadersLike = Iterable<[string, string]>   // a fetch Headers, or Next's headers()
@@ -149,7 +150,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   connections.configure(settings)
   configureRedis(settings, (level, msg, data) => say(data ? `${msg} ${JSON.stringify(data)}` : msg, level === 'error' ? 'warn' : level))
   let snapshot: (route: string, sid: string) => Promise<Snapshot>
-  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (route, sid) => snapshot(route, sid) })
+  // tvine.admin: its pages' agent view is built from the admin.* reads (contrib/admin/agent.ts), not rendered
+  const adminBase = installed.includes('tvine.admin') ? settings.admin.path.replace(/\/$/, '') || '/admin' : undefined
+  let adminSnap: ((page: string, sid: string) => Promise<Snapshot>) | undefined
+  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (page, sid) => (adminSnap && adminPage(page) ? adminSnap(page, sid) : snapshot(page, sid)) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
   // AppConfig.ready(): each app's hooks.ts ready(server), awaited, in installed-app order (contrib auth installs its backend here)
   for (const { app, fn } of signals.ready) {
@@ -177,13 +181,32 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   else if (fe.origin) snapshot = renderer(fe.origin)
   else snapshot = async () => { throw new Error('no frontend origin yet: call listen() or pass frontend.origin') }
   // ponytail: in dev, discovery (/tvine/manifest, llms.txt) still lists the boot-time routes; agent paths and MCP are live
-  const route = fe && opts.dev ? liveRouteMatcher(fe.nextDir) : routeMatcher(routes)
+  const nextRoute = fe && opts.dev ? liveRouteMatcher(fe.nextDir) : routeMatcher(routes)
+  // the admin path is an agent route too (owner: agents act through the UI's own controls); an app page there wins
+  const ADMIN_ROUTE = `${adminBase}/[[...path]]`
+  const adminPage = (page: string) => {
+    const p = page.split('?')[0]!
+    return !!adminBase && (p === adminBase || (p.startsWith(`${adminBase}/`) && !p.startsWith(`${adminBase}/_static/`))) && !ownsAdmin(nextRoute(p))
+  }
+  const ownsAdmin = (r: string | undefined) => r !== undefined && (r === adminBase || r.startsWith(`${adminBase}/`))
+  const route = (p: string) => nextRoute(p) ?? (adminPage(p) ? ADMIN_ROUTE : undefined)
   ctx.route = route
+  if (adminBase) {
+    adminSnap = adminSnapshot({
+      settings, has: (id) => !!actions.get(id), paramSpecs: (id) => actions.paramSpecs(id),
+      rev: async (sid) => (await ctx.sessions.peek({ sid }))?.rev ?? 0,
+      call: async (id, params, sid, page) => {
+        const request = await buildRequest({ url: page, route: ADMIN_ROUTE, headers: {}, ip: '127.0.0.1', via: 'mcp' }, settings)
+        request.agent = { is: true, via: 'http' }
+        return invoke(ctx, { id, params }, { request, sid, mode: 'render' }) as never
+      },
+    }, adminBase)
+  }
   say('runtime ready')
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
-  const admin = installed.includes('tvine.admin') ? await adminMount(settings, route) : undefined
+  const admin = adminBase ? await adminMount(settings, nextRoute) : undefined
   const isDev = process.env.NODE_ENV !== 'production'
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out

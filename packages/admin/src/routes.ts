@@ -59,7 +59,8 @@ export const RESERVED = new Set(['q', 'o', 'p', 'all', '_saved'])
 export type ListParams = { model: string; q?: string; filters?: Record<string, string>; ordering?: string[]; page?: number; pageSize?: number; all?: boolean }
 export function listParams(model: string, q: Query): ListParams {
   const filters: Record<string, string> = {}
-  for (const [k, v] of Object.entries(q)) if (!RESERVED.has(k) && v !== '') filters[k] = v
+  // tvine-approve / tvine-connect belong to the tab socket, never a filter
+  for (const [k, v] of Object.entries(q)) if (!RESERVED.has(k) && !k.startsWith('tvine-') && v !== '') filters[k] = v
   return {
     model,
     ...(q.q && { q: q.q }),
