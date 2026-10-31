@@ -1,12 +1,18 @@
 // Minimal rich text sanitizer: string-based so it gives the same output on the server (SSR) and in the tab.
-// Allowlist: b strong i em u p br ul ol li a[href]. Every other tag is dropped (its text kept), script/style/
-// iframe/… are dropped WITH their contents, comments dropped, all attributes dropped except a safe href.
+// Allowlist: b strong i em u s del p br ul ol li a[href] h1-h3 blockquote code pre hr table thead tbody tr th td
+// img[src alt]. Every other tag is dropped (its text kept), script/style/iframe/… are dropped WITH their contents,
+// comments dropped, all attributes dropped except a safe a[href] and img[src] (http(s) or same-site path) + alt.
 // Anything the tag regex doesn't match is text and gets escaped, so malformed markup can only become text.
-const KEEP = new Set(['b', 'strong', 'i', 'em', 'u', 'p', 'br', 'ul', 'ol', 'li', 'a'])
+const KEEP = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'del', 'p', 'br', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'blockquote', 'code', 'pre',
+  'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img'])
+const VOID = new Set(['br', 'hr', 'img'])
 const DROP = /<(script|style|iframe|object|embed|template|noscript|svg|math|textarea|title|xmp)\b[\s\S]*?(?:<\/\1\s*>|$)/gi
 const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^<>]*)>/g
-const HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i
+const at = (name: string) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i')
+const HREF = at('href'), SRC = at('src'), ALT = at('alt')
+const val = (re: RegExp, attrs: string) => { const h = re.exec(attrs); return h ? decode(h[1] ?? h[2] ?? h[3] ?? '') : undefined }
 const SAFE = /^(https?:|mailto:|\/(?![\/\\])|#)/i   // `//x` and `/\x` are protocol-relative in browsers
+const IMG = /^(https?:|\/(?![\/\\]))/i                  // images: never data:/javascript:, no protocol-relative
 
 const decode = (s: string) => s.replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
   .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(+d)).replace(/&colon;/gi, ':').replace(/&tab;|&newline;/gi, '').replace(/&amp;/gi, '&')
@@ -26,10 +32,13 @@ export function sanitizeHtml(html: string): string {
     out += text(src.slice(last, m.index)); last = m.index! + m[0].length
     const [, close, raw, attrs] = m, tag = raw!.toLowerCase()
     if (!KEEP.has(tag)) continue
-    if (close) { if (tag !== 'br') out += `</${tag}>`; continue }
+    if (close) { if (!VOID.has(tag)) out += `</${tag}>`; continue }
     if (tag === 'a') {
-      const h = HREF.exec(attrs!), url = h ? safeHref(decode(h[1] ?? h[2] ?? h[3] ?? '').replace(/[\u0000- \u007f]/g, '')) : undefined
+      const h = val(HREF, attrs!), url = h !== undefined ? safeHref(h.replace(/[\u0000- \u007f]/g, '')) : undefined
       out += url ? `<a href="${attr(url)}" rel="noopener noreferrer nofollow">` : '<a>'
+    } else if (tag === 'img') {
+      const s = val(SRC, attrs!)?.replace(/[\u0000- \u007f]/g, ''), alt = val(ALT, attrs!)
+      if (s && IMG.test(s)) out += `<img src="${attr(s)}" alt="${attr(alt ?? '')}">`   // no src = no image
     } else out += `<${tag}>`
   }
   return out + text(src.slice(last))

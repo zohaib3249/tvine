@@ -5,12 +5,16 @@ import { pkField, type ModelDef } from '../../data/fields/index.js'
 type AnyField = Field<any, boolean, Kind, boolean>
 export type MetaKind = 'text' | 'textarea' | 'email' | 'url' | 'slug' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'datetime' | 'time' |
   'duration' | 'uuid' | 'json' | 'choice' | 'fk' | 'm2m' | 'file' | 'image' | 'password' | 'rich'
+  // inputs pack (weft forms.md); the ones no ORM field maps to are set with formfieldOverrides ({ kind: 'otp' })
+  | 'color' | 'range' | 'phone' | 'search' | 'tags' | 'checkboxes' | 'switch' | 'segmented' | 'rating' | 'otp' | 'markdown' | 'code'
+  | 'daterange' | 'month' | 'week' | 'country' | 'address' | 'keyvalue' | 'list' | 'signature' | 'currency' | 'percent' | 'ip' | 'slugAuto'
 export interface FieldMeta {
   name: string; label: string; help?: string; kind: MetaKind; required: boolean; readOnly: boolean; nullable: boolean
   default?: unknown; choices?: { value: string; label: string }[]; max?: number; min?: number; maxLength?: number
   decimals?: number; currency?: string; multiple?: boolean
   relation?: { model: string; autocomplete: boolean; rawId: boolean }
   upload?: { accept: string; maxBytes?: number }
+  step?: number; palette?: string[]; language?: string; from?: string; of?: FieldMeta; free?: boolean; humanOnly?: boolean
 }
 
 // 'createdAt' → 'Created at', 'shipTo' → 'Ship to' (Django verbose_name from the attribute name)
@@ -31,7 +35,9 @@ function kindOf(n: string, f: AnyField): MetaKind {
       if (/(^url|Url|URL)$/.test(n)) return 'url'
       if (n === 'slug') return 'slug'
       return 'text'
-    default: return f.kind as MetaKind   // uuid bool money datetime json image fk m2m
+    case 'richText': return 'rich'
+    case 'dateRange': return 'daterange'
+    default: return f.kind as MetaKind   // uuid bool money datetime json image fk m2m color phone tags ip country markdown code address percent
   }
 }
 
@@ -56,6 +62,12 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
     m.relation = { model: o.keyOf(f.target!()), autocomplete: o.autocomplete.includes(n), rawId: o.rawId.includes(n) }
     if (f.kind === 'm2m') m.multiple = true
   }
+  if (f.kind === 'tags') {
+    if (f.opts.choices) m.choices = f.opts.choices.map((v) => ({ value: v, label: v }))
+    if (f.opts.maxItems) m.max = f.opts.maxItems
+  }
+  if (f.kind === 'code' && f.opts.language) m.language = f.opts.language
+  if (f.kind === 'percent') { m.min = 0; m.max = 100 }
   if (f.kind === 'image') m.upload = { accept: 'image/*' }
   if (f.kind === 'file') m.upload = { accept: 'application/pdf,image/*' }   // every type media sniffing knows
   if (f.kind === 'decimal') { m.decimals = (f as unknown as { places: number }).places; m.max = 10 ** ((f as unknown as { digits: number }).digits - m.decimals) - 10 ** -m.decimals }
@@ -86,7 +98,7 @@ export function fromWire(n: string, f: AnyField, v: unknown): { ok: true; value:
   }
   let x = v
   if (f.kind === 'datetime' && typeof v === 'string') { x = new Date(v); if (Number.isNaN((x as Date).getTime())) return { ok: false, error: 'Enter a valid date/time.' } }
-  if ((f.kind === 'int' || f.kind === 'float') && typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) x = Number(v)
+  if ((f.kind === 'int' || f.kind === 'float' || f.kind === 'percent') && typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) x = Number(v)
   if (f.kind === 'duration' && v !== undefined && Number.isFinite(Number(v))) x = Number(v) * 1000   // seconds → ms
   if (f.kind === 'decimal' && typeof v === 'number') x = String(v)
   if (f.kind === 'bool' && typeof v === 'string') x = v === 'true' || v === '1' || v === 'on'

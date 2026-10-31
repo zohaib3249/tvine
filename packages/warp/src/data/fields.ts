@@ -3,7 +3,8 @@
 import { z } from 'zod'
 import {
   BoolField, DateField, DatetimeField, DecimalField, DurationField, EmailField, EnumField, FileField, FkField, FloatField, IdField,
-  ImageField, IntField, JsonField, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
+  ImageField, IntField, JsonField, ColorField, PhoneField, IpField, CountryField, MarkdownField, CodeField, RichTextField, PercentField, TagsField,
+  AddressField, DateRangeField, type Address, type DateRange, M2MField, MoneyField, SlugField, TextField, TimeField, UrlField, UuidField, concrete, isAuto, type Field, type Fields, type Kind, type ModelDef, type Money, type Opts,
 } from './fields/index.js'
 
 export { concrete, isAuto, keyOf, pkField, type Field, type Fields, type Kind, type ModelDef, type ModelMeta, type Money, type OnDelete, type Opts } from './fields/index.js'
@@ -34,6 +35,18 @@ export const field = {
   url: mk<string, 'url'>(UrlField),
   slug: mk<string, 'slug'>(SlugField),
   file: mk<string, 'file'>(FileField),             // storage key; upload with defineUpload({ uploadTo })
+  // inputs pack (forms.md): each maps to its own admin widget
+  color: mk<string, 'color'>(ColorField),          // '#1a2b3c' (stored lowercase)
+  phone: mk<string, 'phone'>(PhoneField),          // E.164 '+15551234567'
+  tags: mk<string[], 'tags'>(TagsField),           // JSON array of strings (maxItems, choices)
+  ip: mk<string, 'ip'>(IpField),                   // IPv4 / IPv6 (Django GenericIPAddressField)
+  country: mk<string, 'country'>(CountryField),    // ISO 3166-1 alpha-2 'IS'
+  markdown: mk<string, 'markdown'>(MarkdownField),
+  richText: mk<string, 'richText'>(RichTextField), // sanitized HTML (shape/rich.ts allowlist) on every save
+  code: mk<string, 'code'>(CodeField),             // opts.language
+  address: mk<Address, 'address'>(AddressField),   // JSON {line1, line2?, city, region?, postal?, country}
+  percent: mk<number, 'percent'>(PercentField),    // 0–100
+  dateRange: mk<DateRange, 'dateRange'>(DateRangeField), // JSON {start, end} 'YYYY-MM-DD', inclusive
   enum: <const E extends readonly string[], const P extends Opts | undefined = undefined>(values: E, opts?: P) =>
     new EnumField(values, opts ?? {}) as unknown as Typed<E[number], 'enum', P>,
   fk: <M extends { name: string; fields: Fields }, const P extends Opts | undefined = undefined>(target: () => M, opts?: P) =>
