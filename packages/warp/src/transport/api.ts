@@ -1,6 +1,7 @@
 // transport/api — the frontend's only data path (docs/design/frontend/v2/core/api-client.md): POST /tvine/api/<id>
 // for client components and a Next server in two-server mode, plus `invoke`, which the in-process caller behind
 // @tvine/weft/api uses. Every call is one dispatch(): permissions, bind, limits, atomic, hooks, idempotency.
+import { parseMultipart, PARTS, type FilePart } from '../media/index.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
@@ -196,6 +197,21 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
     const who = await callerOf(server, o, req, res)
     if (!who) return send(res, FORBIDDEN)
     const ct = String(req.headers['content-type'] ?? '')
+    const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(ct)
+    const mpDef = mp ? server.actions.get(id) : undefined
+    if (mp) {
+      // only actions that declare `multipart` take files here; the body is buffered under bodyBytes + their cap
+      if (!mpDef?.multipart) return send(res, fail('invalid_param', 'this action does not take multipart bodies'))
+      const buf = await readBuffer(req, settings.limits.bodyBytes + mpDef.multipart.maxBytes)
+      if (buf === null) { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', 'request body too large'), 413) }
+      const parsed = parseMultipart(buf, mp[1] ?? mp[2]!)
+      if (!parsed || Object.keys(parsed.fields).some((k) => k !== 'params')) return send(res, fail('invalid_param', 'multipart: a `params` JSON part and file parts only'))
+      let params: unknown
+      try { params = JSON.parse(parsed.fields.params ?? '{}') } catch { return send(res, fail('invalid_param', 'the params part is not valid JSON')) }
+      if (typeof params !== 'object' || params === null || Array.isArray(params) || tooDeep(params)) return send(res, fail('invalid_param', 'params must be an object'))
+      ;(who.request as unknown as { [PARTS]?: FilePart[] })[PARTS] = parsed.files
+      return send(res, await invoke(server, { id, params }, who))
+    }
     if (!/^application\/json\s*(;|$)/i.test(ct)) return send(res, fail('invalid_param', 'Content-Type must be application/json'))
     const raw = await readBody(req, settings.limits.bodyBytes)
     if (raw === null) { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
@@ -218,6 +234,23 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       else res.destroy()
     })
   }
+}
+
+function readBuffer(req: IncomingMessage, cap: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let n = 0
+    const onData = (c: Buffer) => {
+      n += c.length
+      if (n <= cap) return void chunks.push(c)
+      req.off('data', onData)
+      req.resume()
+      resolve(null)
+    }
+    req.on('data', onData)
+    req.once('end', () => resolve(Buffer.concat(chunks)))
+    req.once('error', reject)
+  })
 }
 
 // ponytail: same as transport/http.ts readBody/tooDeep (owned by another task); share when that file is free

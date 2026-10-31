@@ -161,6 +161,7 @@ export interface ActionDef<S extends z.ZodType = z.ZodType> {
   run(params: z.infer<S>, ctx: ActionCtx): Promise<unknown>
   rules?: ActionRules
   rawParams?: boolean               // run() validates its own params (class views); dispatch passes them unparsed
+  multipart?: { maxBytes: number }  // POST /tvine/api/<id> may be multipart: a `params` JSON part + file parts (all files ≤ maxBytes)
 }
 export interface ActionRules {
   anonymous?: boolean               // default true in v1
@@ -250,6 +251,8 @@ export interface Settings {
   // uses; file / durable: the file broker's tasks.db path and power-cut durability; claimBatch: jobs per claim
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
+  // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
+  admin: { path: string; title?: string; theme: { brand?: string; radius?: string; dark: 'auto' | 'on' | 'off' } }
   installedApps: string[]           // Django INSTALLED_APPS for built-in apps: 'tvine.auth', … (core/apps.ts)
   secret: string | string[]         // HMAC key, min 32 chars enforced at boot; array = rotation
   auth?: AuthSettings

@@ -172,3 +172,42 @@ export function mediaHandler(storage: DiskStorage, routePrefix = '/media') {
     } catch { if (!res.headersSent) notFound(); else res.destroy() }
   }
 }
+
+// ---- multipart api calls (POST /tvine/api/<id> for an action with `multipart`) ------------------------
+// The api transport parses the (capped, buffered) body: a `params` JSON part plus one part per file field.
+// The file parts ride on the request under PARTS; the action stores each with storePart (same sniffing,
+// type list and byte cap as every upload).
+export interface FilePart { field: string; filename: string; type: string; data: Buffer }
+export const PARTS = Symbol.for('tvine.fileParts')
+export const filePartsOf = (request: object): FilePart[] => (request as { [PARTS]?: FilePart[] })[PARTS] ?? []
+
+export function storePart(p: FilePart, limits: { maxBytes: number; types: string[]; storage?: Storage }, media?: Media): Promise<UploadedFile> {
+  if (p.data.length > limits.maxBytes) return Promise.reject(new DomainError('too_large', `file exceeds ${limits.maxBytes} bytes`, p.field))
+  return receiveUpload(Readable.from([p.data]), { upload: limits } as UploadDef, { field: p.field, media })
+}
+
+// a whole multipart body → text fields + file parts; null = malformed. Parts are capped by the caller's body cap.
+export function parseMultipart(body: Buffer, boundary: string): { fields: Record<string, string>; files: FilePart[] } | null {
+  const delim = Buffer.from(`--${boundary}`)
+  const fields: Record<string, string> = Object.create(null)
+  const files: FilePart[] = []
+  let i = body.indexOf(delim)
+  if (i < 0) return null
+  for (;;) {
+    i += delim.length
+    if (body.subarray(i, i + 2).toString('latin1') === '--') return { fields, files }
+    if (body.subarray(i, i + 2).toString('latin1') !== '\r\n') return null
+    const headEnd = body.indexOf('\r\n\r\n', i)
+    const next = body.indexOf(Buffer.from(`\r\n--${boundary}`), headEnd)
+    if (headEnd < 0 || next < 0) return null
+    const head = body.subarray(i + 2, headEnd).toString('utf8')
+    const data = body.subarray(headEnd + 4, next)
+    const disp = /^content-disposition:\s*form-data(.*)$/im.exec(head)?.[1] ?? ''
+    const name = /;\s*name="([^"]{1,200})"/i.exec(disp)?.[1]
+    if (name === undefined) return null
+    const filename = /;\s*filename="([^"]*)"/i.exec(disp)?.[1]
+    if (filename === undefined) fields[name] = data.toString('utf8')
+    else files.push({ field: name, filename, type: /^content-type:\s*([^\r\n;]+)/im.exec(head)?.[1]?.trim() ?? 'application/octet-stream', data: Buffer.from(data) })
+    i = next + 2
+  }
+}

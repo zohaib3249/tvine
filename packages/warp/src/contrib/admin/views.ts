@@ -1,0 +1,701 @@
+// The admin API (contract §2): admin.site / meta / list / get / create / update / delete / deletePreview /
+// action / autocomplete / history / listEdit. Every action: staff (rules.permissions, run by dispatch) + the
+// model permission (ModelAdmin.has*Permission). Request values are checked against the ModelAdmin's options
+// (whitelists); the ORM binds every value as a param.
+import { z } from 'zod'
+import { defineAction } from '../../core/actions.js'
+import { DomainError } from '../../core/errors.js'
+import type { ActionDef } from '../../core/types.js'
+import type { Field, Fields, Kind, ModelDef } from '../../data/fields/index.js'
+import type { Model } from '../../data/model.js'
+import { Count, Max, Min, Q, type QNode } from '../../data/expressions.js'
+import type { QuerySet } from '../../data/queryset.js'
+import { modelNamed, referencesTo } from '../../data/registry.js'
+import { isStaff } from '../../security/permissions.js'
+import { DiskStorage, filePartsOf, storePart } from '../../media/index.js'
+import { coercePk, fieldMeta, fromWire, isPassword, labelOf, toWire, type FieldMeta } from './meta.js'
+import { ADDITION, AdminPref, CHANGE, DELETION, LogEntry, REPR_MAX } from './models.js'
+import {
+  checkPerm, displayOf, isFilterClass, type ActionResult, type AdminAction, type Ctx, type InlineModelAdmin, type ListFilterClass,
+  type ListParams, type ModelAdmin,
+} from './options.js'
+import { autodiscover, fkTo, site } from './sites.js'
+
+type AnyModel = Model<any, any>
+type AnyField = Field<any, boolean, Kind, boolean>
+type Row = Record<string, any>
+type Base = ModelAdmin | InlineModelAdmin
+
+const forbidden = () => new DomainError('forbidden', 'forbidden: not allowed')
+const bad = (field: string, msg: string) => new DomainError('invalid_param', `${field}: ${msg}`, field)
+const MAX_PKS = 1000
+
+// discover() hook (views/discover.ts): load every app's admin.ts and register the getUrls() views
+export const discoverViews = (o: { appsDir: string; installed: readonly string[] }): Promise<ActionDef[]> => autodiscover(o.appsDir, o.installed)
+
+// ---- lookup + permission gate -----------------------------------------------------------------------
+const modelKey = z.string().regex(/^[a-z][a-z0-9_]*\.[a-zA-Z0-9_]+$/).max(100)
+const pkParam = z.union([z.string().max(64), z.number()])
+
+async function gate(ctx: Ctx, key: string, need: 'view' | 'add' | 'change' | 'delete' | 'module'): Promise<ModelAdmin> {
+  const a = site.adminFor(key)
+  if (!a) throw new DomainError('not_found', `no admin for model ${key}`)
+  if (a.agents === false && ctx.request.agent.is) throw new DomainError('forbidden', 'forbidden: this model is not for agents')
+  const ok = need === 'module' ? await a.hasModulePermission(ctx) : await checkPerm(a, ctx, need)
+  if (!ok) throw forbidden()
+  return a
+}
+async function objectOf(a: ModelAdmin, ctx: Ctx, pk: unknown): Promise<Row> {
+  const id = coercePk(a.model, pk)
+  if (id === undefined) throw bad('pk', 'not a valid primary key')
+  const obj = await a.getObject(ctx, id)
+  if (!obj) throw new DomainError('not_found', `${a._key} ${String(pk)} not found`)
+  return obj as Row
+}
+const perms = async (a: Base, ctx: Ctx, obj?: object) => ({
+  view: !!(await a.hasViewPermission(ctx, obj)), add: !!(await a.hasAddPermission(ctx, obj)),
+  change: !!(await a.hasChangePermission(ctx, obj)), delete: !!(await a.hasDeletePermission(ctx, obj)),
+})
+const repr = (a: Base | undefined, def: ModelDef, obj: Row): string =>
+  a ? a.str(obj) : (['name', 'title', 'username', 'email'].map((k) => obj[k]).find((v) => typeof v === 'string' && v) ?? `${def.name} object (${String(obj.id)})`)
+const adminOfDef = (def: ModelDef) => site.admins().find((x) => x.model.name === def.name)
+
+export async function logAction(ctx: Ctx, key: string, pk: unknown, objectRepr: string, actionFlag: number, changeMessage: unknown[]): Promise<void> {
+  await LogEntry.create({
+    userId: String(ctx.request.user.id ?? ''), contentType: key, objectId: String(pk),
+    objectRepr: objectRepr.slice(0, REPR_MAX), actionFlag, changeMessage,
+  })
+}
+
+// ---- form fields ------------------------------------------------------------------------------------
+// the editable + read-only fields of the form (Django get_fields): hidden fields only when a password
+function formFields(a: Base): string[] {
+  const all = Object.entries(a.model.fields as Fields).filter(([n, f]) => f.kind !== 'id' && (!f.opts.hidden || isPassword(n, f)) && !(f.opts.auto && !a.readonlyFields.includes(n)))
+  const fs = (a as ModelAdmin).fieldsets?.flatMap(([, f]) => f.fields) ?? a.fields ?? all.map(([n]) => n)
+  return fs.filter((n) => !a.exclude.includes(n))
+}
+const metaOpts = (a: Base) => ({ readonly: a.readonlyFields, autocomplete: a.autocompleteFields, rawId: a.rawIdFields, overrides: a.formfieldOverrides, keyOf: (d: ModelDef) => site.keyOf(d) })
+function formMeta(a: Base): Record<string, FieldMeta> {
+  const out: Record<string, FieldMeta> = {}
+  for (const n of formFields(a)) {
+    const f = a.model.fields[n]
+    out[n] = f ? fieldMeta(n, f, metaOpts(a)) : { name: n, label: labelOf(n), kind: 'text', required: false, readOnly: true, nullable: true }
+    if (isPassword(n, f!)) out[n]!.required = false
+  }
+  return out
+}
+
+// stored row → form values (never a hidden field, so never a password hash)
+async function valuesOf(a: Base, obj: Row): Promise<Row> {
+  const out: Row = {}
+  for (const n of formFields(a)) {
+    const f = a.model.fields[n]
+    if (!f) { const fn = (a as unknown as Row)[n]; out[n] = typeof fn === 'function' ? await fn.call(a, obj) : null; continue }
+    if (f.opts.hidden) continue
+    if (f.kind === 'm2m') { out[n] = (await a.model.related(n, obj.id).all().fetchAll()).map((r: Row) => r.id); continue }
+    out[n] = toWire(f, obj, n)
+  }
+  return out
+}
+
+// input values → { data (row keys), m2m, errors }; only form fields that are not read-only
+function clean(a: Base, values: Row, creating: boolean, only?: string[]) {
+  const errors: Record<string, string> = {}
+  const data: Row = {}, m2m: Record<string, unknown[]> = {}, changed: string[] = []
+  const editable = (only ?? formFields(a)).filter((n) => a.model.fields[n] && !a.readonlyFields.includes(n))
+  for (const k of Object.keys(values ?? {})) if (!editable.includes(k)) errors[k] = 'Unknown or read-only field.'
+  for (const n of editable) {
+    const f = a.model.fields[n]!
+    const meta = fieldMeta(n, f, metaOpts(a))
+    if (meta.readOnly) continue
+    if (!(n in (values ?? {}))) {
+      if (creating && meta.required && !isPassword(n, f)) errors[n] = 'This field is required.'
+      continue
+    }
+    if (isPassword(n, f) && (values[n] === '' || values[n] == null)) continue   // blank = keep the password
+    const r = fromWire(n, f, values[n])
+    if (!r.ok) { errors[n] = r.error; continue }
+    if (f.kind === 'm2m') m2m[n] = r.value as unknown[]
+    else data[f.key(n)] = r.value
+    changed.push(n)
+  }
+  return { data, m2m, errors, changed }
+}
+const fieldErrors = (errors: Record<string, string>, prefix = ''): DomainError => {
+  const [first] = Object.keys(errors)
+  return new DomainError('invalid_param', Object.entries(errors).map(([k, v]) => `${prefix}${k}: ${v}`).join('\n'), prefix + first)
+}
+
+// ---- changelist ---------------------------------------------------------------------------------------
+type Spec = { name: string; label: string; kind: 'choice' | 'boolean' | 'date' | 'related' | 'custom'; cls?: ListFilterClass; field?: string }
+function filterSpecs(a: ModelAdmin): Spec[] {
+  return a.listFilter.map((f): Spec => {
+    if (isFilterClass(f)) { const i = new f(); return { name: i.parameterName, label: i.title || labelOf(i.parameterName), kind: 'custom', cls: f } }
+    const k = a.model.fields[f]!.kind
+    return { name: f, label: labelOf(f), field: f, kind: k === 'bool' ? 'boolean' : k === 'datetime' ? 'date' : k === 'fk' ? 'related' : 'choice' }
+  })
+}
+const DATE_CHOICES: [string, string][] = [['today', 'Today'], ['past7', 'Past 7 days'], ['month', 'This month'], ['year', 'This year']]
+async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[string, string][]> {
+  if (s.cls) return (await new s.cls().lookups(ctx, a)).map(([v, l]) => [String(v), String(l)])
+  const f = a.model.fields[s.field!]!
+  const nulls: [string, string][] = f.opts.optional ? [['null', s.kind === 'date' ? 'No date' : 'Unknown']] : []
+  if (s.kind === 'boolean') return [['true', 'Yes'], ['false', 'No'], ...nulls]
+  if (s.kind === 'date') return [...DATE_CHOICES, ...nulls]
+  if (f.kind === 'enum') return [...(f.values ?? []).map((v: string): [string, string] => [v, labelOf(v)]), ...nulls]
+  if (s.kind === 'related') {
+    const t = f.target!(), tm = modelNamed<AnyModel>(t.name)!
+    return [...(await tm.objects.all(200)).map((r: Row): [string, string] => [String(r.id), repr(adminOfDef(t), t, r)]), ...nulls]
+  }
+  // AllValuesFieldListFilter: the distinct values in use
+  const key = f.key(s.field!)
+  const vals = await a.model.objects.values(key).distinct().order(key).all(200)
+  return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
+}
+function dayStart(d: Date) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+async function applyFilter(a: ModelAdmin, ctx: Ctx, qs: QuerySet<any>, s: Spec, v: string): Promise<QuerySet<any>> {
+  if (v.length > 200) throw bad(`filters.${s.name}`, 'value too long')
+  if (s.cls) return (await new s.cls(v).queryset(ctx, qs)) ?? qs
+  const n = s.field!, f = a.model.fields[n]!, key = f.key(n)
+  if (v === 'null' && f.opts.optional) return qs.filter({ [key]: null })
+  if (s.kind === 'boolean') { if (v !== 'true' && v !== 'false') throw bad(`filters.${n}`, 'expected true or false'); return qs.filter({ [key]: v === 'true' }) }
+  if (s.kind === 'date') {
+    const now = new Date(), t = dayStart(now)
+    const from = v === 'today' ? t : v === 'past7' ? new Date(t.getTime() - 6 * 86_400_000) : v === 'month' ? new Date(t.getFullYear(), t.getMonth(), 1) : v === 'year' ? new Date(t.getFullYear(), 0, 1) : undefined
+    if (!from) throw bad(`filters.${n}`, 'not a choice')
+    return qs.filter({ [`${key}__gte`]: from, [`${key}__lt`]: new Date(t.getTime() + 86_400_000) })
+  }
+  if (f.kind === 'enum' && !(f.values ?? []).includes(v)) throw bad(`filters.${n}`, 'not a choice')
+  if (s.kind === 'related') { const pk = coercePk(f.target!(), v); if (pk === undefined) throw bad(`filters.${n}`, 'not a valid key'); return qs.filter({ [key]: pk }) }
+  const r = fromWire(n, f, v)
+  if (!r.ok) throw bad(`filters.${n}`, r.error)
+  return qs.filter({ [key]: r.value })
+}
+// dateHierarchy drill-down: filters `<field>__year`, `__month`, `__day`
+function applyHierarchy(a: ModelAdmin, qs: QuerySet<any>, filters: Record<string, string>): QuerySet<any> {
+  const dh = a.dateHierarchy
+  if (!dh) return qs
+  const num = (k: string, lo: number, hi: number) => {
+    const v = filters[`${dh}__${k}`]
+    if (v === undefined) return undefined
+    if (!/^\d{1,4}$/.test(v) || +v < lo || +v > hi) throw bad(`filters.${dh}__${k}`, 'out of range')
+    return +v
+  }
+  const y = num('year', 1, 9999), m = num('month', 1, 12), d = num('day', 1, 31)
+  if (y === undefined) return qs
+  const from = new Date(y, (m ?? 1) - 1, d ?? 1)
+  const to = d !== undefined ? new Date(y, m! - 1, d + 1) : m !== undefined ? new Date(y, m, 1) : new Date(y + 1, 0, 1)
+  const key = a.model.fields[dh]!.key(dh)
+  return qs.filter({ [`${key}__gte`]: from, [`${key}__lt`]: to })
+}
+// Django get_search_results: every term matches some field (^ startswith, = exact, @ full text → contains)
+function applySearch(a: ModelAdmin, qs: QuerySet<any>, q: string): QuerySet<any> {
+  if (!q.trim() || !a.searchFields.length) return qs
+  const terms = q.trim().split(/\s+/).slice(0, 10)
+  for (const term of terms) {
+    if (term.length > 200) throw bad('q', 'search term too long')
+    let any: QNode | undefined
+    for (const s of a.searchFields) {
+      const path = s.replace(/^[\^=@]/, ''), f = a.model.fields[path]
+      const col = f && f.kind !== 'fk' ? f.key(path) : path
+      const op = s[0] === '^' ? 'istartswith' : s[0] === '=' ? 'exact' : 'icontains'
+      const leaf = Q({ [`${col}__${op}`]: term })
+      any = any ? any.or(leaf) : leaf
+    }
+    qs = qs.filter(any!)
+  }
+  return qs
+}
+
+// listDisplay column → { name, label, sortable, kind, order? (the order key), get(row) }
+type Col = { name: string; label: string; sortable: boolean; kind: string; order?: string; boolean?: boolean; get: (r: Row) => unknown }
+function columns(a: ModelAdmin): Col[] {
+  return a.listDisplay.map((c): Col => {
+    const self = a as unknown as Row
+    if (typeof c === 'function' || (typeof c === 'string' && typeof self[c] === 'function')) {
+      const fn = (typeof c === 'function' ? c : self[c]) as (o: Row) => unknown
+      const d = displayOf(fn) ?? {}
+      const name = typeof c === 'string' ? c : fn.name
+      return { name, label: d.description ?? labelOf(name), sortable: !!d.ordering, order: d.ordering, kind: d.boolean ? 'bool' : 'computed', get: (r) => fn.call(a, r) }
+    }
+    if (c === '__str__') return { name: '__str__', label: a.verboseName ?? labelOf(a._key.split('.')[1]!), sortable: false, kind: 'text', get: (r) => a.str(r) }
+    const f = a.model.fields[c]!
+    const sortable = f.kind !== 'json' && (!a.sortableBy || a.sortableBy.includes(c))
+    return { name: c, label: labelOf(c), sortable, order: f.key(c), kind: fieldMeta(c, f, metaOpts(a)).kind, get: (r) => toWire(f, r, c) }
+  })
+}
+
+async function changelistQs(a: ModelAdmin, ctx: Ctx, p: ListParams, skip?: string): Promise<QuerySet<any>> {
+  let qs = applySearch(a, a.getQueryset(ctx), p.q ?? '')
+  const specs = filterSpecs(a)
+  const filters = p.filters ?? {}
+  for (const [k, v] of Object.entries(filters)) {
+    if (a.dateHierarchy && k.startsWith(`${a.dateHierarchy}__`)) continue
+    const s = specs.find((x) => x.name === k)
+    if (!s) throw bad(`filters.${k}`, 'not a list filter of this model')
+    if (k !== skip) qs = await applyFilter(a, ctx, qs, s, String(v))
+  }
+  return applyHierarchy(a, qs, filters)
+}
+
+function orderOf(a: ModelAdmin, qs: QuerySet<any>, ordering: string[] | undefined): QuerySet<any> {
+  const cols = columns(a)
+  let keys: string[]
+  if (ordering?.length) {
+    if (ordering.length > 5) throw bad('ordering', 'at most 5 columns')
+    keys = ordering.map((o) => {
+      const desc = o.startsWith('-'), c = cols.find((x) => x.name === (desc ? o.slice(1) : o))
+      if (!c?.sortable || !c.order) throw bad('ordering', `"${o}" is not a sortable column`)
+      return (desc ? '-' : '') + c.order
+    })
+  } else keys = a.ordering ?? a.model.meta.ordering ?? ['-id']
+  // display ordering 'rel__count' (Django ordering on an annotation): annotate the count first
+  for (const [i, k] of keys.entries()) {
+    const m = /^(-?)(\w+)__count$/.exec(k)
+    if (!m) continue
+    const alias = `_n_${m[2]}`
+    qs = qs.annotate({ [alias]: Count(m[2]!) })
+    keys[i] = m[1] + alias
+  }
+  return qs.order(...keys)
+}
+
+async function relatedReprs(a: ModelAdmin, rows: Row[], cols: Col[]): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>()
+  for (const c of cols) {
+    const f = a.model.fields[c.name]
+    if (f?.kind !== 'fk') continue
+    const t = f.target!(), ids = [...new Set(rows.map((r) => r[f.key(c.name)]).filter((v) => v != null))]
+    const objs = ids.length ? await modelNamed<AnyModel>(t.name)!.objects.inBulk(ids) : {}
+    out.set(c.name, new Map(Object.entries(objs).map(([k, o]) => [k, repr(adminOfDef(t), t, o as Row)])))
+  }
+  return out
+}
+
+// dateHierarchy facets (the UI's drill-down): `<f>__year` counts, then `__month` once a year is chosen, then `__day`
+async function hierarchyFacets(a: ModelAdmin, ctx: Ctx, p: ListParams): Promise<Record<string, { value: string; label: string; count: number }[]>> {
+  const dh = a.dateHierarchy!, key = a.model.fields[dh]!.key(dh), f = p.filters ?? {}
+  const base = applyHierarchy(a, await changelistQs(a, ctx, { ...p, filters: Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith(`${dh}__`))) }), {})
+  const range = (from: Date, to: Date) => base.filter({ [`${key}__gte`]: from, [`${key}__lt`]: to }).count()
+  const y = f[`${dh}__year`], m = f[`${dh}__month`]
+  const out: { value: string; label: string; count: number }[] = []
+  if (y === undefined) {
+    const { lo, hi } = await base.aggregate({ lo: Min(key), hi: Max(key) })
+    if (!lo) return { [`${dh}__year`]: [] }
+    // ponytail: one COUNT per year, capped at 50 years
+    for (let yr = Math.max(new Date(lo).getFullYear(), new Date(hi).getFullYear() - 49); yr <= new Date(hi).getFullYear(); yr++) {
+      const n = await range(new Date(yr, 0, 1), new Date(yr + 1, 0, 1))
+      if (n) out.push({ value: String(yr), label: String(yr), count: n })
+    }
+    return { [`${dh}__year`]: out }
+  }
+  if (m === undefined) {
+    for (let mo = 0; mo < 12; mo++) {
+      const n = await range(new Date(+y, mo, 1), new Date(+y, mo + 1, 1))
+      if (n) out.push({ value: String(mo + 1), label: new Date(+y, mo, 1).toLocaleString('en', { month: 'long' }), count: n })
+    }
+    return { [`${dh}__month`]: out }
+  }
+  for (let d = 1; d <= new Date(+y, +m, 0).getDate(); d++) {
+    const n = await range(new Date(+y, +m - 1, d), new Date(+y, +m - 1, d + 1))
+    if (n) out.push({ value: String(d), label: String(d), count: n })
+  }
+  return { [`${dh}__day`]: out }
+}
+
+// ---- delete collector (Django NestedObjects) --------------------------------------------------------------
+type Tree = { model: string; pk: string; repr: string; children: Tree[] }
+type Prot = { model: string; pk: string; repr: string; field: string }
+async function collect(def: ModelDef, objs: Row[], depth = 0): Promise<{ tree: Tree[]; protectedRows: Prot[]; counts: Record<string, number> }> {
+  const counts: Record<string, number> = {}
+  const protectedRows: Prot[] = []
+  const nodes = new Map<string, Tree>(objs.map((o) => [String(o.id), { model: site.keyOf(def), pk: String(o.id), repr: repr(adminOfDef(def), def, o), children: [] }]))
+  counts[site.keyOf(def)] = objs.length
+  if (depth > 8 || !objs.length) return { tree: [...nodes.values()], protectedRows, counts }
+  for (const r of referencesTo(def)) {
+    const od = r.f.opts.onDelete ?? 'RESTRICT', key = r.f.key(r.field)
+    if (od === 'SET_NULL' || od === 'SET_DEFAULT' || od === 'DO_NOTHING') continue
+    const src = modelNamed<AnyModel>(r.source.name)
+    if (!src) continue
+    const rows = await src.objects.filter({ [`${key}__in`]: objs.map((o) => o.id) }).all(od === 'CASCADE' ? MAX_PKS : 20)
+    if (od !== 'CASCADE') {   // PROTECT / RESTRICT (the fk default): the database refuses, so nothing is deleted
+      for (const x of rows) protectedRows.push({ model: site.keyOf(r.source), pk: String(x.id), repr: repr(adminOfDef(r.source), r.source, x), field: r.field })
+      continue
+    }
+    const sub = await collect(r.source, rows, depth + 1)
+    protectedRows.push(...sub.protectedRows)
+    for (const [k, n] of Object.entries(sub.counts)) counts[k] = (counts[k] ?? 0) + n
+    for (const t of sub.tree) {
+      const parent = rows.find((x) => String(x.id) === t.pk)?.[key]
+      nodes.get(String(parent))?.children.push(t)
+    }
+  }
+  return { tree: [...nodes.values()], protectedRows, counts }
+}
+
+async function selected(a: ModelAdmin, ctx: Ctx, pks: unknown[]): Promise<Row[]> {
+  if (pks.length > MAX_PKS) throw bad('pks', `at most ${MAX_PKS}`)
+  const ids = pks.map((p) => { const id = coercePk(a.model, p); if (id === undefined) throw bad('pks', `"${String(p)}" is not a valid key`); return id })
+  if (!ids.length) return []
+  return a.getQueryset(ctx).filter({ id__in: ids }).all(MAX_PKS)
+}
+
+async function deleteRows(a: ModelAdmin, ctx: Ctx, objs: Row[]): Promise<{ deleted: number; protected?: Prot[] }> {
+  for (const o of objs) if (!(await a.hasDeletePermission(ctx, o))) throw forbidden()
+  const c = await collect(a.model, objs)
+  if (c.protectedRows.length) return { deleted: 0, protected: c.protectedRows }
+  for (const o of objs) {
+    await a.deleteModel(ctx, o)
+    await logAction(ctx, a._key, o.id, a.str(o), DELETION, [])
+  }
+  return { deleted: objs.length }
+}
+
+// ---- inlines ---------------------------------------------------------------------------------------------
+const inlineName = (i: InlineModelAdmin) => i.name ?? i._key.split('.')[1]!
+// contract: inlines = Record<inlineName, Row[]>, Row = { pk?, DELETE?: true, ...values }; errors keyed `<inline>.<i>.<field>`
+type InlineRow = Row & { pk?: string | number; DELETE?: boolean }
+async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<string, InlineRow[]> | undefined, msg: unknown[]): Promise<void> {
+  const inl = site.inlinesOf(a)
+  for (const name of Object.keys(given ?? {})) if (!inl.some((i) => inlineName(i) === name)) throw bad(name, 'not an inline of this model')
+  for (const i of inl) {
+    const name = inlineName(i), rows = given?.[name]
+    if (!rows) continue
+    if (!Array.isArray(rows) || rows.length > MAX_PKS) throw bad(name, 'rows must be a list')
+    const fk = fkTo(i, a.model)!, fkKey = i.model.fields[fk]!.key(fk)
+    const own = i.model.objects.filter({ [fkKey]: parent.id })
+    for (const [n, r] of rows.entries()) {
+      const at = `${name}.${n}.`
+      const existing = r.pk !== undefined ? await own.filter({ id: coercePk(i.model, r.pk) ?? -1 }).first() : undefined
+      if (r.pk !== undefined && !existing) throw bad(`${at}pk`, 'not a row of this object')
+      const { pk: _pk, DELETE, ...vals } = r
+      if (DELETE) {
+        if (!existing) continue
+        if (!i.canDelete || !(await i.hasDeletePermission(ctx, parent))) throw forbidden()
+        await i.model.delete(existing.id)
+        msg.push({ deleted: { name: i.verboseName ?? labelOf(name), object: i.str(existing) } })
+        continue
+      }
+      if (!(await (existing ? i.hasChangePermission(ctx, parent) : i.hasAddPermission(ctx, parent)))) throw forbidden()
+      const c = clean(i, vals, !existing, formFields(i).filter((x) => x !== fk))
+      if (Object.keys(c.errors).length) throw fieldErrors(c.errors, at)
+      const row = existing ? await i.model.update(existing.id, c.data) : await i.model.create({ ...c.data, [fkKey]: parent.id })
+      for (const [m, ids] of Object.entries(c.m2m)) await i.model.related(m, row.id).set(ids as (string | number)[])
+      if (existing && !c.changed.length) continue
+      msg.push(existing ? { changed: { name: i.verboseName ?? labelOf(name), object: i.str(row), fields: c.changed } } : { added: { name: i.verboseName ?? labelOf(name), object: i.str(row) } })
+    }
+    const total = await own.count()
+    if (i.maxNum !== null && total > i.maxNum) throw bad(name, `at most ${i.maxNum} rows`)
+    if (total < i.minNum) throw bad(name, `at least ${i.minNum} rows`)
+  }
+}
+
+// =========================================================================================================
+const staff = { permissions: [isStaff] }
+const read = { ...staff, readOnly: true }
+
+export const siteAction = defineAction('site', z.object({}), async (_p, ctx) => {
+  const apps = new Map<string, { label: string; name: string; models: unknown[] }>()
+  for (const a of site.admins()) {
+    if (a.agents === false && ctx.request.agent.is) continue
+    if (!(await a.hasModulePermission(ctx))) continue
+    const [app, short] = a._key.split('.') as [string, string]
+    const g = apps.get(app) ?? { label: app, name: labelOf(app), models: [] }
+    g.models.push({ key: a._key, name: a.verboseName ?? labelOf(short), namePlural: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(short)}s`, perms: await perms(a, ctx) })
+    apps.set(app, g)
+  }
+  const u = ctx.request.user
+  const may = async (p?: string) => !p || !!u.isSuperuser || (!!u.hasPerm && (await u.hasPerm(p)))
+  const pages = [], widgets = []
+  for (const p of site.pages) if (await may(p.permission)) pages.push(p)
+  for (const w of site.widgets) if (await may(w.permission)) widgets.push({ id: w.id, title: w.title, size: w.size, data: w.data.id, ...(w.component && { component: w.component }) })
+  const s = ctx.settings.admin
+  return {
+    header: site.siteHeader, title: s.title ?? site.siteTitle, indexTitle: site.indexTitle, siteUrl: site.siteUrl, path: s.path, theme: s.theme,
+    apps: [...apps.values()].sort((x, y) => x.label.localeCompare(y.label)), pages, widgets,
+  }
+}, read)
+
+export const meta = defineAction('meta', z.object({ model: modelKey }), async ({ model }, ctx) => {
+  const a = await gate(ctx, model, 'module')
+  const [, short] = a._key.split('.') as [string, string]
+  const fields = formMeta(a)
+  const inlines = []
+  for (const i of site.inlinesOf(a)) {
+    const fk = fkTo(i, a.model)!
+    inlines.push({
+      name: inlineName(i), kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum, min: i.minNum,
+      canDelete: i.canDelete, meta: Object.fromEntries(Object.entries(formMeta(i)).filter(([n]) => n !== fk)), perms: await perms(i, ctx),
+    })
+  }
+  const specs = filterSpecs(a)
+  const filters = []
+  for (const s of specs) filters.push({ name: s.name, label: s.label, kind: s.kind, choices: (await choicesOf(a, ctx, s)).map(([value, label]) => ({ value, label })) })
+  const cols = columns(a)
+  const actions = []
+  for (const x of a.getActions(ctx)) if (await allowed(a, ctx, x)) actions.push({ name: x.name, description: x.description, confirm: x.confirm ?? false })
+  return {
+    key: a._key, name: a.verboseName ?? labelOf(short), namePlural: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(short)}s`, pk: 'id',
+    display: {
+      listDisplay: cols.map(({ name, label, sortable, kind }) => ({ name, label, sortable, kind })),
+      listDisplayLinks: a.listDisplayLinks ?? [cols[0]!.name], listEditable: a.listEditable, listPerPage: a.listPerPage, listMaxShowAll: a.listMaxShowAll,
+      dateHierarchy: a.dateHierarchy, searchHelp: a.searchFields.length ? a.searchHelpText ?? `Search by ${a.searchFields.map((s) => labelOf(s.replace(/^[\^=@]/, '').replace(/__/g, ' '))).join(', ')}` : null,
+      search: a.searchFields.length > 0, showFullResultCount: a.showFullResultCount, sortableBy: a.sortableBy, showFacets: a.showFacets, emptyValueDisplay: a.emptyValueDisplay, actions, filters, saveOnTop: a.saveOnTop, actionsOnTop: a.actionsOnTop,
+    },
+    form: { fieldsets: (a.fieldsets ?? [[null, { fields: formFields(a) }]]).map(([title, f]) => ({ title, classes: f.classes ?? [], description: f.description ?? null, fields: f.fields })), fields, inlines },
+    perms: await perms(a, ctx), urls: site.customUrlMeta(a), agents: a.agents,
+  }
+}, read)
+
+const listParams = z.object({
+  model: modelKey, q: z.string().max(1000).optional(), filters: z.record(z.string().max(200)).optional(), ordering: z.array(z.string().max(100)).max(5).optional(),
+  page: z.coerce.number().int().min(1).max(1_000_000).optional(), pageSize: z.coerce.number().int().min(1).max(10_000).optional(), all: z.coerce.boolean().optional(),
+})
+export const list = defineAction('list', listParams, async (p, ctx) => {
+  const a = await gate(ctx, p.model, 'view')
+  const cols = columns(a)
+  const size = p.all ? a.listMaxShowAll : Math.min(p.pageSize ?? a.listPerPage, a.listMaxShowAll)
+  const page = p.page ?? 1
+  let rows: Row[], count: number
+  if (a.changelist) ({ rows, count } = await a.changelist(ctx, { ...p, page, pageSize: size }))
+  else {
+    const qs = await changelistQs(a, ctx, p)
+    count = await qs.count()
+    if (p.all && count > a.listMaxShowAll) throw bad('all', `more than ${a.listMaxShowAll} rows`)
+    if (page > 1 && (page - 1) * size >= count) throw bad('page', 'no such page')
+    // ponytail: the ORM has cursor paging only, so page N reads N*size rows; add QuerySpec.offset if admins page deep
+    rows = (await orderOf(a, qs, p.ordering).all(page * size)).slice((page - 1) * size)
+  }
+  const rel = await relatedReprs(a, rows, cols)
+  const out = []
+  for (const r of rows) {
+    const values: Row = {}
+    for (const c of cols) {
+      const f = a.model.fields[c.name]
+      values[c.name] = f?.kind === 'fk' ? (r[f.key(c.name)] == null ? null : rel.get(c.name)?.get(String(r[f.key(c.name)])) ?? String(r[f.key(c.name)])) : await c.get(r)
+      if (values[c.name] instanceof Date) values[c.name] = (values[c.name] as Date).toISOString()
+    }
+    for (const n of a.listEditable) values[n] = toWire(a.model.fields[n]!, r, n)   // editable cells carry the raw value
+    out.push({ pk: String(r.id), values })
+  }
+  let facets: Record<string, { value: string; label: string; count: number }[]> | undefined
+  if (a.showFacets && !a.changelist && a.listFilter.length) {
+    facets = {}
+    for (const s of filterSpecs(a)) {
+      const base = await changelistQs(a, ctx, p, s.name)
+      // ponytail: one COUNT per choice, capped at 50 choices; a GROUP BY per filter if facets get slow
+      const ch = (await choicesOf(a, ctx, s)).slice(0, 50)
+      facets[s.name] = []
+      for (const [value, label] of ch) facets[s.name]!.push({ value, label, count: await (await applyFilter(a, ctx, base, s, value)).count() })
+    }
+  }
+  if (a.dateHierarchy && !a.changelist) (facets ??= {}) && Object.assign(facets, await hierarchyFacets(a, ctx, p))
+  const filtered = !!(p.q?.trim() || Object.keys(p.filters ?? {}).length)
+  const fullCount = a.showFullResultCount && filtered && !a.changelist ? await a.getQueryset(ctx).count() : undefined
+  return { rows: out, count, page, pages: Math.max(1, Math.ceil(count / size)), ...(fullCount !== undefined && { fullCount }), ...(facets && { facets }) }
+}, read)
+
+export const get = defineAction('get', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
+  const a = await gate(ctx, model, 'module')
+  const obj = await objectOf(a, ctx, pk)
+  if (!(await a.hasViewPermission(ctx, obj))) throw forbidden()
+  const inlines: Record<string, { rows: { pk: string; values: Row }[] }> = {}
+  for (const i of site.inlinesOf(a)) {
+    if (!(await i.hasViewPermission(ctx, obj))) continue
+    const fk = fkTo(i, a.model)!
+    const rows = await i.model.objects.filter({ [i.model.fields[fk]!.key(fk)]: obj.id }).order(...(i.ordering ?? ['id'])).all(MAX_PKS)
+    const vs = []
+    for (const r of rows) { const v = await valuesOf(i, r); delete v[fk]; vs.push({ pk: String(r.id), values: v }) }
+    inlines[inlineName(i)] = { rows: vs }
+  }
+  return { pk: String(obj.id), values: await valuesOf(a, obj), display: a.str(obj), inlines, perms: await perms(a, ctx, obj) }
+}, read)
+
+const saveParams = z.object({ model: modelKey, pk: pkParam.optional(), values: z.record(z.unknown()).default({}), inlines: z.record(z.array(z.object({ pk: pkParam.optional(), DELETE: z.boolean().optional() }).passthrough()).max(MAX_PKS)).optional() })
+// multipart file parts (transport/api.ts): `<field>` or `<inline>.<i>.<field>`, each checked against its field's
+// upload limits (FieldMeta.upload: accept, maxBytes) and stored; the value becomes the storage key
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const FILE_MAX = 5 * 1024 * 1024
+const typesOf = (accept: string) => accept.split(',').map((t) => t.trim()).flatMap((t) => (t === 'image/*' ? IMAGE_TYPES : [t]))
+async function storeFiles(a: ModelAdmin, ctx: Ctx, p: z.infer<typeof saveParams>, stored: string[]): Promise<void> {
+  for (const part of filePartsOf(ctx.request)) {
+    const m = /^(?:(\w+)\.(\d{1,4})\.)?(\w+)$/.exec(part.field)
+    const owner: Base | undefined = !m ? undefined : m[1] ? site.inlinesOf(a).find((i) => inlineName(i) === m[1]) : a
+    const f = owner && formFields(owner).includes(m![3]!) ? owner.model.fields[m![3]!] : undefined
+    const up = f && fieldMeta(m![3]!, f, metaOpts(owner!)).upload
+    if (!up) throw bad(part.field, 'not a file field of this form')
+    const file = await storePart(part, { maxBytes: up.maxBytes ?? FILE_MAX, types: typesOf(up.accept) }, ctx.settings.media)
+    stored.push(file.key)
+    if (!m![1]) p.values[m![3]!] = file.key
+    else {
+      const rows = ((p.inlines ??= {})[m![1]] ??= [])
+      ;(rows[+m![2]!] ??= {})[m![3]!] = file.key
+    }
+  }
+}
+async function save(p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean) {
+  const a = await gate(ctx, p.model, 'module')
+  const obj = creating ? undefined : await objectOf(a, ctx, p.pk)
+  if (!(await (creating ? a.hasAddPermission(ctx) : a.hasChangePermission(ctx, obj)))) throw forbidden()
+  const stored: string[] = []
+  try { return await saveChecked(a, p, ctx, creating, obj, stored) } catch (e) {
+    const disk = new DiskStorage(ctx.settings.media.dir, ctx.settings.media.route)
+    await Promise.all(stored.map((k) => disk.delete(k)))   // the request rolled back: no orphan files
+    throw e
+  }
+}
+async function saveChecked(a: ModelAdmin, p: z.infer<typeof saveParams>, ctx: Ctx, creating: boolean, obj: Row | undefined, stored: string[]) {
+  await storeFiles(a, ctx, p, stored)
+  const c = clean(a, p.values, creating)
+  if (Object.keys(c.errors).length) throw fieldErrors(c.errors)
+  const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
+  for (const [n, ids] of Object.entries(c.m2m)) await a.model.related(n, row.id).set(ids as (string | number)[])
+  const msg: unknown[] = creating ? [{ added: {} }] : c.changed.length ? [{ changed: { fields: c.changed.map(labelOf) } }] : []
+  await saveInlines(a, ctx, row, p.inlines, msg)
+  await logAction(ctx, a._key, row.id, a.str(row), creating ? ADDITION : CHANGE, msg)
+  return { ok: true, pk: String(row.id) }
+}
+// files ride as multipart (transport/api.ts); 50 MB per request, each file capped by its field
+const MULTIPART = { maxBytes: 50 * 1024 * 1024 }
+export const create = Object.assign(defineAction('create', saveParams.omit({ pk: true }), (p, ctx) => save(p, ctx, true), staff), { multipart: MULTIPART })
+export const update = Object.assign(defineAction('update', saveParams.required({ pk: true }), (p, ctx) => save(p, ctx, false), staff), { multipart: MULTIPART })
+
+const pksParams = z.object({ model: modelKey, pks: z.array(pkParam).max(MAX_PKS) })
+export const remove = defineAction('delete', pksParams, async ({ model, pks }, ctx) => {
+  const a = await gate(ctx, model, 'delete')
+  return deleteRows(a, ctx, await selected(a, ctx, pks))
+}, { ...staff, destructive: true })
+
+export const deletePreview = defineAction('deletePreview', pksParams, async ({ model, pks }, ctx) => {
+  const a = await gate(ctx, model, 'delete')
+  const c = await collect(a.model, await selected(a, ctx, pks))
+  // Django perms_needed: cascaded models (with an admin) this user cannot delete
+  const permsNeeded = []
+  for (const k of Object.keys(c.counts)) { const x = site.adminFor(k); if (x && !(await x.hasDeletePermission(ctx))) permsNeeded.push(k) }
+  return { objects: c.tree, protected: c.protectedRows, summary: c.counts, permsNeeded }
+}, read)
+
+async function allowed(a: ModelAdmin, ctx: Ctx, x: AdminAction): Promise<boolean> {
+  if (x.humanOnly && ctx.request.agent.is) return false
+  for (const p of x.permissions ?? []) if (!(await checkPerm(a, ctx, p))) return false
+  return true
+}
+export const action = defineAction('action', z.object({
+  model: modelKey, action: z.string().max(100), pks: z.array(pkParam).max(MAX_PKS).optional(), selectAll: z.boolean().optional(),
+  q: z.string().max(1000).optional(), filters: z.record(z.string().max(200)).optional(),
+}), async (p, ctx): Promise<ActionResult> => {
+  const a = await gate(ctx, p.model, 'view')
+  const x = a.getActions(ctx).find((y) => y.name === p.action)
+  if (!x) throw bad('action', 'not an action of this model')
+  if (!(await allowed(a, ctx, x))) throw forbidden()
+  let pks: string[]
+  if (p.selectAll) {
+    pks = a.changelist ? (await a.changelist(ctx, { q: p.q, filters: p.filters, page: 1, pageSize: MAX_PKS })).rows.map((r) => String((r as Row).id))
+      : (await (await changelistQs(a, ctx, p)).valuesList('id', { flat: true }).all(MAX_PKS)).map(String)
+  } else pks = (p.pks ?? []).map(String)
+  if (!pks.length) return { message: 'Items must be selected in order to perform actions on them. No items have been changed.', level: 'warning' }
+  if (x.name === 'deleteSelected') {
+    const r = await deleteRows(a, ctx, await selected(a, ctx, pks))
+    return r.protected ? { message: `Cannot delete: ${r.protected.length} related object(s) are protected.`, level: 'error' } : { message: `Successfully deleted ${r.deleted} ${a.verboseNamePlural ?? labelOf(a._key.split('.')[1]!)}.`, level: 'success' }
+  }
+  const ids = a.changelist ? pks : (await selected(a, ctx, pks)).map((r) => String(r.id))
+  const qs = a.changelist ? a.getQueryset(ctx) : a.getQueryset(ctx).filter({ id__in: ids.map((i) => coercePk(a.model, i)!) })
+  const res = (await x.fn(a, ctx, qs, ids)) ?? {}
+  for (const id of ids) await logAction(ctx, a._key, id, `${a._key} ${id}`, CHANGE, [{ action: x.name }])
+  return { message: res.message ?? `${x.description}: ${ids.length} item(s).`, level: res.level ?? 'success', ...(res.download && { download: res.download }) }
+}, staff)
+
+export const autocomplete = defineAction('autocomplete', z.object({ model: modelKey, field: z.string().max(100), q: z.string().max(200).default(''), page: z.coerce.number().int().min(1).max(1000).default(1) }), async (p, ctx) => {
+  // the source: the model's admin or an inline of some admin (Django AutocompleteJsonView.process_request)
+  const src = site.admins().flatMap((a) => [a as Base, ...site.inlinesOf(a)]).find((a) => a._key === p.model)
+  const f = src?.model.fields[p.field]
+  if (!src || !f || (f.kind !== 'fk' && f.kind !== 'm2m')) throw bad('field', 'not a relation field of a registered model')
+  const target = adminOfDef(f.target!())
+  if (!target) throw bad('field', 'the related model has no admin')
+  if (!(await target.hasViewPermission(ctx))) throw forbidden()
+  if (target.agents === false && ctx.request.agent.is) throw forbidden()
+  const size = 20
+  const qs = applySearch(target, target.getQueryset(ctx), p.q).order(...(target.ordering ?? ['id']))
+  const rows = await qs.all(p.page * size + 1)
+  const pageRows = rows.slice((p.page - 1) * size, p.page * size)
+  return { results: pageRows.map((r: Row) => ({ pk: String(r.id), text: target.str(r) })), more: rows.length > p.page * size }
+}, read)
+
+export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
+  const a = await gate(ctx, model, 'module')
+  const obj = await a.getObject(ctx, coercePk(a.model, pk) ?? -1)
+  if (obj ? !(await a.hasViewPermission(ctx, obj)) : !(await a.hasViewPermission(ctx))) throw forbidden()
+  const rows = await LogEntry.objects.filter({ contentType: a._key, objectId: String(pk) }).order('actionTime', 'id').all(MAX_PKS)
+  const User = modelNamed<AnyModel>('auth_user')
+  const ids = [...new Set(rows.map((r) => r.userId).filter((x) => /^\d+$/.test(x)))].map(Number)
+  const users = User && ids.length ? await User.objects.inBulk(ids) : {}
+  const FLAG = { 1: 'add', 2: 'change', 3: 'delete' } as Record<number, string>
+  return rows.map((r) => ({
+    id: r.id, actionTime: r.actionTime.toISOString(), user: { id: r.userId, name: (users[r.userId] as Row | undefined)?.username ?? r.userId },
+    actionFlag: r.actionFlag, action: FLAG[r.actionFlag], objectRepr: r.objectRepr, changeMessage: r.changeMessage,
+  }))
+}, read)
+
+export const listEdit = defineAction('listEdit', z.object({ model: modelKey, rows: z.array(z.object({ pk: pkParam, values: z.record(z.unknown()) })).max(MAX_PKS) }), async (p, ctx) => {
+  const a = await gate(ctx, p.model, 'change')
+  const objs = await selected(a, ctx, p.rows.map((r) => r.pk))
+  const work = []
+  const errors: Record<string, Record<string, string>> = {}
+  for (const r of p.rows) {
+    const obj = objs.find((o) => String(o.id) === String(r.pk))
+    if (!obj) { errors[String(r.pk)] = { pk: 'Not found.' }; continue }
+    if (!(await a.hasChangePermission(ctx, obj))) throw forbidden()
+    const c = clean(a, r.values, false, a.listEditable)
+    if (Object.keys(c.errors).length) errors[String(r.pk)] = c.errors
+    else work.push({ obj, c })
+  }
+  if (Object.keys(errors).length) return { ok: false, updated: 0, errors }   // Django formset: one invalid row saves nothing
+  for (const { obj, c } of work) {
+    if (!c.changed.length) continue
+    const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
+    await logAction(ctx, a._key, row.id, a.str(row), CHANGE, [{ changed: { fields: c.changed.map(labelOf) } }])
+  }
+  return { ok: true, updated: work.filter((w) => w.c.changed.length).length, errors: {} }
+}, staff)
+
+
+// ---- dashboard + palette + per-user prefs ---------------------------------------------------------------
+const FLAGS: Record<number, string> = { 1: 'add', 2: 'change', 3: 'delete' }
+// the current user's recent LogEntry rows (Django admin index "Recent actions")
+export const recent = defineAction('recent', z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) }), async ({ limit }, ctx) => {
+  const rows = await LogEntry.objects.filter({ userId: String(ctx.request.user.id ?? '') }).order('-actionTime', '-id').all(limit)
+  return rows.map((r) => ({ id: r.id, actionTime: r.actionTime.toISOString(), model: r.contentType, pk: r.objectId, objectRepr: r.objectRepr, actionFlag: r.actionFlag, action: FLAGS[r.actionFlag], changeMessage: r.changeMessage }))
+}, read)
+
+// ⌘K palette: every model with searchFields this user may view, top N each (getQueryset-scoped)
+export const search = defineAction('search', z.object({ q: z.string().min(1).max(200), limit: z.coerce.number().int().min(1).max(20).default(5) }), async ({ q, limit }, ctx) => {
+  const out = []
+  for (const a of site.admins()) {
+    if (!a.searchFields.length || a.changelist || (a.agents === false && ctx.request.agent.is) || !(await a.hasViewPermission(ctx))) continue
+    const rows = await applySearch(a, a.getQueryset(ctx), q).order(...(a.ordering ?? ['-id'])).all(limit)
+    if (rows.length) out.push({ model: a._key, name: a.verboseNamePlural ?? `${a.verboseName ?? labelOf(a._key.split('.')[1]!)}s`, results: rows.map((r: Row) => ({ pk: String(r.id), text: a.str(r) })) })
+  }
+  return { results: out }
+}, read)
+
+// per-user prefs (saved filters, column choices): get → every key; set → one key (value null deletes)
+const PREF_BYTES = 16 * 1024, PREF_KEYS = 100
+export const prefs = defineAction('prefs', z.object({ key: z.string().regex(/^[\w.:-]{1,100}$/).optional(), value: z.unknown().optional() }), async ({ key, value }, ctx) => {
+  const userId = String(ctx.request.user.id ?? '')
+  if (!userId) throw forbidden()
+  const mine = AdminPref.objects.filter({ userId })
+  if (key !== undefined && value !== undefined) {
+    const prev = await mine.filter({ key }).first()
+    if (value === null) { if (prev) await AdminPref.delete(prev.id) }
+    else {
+      const size = Buffer.byteLength(JSON.stringify(value))
+      if (size > PREF_BYTES) throw bad('value', `at most ${PREF_BYTES} bytes`)
+      if (prev) await AdminPref.update(prev.id, { value, updatedAt: new Date() })
+      else {
+        if ((await mine.count()) >= PREF_KEYS) throw bad('key', `at most ${PREF_KEYS} saved preferences`)
+        await AdminPref.create({ userId, key, value })
+      }
+    }
+  }
+  return Object.fromEntries((await mine.all(PREF_KEYS)).map((r) => [r.key, r.value]))
+}, staff)
