@@ -15,3 +15,4 @@ dist
 *.db.moved
 .mcp.json
 .DS_Store
+*.db
