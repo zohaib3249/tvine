@@ -17,7 +17,8 @@ function ordered(models: [string, M][]): [string, M][] {
     if (seen.has(name) || !byName.has(name)) return
     seen.add(name)
     const [, m] = byName.get(name)!
-    for (const f of Object.values(m.fields)) if (f.kind === 'fk' || (f.kind === 'm2m' && f.through)) visit((f.kind === 'fk' ? f.target! : f.through!)().name)
+    // fk targets first. A custom through model has its own fks to both sides, so it lands after its owner.
+    for (const f of Object.values(m.fields)) if (f.kind === 'fk') visit(f.target!().name)
     out.push(byName.get(name)!)
   }
   [...byName.keys()].sort().forEach(visit)
@@ -33,6 +34,24 @@ function pick(byApp: Record<string, M[]>, labels: string[]): [string, M][] {
     if (!hit.length) throw new Error(`dumpdata: no models match "${l}" (use app or app.model)`)
     return hit
   })
+}
+
+// a required self-fk (tree with NOT NULL parent): parents before children; a cycle cannot load
+function selfOrdered<X extends { m: M; r: FixtureRow }>(rows: X[]): X[] {
+  const out: X[] = [], placed = new Set<string>()
+  const key = (m: M, pk: unknown) => `${m.name}#${String(pk)}`
+  const parentsOf = (x: X) => Object.entries(x.m.fields)
+    .filter(([, f]) => f.kind === 'fk' && f.target!().name === x.m.name && !f.opts.optional)
+    .map(([n, f]) => x.r.fields[n] ?? x.r.fields[f.key(n)]).filter(v => v != null)
+  const inBatch = new Set(rows.map(x => key(x.m, x.r.pk)))
+  let left = rows
+  while (left.length) {
+    const ready = left.filter(x => parentsOf(x).every(p => p === x.r.pk || placed.has(key(x.m, p)) || !inBatch.has(key(x.m, p))))
+    if (!ready.length) throw new DomainError('invalid_param', `fixture rows of ${left[0].m.name} reference each other through a required fk (a cycle): make it optional`)
+    for (const x of ready) { out.push(x); placed.add(key(x.m, x.r.pk)) }
+    left = left.filter(x => !ready.includes(x))
+  }
+  return out
 }
 
 const jsonValue = (v: unknown): unknown => (v instanceof Date ? v.toISOString() : v)
@@ -64,18 +83,23 @@ export async function loadData(byApp: Record<string, M[]>, rows: FixtureRow[]): 
   }).sort((a, b) => order.get(a.m.name)! - order.get(b.m.name)!)   // stable: file order within a model
   return atomic(async () => {
     const links: [M, string | number, string, unknown[]][] = []
-    for (const { m, r } of parsed) {
+    const fills: [M, string | number, Record<string, unknown>][] = []   // optional self-fks: set after every row exists
+    for (const { m, r } of selfOrdered(parsed)) {
       const [pk] = pkField(m)
-      const data: Record<string, unknown> = {}
+      const data: Record<string, unknown> = {}, later: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(r.fields)) {
-        const f = m.fields[k] ?? Object.entries(m.fields).find(([n, x]) => x.key(n) === k)?.[1]
-        if (!f) throw new DomainError('invalid_param', `fixture ${r.model} ${r.pk}: unknown field "${k}"`)
+        const e = Object.entries(m.fields).find(([n, x]) => n === k || x.key(n) === k)
+        if (!e) throw new DomainError('invalid_param', `fixture ${r.model} ${r.pk}: unknown field "${k}"`)
+        const [, f] = e
         if (f.kind === 'm2m') { links.push([m, r.pk, k, v as unknown[]]); continue }
+        if (f.kind === 'fk' && f.target!().name === m.name && f.opts.optional && v != null) { later[k] = v; data[k] = null; continue }
         data[k] = f.kind === 'datetime' && typeof v === 'string' ? new Date(v) : v
       }
       if (await m.get(r.pk)) await m.update(r.pk, data)
       else await m.create({ [pk]: r.pk, ...data })
+      if (Object.keys(later).length) fills.push([m, r.pk, later])
     }
+    for (const [m, pk, patch] of fills) await m.update(pk, patch)
     for (const [m, pk, name, ids] of links) await m.related(name, pk).set(ids as (string | number)[])
     await resetSequences([...new Set(parsed.map(p => p.m))])
     return parsed.length
