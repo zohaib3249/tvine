@@ -311,7 +311,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
   // dashboard rollups: a route PATTERN or a registered action id, never the raw path (cardinality, personal data)
   const routeLabel = (p: string, transport: string): string => {
-    if (transport === 'api') { const id = decodeURIComponent(p.slice(12).split('/')[0] ?? ''); return actions.get(id) ? id : '(unknown action)' }
+    if (transport === 'api') { const id = decodeURIComponent(p.slice('/tvine/api/'.length).split('/')[0] ?? ''); return actions.get(id) ? id : '(unknown action)' }
     if (transport !== 'page') return transport
     try { return route(p.replace(/\/agent\.(json|txt)$/, '') || '/') ?? '(unmatched)' } catch { return '(unmatched)' }
   }
