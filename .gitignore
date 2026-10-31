@@ -16,3 +16,6 @@ dist
 .mcp.json
 .DS_Store
 *.db
+# local-only (not published)
+apps/demo-shop/
+docs/superpowers/
