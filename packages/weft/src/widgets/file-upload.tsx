@@ -37,7 +37,7 @@ const EXT: Record<string, string> = {
 }
 const mimeOk = (tok: string, type: string) => tok.endsWith('/*') ? type.startsWith(tok.slice(0, -1)) : type === tok
 // accept tokens: ".jpg", "image/*", "image/png" (same tokens as the browser's picker).
-const accepts = (accept: string | undefined, f: Meta) => {
+export const accepts = (accept: string | undefined, f: Meta) => {
   if (!accept) return true
   const name = f.name.toLowerCase(), type = f.type.toLowerCase(), extType = EXT[name.slice(name.lastIndexOf('.') + 1)]
   return accept.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).some((t) =>

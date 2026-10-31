@@ -1,0 +1,9 @@
+// @tvine/weft/forms: ModelForm-style forms from admin field meta (docs/design/frontend/v2/widgets/forms.md).
+// Default look: import '@tvine/weft/forms/forms.css' (optional; every part has tf-* classes + data attributes).
+export { ModelForm, Fieldset, InlineFormset, type ModelFormProps, type ModelFormState, type FormSearch, type FormSubmit, type InlineFormsetProps } from './model-form.js'
+export { Field, type FieldProps, type FieldState } from './field.js'
+export { registerFieldWidget, fieldWidgetFor } from './registry.js'
+export { fromApi, toPayload, fieldPayload, validate, validateField, mapServerErrors, durationSeconds, type ServerErrors } from './values.js'
+export { sanitizeHtml } from './rich.js'
+export { BUILTIN as builtinFieldWidgets } from './widgets.js'
+export type { FieldKind, FieldMeta, FieldWidget, FieldWidgetProps, FormMeta, InlineMeta, Row, Search, SearchResult } from './types.js'
