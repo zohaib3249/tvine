@@ -136,54 +136,62 @@ const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limite
 const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const statusOf = (r: ApiResult) => r.ok ? 200 : r.code === 'domain' ? DOMAIN_STATUS[r.reason ?? ''] ?? 400 : STATUS[r.code] ?? 400
 
-export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+// The caller of one HTTP api call (this transport and transport/urls): a Next server's signed forward, or a
+// browser / HTTP client that sent x-tvine-api: 1 (forces a CORS preflight cross-site). undefined = 403.
+export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: IncomingMessage, res: ServerResponse): Promise<Caller | undefined> {
   const { settings, sessions } = server
   const name = settings.session.cookieName
-  const send = (res: ServerResponse, r: ApiResult, status = statusOf(r)) => {
-    if (res.headersSent) return
-    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' })
-    res.end(JSON.stringify(r))
+  const fwd = req.headers[FORWARD]
+  if (fwd !== undefined) {
+    // a Next server (two-server mode): only its signed, unexpired identity counts; its own cookies/ip do not
+    const f = verifyForward(fwd, settings)
+    const own = f?.as === undefined ? undefined : o.asSession(f.as)
+    if (!f || (f.as !== undefined && !own)) return undefined
+    if (own) o.tokens.read(own.token)
+    const page = new URL(f.path, 'http://tvine.local').pathname
+    const request = await buildRequest({ url: f.path, route: o.route(page) ?? page, headers: {}, ip: f.ip || 'unknown', via: 'human' }, settings)
+    if (own || f.agent) request.agent = { is: true, via: 'http' }
+    return { request, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: async (s) => { res.setHeader(MINTED, await sessions.cookieFor(s.sid)) } }
   }
-  const cookieOf = (req: IncomingMessage) => {
-    for (const part of (req.headers.cookie ?? '').split(';')) {
-      const i = part.indexOf('=')
-      if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim()
-    }
-    return undefined
-  }
-  const secure = (req: IncomingMessage) => (req.socket as { encrypted?: boolean }).encrypted === true ||
+  // a browser (client component): custom header forces a CORS preflight cross-site; origin checked by dispatch
+  if (req.headers['x-tvine-api'] !== '1') return undefined
+  let page = '/'
+  try { if (req.headers.referer) page = new URL(req.headers.referer).pathname } catch { /* stays '/' */ }
+  const shown = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !k.startsWith('x-tvine-')).map(([k, v]) => [k, String(v)]))
+  const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
+  const request = await buildRequest({ url: page, route: o.route(page) ?? page, headers: shown, ip, via: 'human' }, settings)
+  request.raw = req   // the endpoint (/tvine/api/<id>, or a urls.ts path) + method for settings.cors (core/cors-match)
+  const secure = (req.socket as { encrypted?: boolean }).encrypted === true ||
     (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
+  let cookie: string | undefined
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const i = part.indexOf('=')
+    if (i > 0 && part.slice(0, i).trim() === name) { cookie = part.slice(i + 1).trim(); break }
+  }
+  return {
+    request, cookie, mode: 'action',
+    mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`) },
+  }
+}
+
+export const sendApi = (res: ServerResponse, r: ApiResult, status = statusOf(r), headers: Record<string, string> = {}) => {
+  if (res.headersSent) return
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store', ...headers })
+  res.end(JSON.stringify(r))
+}
+export const apiFail = fail
+export const API_FORBIDDEN = FORBIDDEN
+
+export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+  const { settings } = server
+  const send = sendApi
 
   async function handle(req: IncomingMessage, res: ServerResponse, path: string) {
     if (req.method !== 'POST') { res.setHeader('allow', 'POST'); return send(res, fail('invalid_param', 'POST only'), 405) }
     let id: string
     try { id = decodeURIComponent(path.slice(API_PREFIX.length)) } catch { return send(res, fail('unknown_action', 'bad action id')) }
-    const fwd = req.headers[FORWARD]
-    let who: Caller
-    if (fwd !== undefined) {
-      // a Next server (two-server mode): only its signed, unexpired identity counts; its own cookies/ip do not
-      const f = verifyForward(fwd, settings)
-      const own = f?.as === undefined ? undefined : o.asSession(f.as)
-      if (!f || (f.as !== undefined && !own)) return send(res, FORBIDDEN)
-      if (own) o.tokens.read(own.token)
-      const page = new URL(f.path, 'http://tvine.local').pathname
-      const request = await buildRequest({ url: f.path, route: o.route(page) ?? page, headers: {}, ip: f.ip || 'unknown', via: 'human' }, settings)
-      if (own || f.agent) request.agent = { is: true, via: 'http' }
-      who = { request, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: async (s) => { res.setHeader(MINTED, await sessions.cookieFor(s.sid)) } }
-    } else {
-      // a browser (client component): custom header forces a CORS preflight cross-site; origin checked by dispatch
-      if (req.headers['x-tvine-api'] !== '1') return send(res, FORBIDDEN)
-      let page = '/'
-      try { if (req.headers.referer) page = new URL(req.headers.referer).pathname } catch { /* stays '/' */ }
-      const shown = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !k.startsWith('x-tvine-')).map(([k, v]) => [k, String(v)]))
-      const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-      const request = await buildRequest({ url: page, route: o.route(page) ?? page, headers: shown, ip, via: 'human' }, settings)
-      request.raw = req   // the endpoint (/tvine/api/<id>) + method for settings.cors (core/cors-match)
-      who = {
-        request, cookie: cookieOf(req), mode: 'action',
-        mint: async (s) => { res.setHeader('set-cookie', `${name}=${await sessions.cookieFor(s.sid)}; Path=/; Max-Age=${Math.floor(settings.session.ttlMs / 1000)}; HttpOnly; SameSite=Lax${secure(req) ? '; Secure' : ''}`) },
-      }
-    }
+    const who = await callerOf(server, o, req, res)
+    if (!who) return send(res, FORBIDDEN)
     const ct = String(req.headers['content-type'] ?? '')
     if (!/^application\/json\s*(;|$)/i.test(ct)) return send(res, fail('invalid_param', 'Content-Type must be application/json'))
     const raw = await readBody(req, settings.limits.bodyBytes)
@@ -208,7 +216,7 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
 }
 
 // ponytail: same as transport/http.ts readBody/tooDeep (owned by another task); share when that file is free
-function readBody(req: IncomingMessage, cap: number): Promise<string | null> {
+export function readBody(req: IncomingMessage, cap: number): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let n = 0
@@ -224,7 +232,7 @@ function readBody(req: IncomingMessage, cap: number): Promise<string | null> {
     req.once('error', reject)
   })
 }
-function tooDeep(v: unknown, max = 64): boolean {
+export function tooDeep(v: unknown, max = 64): boolean {
   const stack: [unknown, number][] = [[v, 0]]
   while (stack.length) {
     const [x, d] = stack.pop()!

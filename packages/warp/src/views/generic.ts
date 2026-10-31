@@ -36,10 +36,16 @@ export abstract class View {
     if (!d) throw new Error(`${this.name}.asAction('${name}'): no registered action of that name; export the view from apps/<app>/views.ts and boot the server`)
     return d
   }
+  // urls.ts: path('x/', ProductDetail.action('addToCart')) — the same def as asAction
+  static action<V extends View>(this: abstract new () => V, name: (keyof V & string) | GeneratedAction): ActionDef {
+    return (this as unknown as typeof View).asAction.call(this as never, name as never)
+  }
 }
 
 // ---- @action ------------------------------------------------------------------------------------
-interface ActionOpts { rules?: ActionRules; permissions?: Permission[] }
+// detail / methods: DRF @action(detail=, methods=) for routers (urls.md). Defaults: detail when the schema has the
+// view's lookup param; GET for a readOnly action, else POST.
+interface ActionOpts { rules?: ActionRules; permissions?: Permission[]; detail?: boolean; methods?: string[] }
 const decorated = new WeakMap<Function, { schema: z.ZodType; opts: ActionOpts }>()
 
 // TS 5 standard method decorator: registers the method as `<app>.<methodName>`, `this` = view.
@@ -261,6 +267,31 @@ function registeredDef(V: Function, name: string): ActionDef | undefined {
   const hits = liveManifest()?.views.get(viewKey(V)) ?? []
   if (hits.length > 1) throw new Error(`${V.name}: several discovered views look identical to this one; give each its own model or config`)
   return hits[0]?.get(name)
+}
+
+// Routers (urls.ts): each registered action of a view with its DRF detail flag and HTTP methods.
+export interface ViewRoute { name: string; def: ActionDef; detail: boolean; methods: string[] }
+const GENERATED: Record<GeneratedAction, [detail: boolean, methods: string[]]> = {
+  list: [false, ['GET']], create: [false, ['POST']], get: [true, ['GET']], update: [true, ['PUT', 'PATCH']], delete: [true, ['DELETE']],
+}
+export function viewRoutes(V: Function): { routes: ViewRoute[]; lookup: { param: string; int: boolean } } {
+  const v = new (V as new () => Record<string, unknown>)()
+  const param = typeof v.lookupParam === 'string' ? v.lookupParam : 'id'
+  const f = v instanceof GenericView ? fieldNamed(v.model, v.lookupField) : undefined
+  const names = [...((V as unknown as typeof GenericView).actions ?? [])]
+  for (let p = V.prototype; p && p !== View.prototype; p = Object.getPrototypeOf(p)) {
+    for (const k of Object.getOwnPropertyNames(p)) if (typeof v[k] === 'function' && decorated.has(v[k] as Function) && !names.includes(k as never)) names.push(k as never)
+  }
+  const routes = names.map((name) => {
+    const def = registeredDef(V, name)
+    if (!def) throw new Error(`${V.name}: action "${name}" is not registered; export the view from apps/<app>/views.ts`)
+    const g = GENERATED[name as GeneratedAction]
+    if (g) return { name, def, detail: g[0], methods: g[1] }
+    const o = decorated.get(v[name] as Function)!.opts
+    const shape = def.schema instanceof z.ZodObject ? def.schema.shape as object : {}
+    return { name, def, detail: o.detail ?? Object.hasOwn(shape, param), methods: (o.methods ?? [def.rules?.readOnly ? 'GET' : 'POST']).map((m) => m.toUpperCase()) }
+  })
+  return { routes, lookup: { param, int: f?.kind === 'id' || f?.kind === 'int' } }
 }
 
 // What survives bundling and minifying: the model's name, generated actions, own method names, plain config.
