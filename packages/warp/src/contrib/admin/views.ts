@@ -390,6 +390,8 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
       if (DELETE) {
         if (!existing) continue
         if (!i.canDelete || !(await i.hasDeletePermission(ctx, parent))) throw forbidden()
+        const prot = (await collect(i.model, [existing])).protectedRows   // Django: the formset refuses a protected row
+        if (prot.length) throw fieldErrors({ DELETE: `Deleting ${i.str(existing)} would require deleting the following protected related objects: ${prot.map((x) => `${x.model} ${x.repr}`).join(', ')}` }, at)
         await i.model.delete(existing.id)
         msg.push({ deleted: { name: i.verboseName ?? labelOf(name), object: i.str(existing) } })
         continue
