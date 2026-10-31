@@ -220,15 +220,15 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       req.headers[URL_STAMP] = req.url ?? '/'
       if (internalOf(req.headers[AS_SESSION], nonce) === undefined) delete req.headers[AS_SESSION]   // only our snapshotter's survives
       if (cors.preflight(req, res)) return
-      const allowed = cors.request(req)
+      const corsPlan = cors.request(req)
       const plan = sec.begin(req, httpsOf(req, settings))
       weakIfNoneMatch(req)
       unhook = hookResponse(req, res, {
         compression: settings.compression,
         onHeaders: () => {
           sec.apply(res, plan)
-          if (allowed) {
-            for (const [k, v] of Object.entries(allowed.headers)) res.setHeader(k, v)
+          if (corsPlan) {   // a CORS route: Vary: Origin always, the allow headers only for an allowed origin
+            for (const [k, v] of Object.entries(corsPlan.headers)) res.setHeader(k, v)
             addVary(res, 'Origin')
           }
         },

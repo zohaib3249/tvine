@@ -113,7 +113,7 @@ const schema: z.ZodType<Settings> = z.object({
       csp: z.union([z.literal(false), z.object({
         reportOnly: z.boolean(),
         directives: z.record(z.string().regex(/^[a-z-]+$/, 'directive names are lowercase'), z.union([z.array(z.string().regex(/^[^;,\s]+$/, 'one source per entry, no ; , or spaces')), z.literal(false)])),
-        reportUri: z.union([z.string().regex(/^(\/|https:\/\/)[^;,\s]*$/, 'a path or an https URL'), z.literal(false)]),
+        reportUri: z.union([z.string().regex(/^(\/|https:\/\/)[^;,\s"]*$/, 'a path or an https URL'), z.literal(false)]),
         staticPages: z.enum(['relaxed', 'strict']),
       })]),
       referrerPolicy: z.enum(['no-referrer', 'no-referrer-when-downgrade', 'origin', 'origin-when-cross-origin', 'same-origin', 'strict-origin', 'strict-origin-when-cross-origin', 'unsafe-url']),
