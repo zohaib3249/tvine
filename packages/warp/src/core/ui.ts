@@ -108,9 +108,12 @@ export async function runUi(server: ServerCtx, steps: Step[], cmd: { cmdId?: str
       const value = s.args.value ?? Object.values(s.args)[0]
 
       if (typeof h.url === 'string') {
-        if (value === undefined || (typeof value === 'object' && value !== null)) return fail(i, s, 'invalid_param', 'needs a value', { field: 'value' })
+        // clear → drop the param; submit → the query as it is (the field's input already set it); else a value
+        const keep = c.kind === 'clear' || c.kind === 'submit'
+        if (!keep && (value === undefined || (typeof value === 'object' && value !== null))) return fail(i, s, 'invalid_param', 'needs a value', { field: 'value' })
         const u = new URL(page, 'http://tvine.local')
-        u.searchParams.set(h.url, String(value))
+        if (c.kind === 'clear') u.searchParams.delete(h.url)
+        else if (c.kind !== 'submit') u.searchParams.set(h.url, String(value))
         const next = u.pathname + u.search
         if (!(await env.request(next))) return fail(i, s, 'domain', 'that page is not reachable', { reason: 'forbidden' })
         page = next
