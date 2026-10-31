@@ -1,5 +1,5 @@
 'use client'
-import { disclose, expand, toTree, type WidgetFrag } from '@tvine/warp/shape'
+import { disclose, expand, toTree, UNTRUSTED, UNTRUSTED_TOOL, type WidgetFrag } from '@tvine/warp/shape'
 import type { ActionHandle, ActionOutcome } from '../widget/types.js'
 import { getOverlay } from '../presence/overlay.js'
 import { autoExcluded } from '../jsx/AutoEl.js'
@@ -77,8 +77,8 @@ const errOut = (code: string, message: string, extra: object = {}) => reply({ ki
 
 // Tool descriptions are versioned constants (transports.md). `ui` before `do`: agents act through the UI.
 export const DESCRIPTIONS = {
-  read_page: 'Read the current page as a structured snapshot (JSON): widgets with ids, state and controls. Call this first, and again after acting. view: auto|L0|L1|full.',
-  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.',
+  read_page: 'Read the current page as a structured snapshot (JSON): widgets with ids, state and controls. Call this first, and again after acting. view: auto|L0|L1|full.' + UNTRUSTED_TOOL,
+  expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.' + UNTRUSTED_TOOL,
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
   do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Page-level agent vetoes do not apply here; server permissions do. Call read_page first for actions and params. Retries with the same cmdId are safe.',
 } as const
@@ -164,9 +164,11 @@ export function pageTools(via: 'webmcp' | 'tab' | 'inspector', header?: string, 
     outcome(await agentPost({ action: h.id, params, bind: h.bind, cmdId, agentCmd: { cmdId, via: agentVia } }, header))
   return {
     read_page: async ({ view }: { view?: 'auto' | 'L0' | 'L1' | 'full' } = {}): Promise<Obj> =>
-      ({ rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) }),
-    expand: async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }): Promise<Obj> =>
-      (expand(tree(), String(id), { offset, limit }) as Obj | undefined) ?? { kind: 'err', code: 'unknown_action', message: `no node ${id}; ids come from read_page` },
+      ({ '#data': UNTRUSTED, rev: getRegistry().rev, ...disclose(tree(), { budget: 4000, rowsL1: 5, view: view ?? 'auto', allowL0: true }) }),
+    expand: async ({ id, offset, limit }: { id: string; offset?: number; limit?: number }): Promise<Obj> => {
+      const x = expand(tree(), String(id), { offset, limit })
+      return x ? { '#data': UNTRUSTED, ...x } : { kind: 'err', code: 'unknown_action', message: `no node ${id}; ids come from read_page` }
+    },
     ui: async (cmd: UiCommand): Promise<Obj> => {
       const from = currentPage()
       const { result, error } = await runUi(cmd, { via, run, ...(source && { source }) })

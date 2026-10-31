@@ -7,14 +7,14 @@ import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { collect, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
+import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
 import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware.js'
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
-import { buildRequest, clientIp } from './core/request.js'
+import { buildRequest, clientIp, isLocalRequest } from './core/request.js'
 import { cookieOpts } from './core/session.js'
 import { metrics, since } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
@@ -238,7 +238,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const chain: Handler[] = [
     ...(sec.reportsHere ? [cspReportHandler(settings, ctx.log)] : []),
     ...(settings.metrics.enabled ? [metricsHandler(settings)] : []),
-    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now(), robots: robotsOf(routes, fe?.nextDir, adminBase) }),
+    discoveryTransport({ settings, manifest: actions, routes, stats: () => ({ sessions: ctx.sessions.size, extra: healthSections(ctx) }), startedAt: Date.now(), robots: robotsOf(routes, fe?.nextDir, adminBase),
+      isStaff: async (req) => {   // /tvine/health details for a staff session
+        const request = await buildRequest({ req, route: '/tvine/health', isAgent: false }, settings)
+        await authenticate(settings, request, await ctx.sessions.peek({ cookie: cookieOf(request, settings) }))
+        return request.user.isStaff === true && request.user.isActive !== false
+      } }),
     (req, res, next) => {
       if (pathOf(req) !== '/tvine/channel') return next()
       sse.add(res)
@@ -411,15 +416,11 @@ function metricsHandler(settings: Settings): Handler {
   // production: a same-host proxy (or a proxy that strips X-Forwarded-For) makes every request look local, so
   // "loopback only" is never a production guard
   if (process.env.NODE_ENV === 'production' && !token && !allowIps.length) throw new Error('settings.metrics.enabled in production needs metrics.token or metrics.allowIps (loopback-only is dev only)')
-  const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
-  // loopback = the socket itself is local, nothing claims to be forwarded, and no proxy is trusted
-  const forwarded = (req: IncomingMessage) => Object.keys(req.headers).some((h) => h.startsWith('x-forwarded-') || h === 'forwarded' || h === 'x-real-ip')
-  const local = (req: IncomingMessage) => settings.trustProxy === 0 && loopback.has(req.socket.remoteAddress ?? '') && !forwarded(req)
   const allowed = (req: IncomingMessage) => {
     const given = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
     if (token && given) { const a = Buffer.from(given), b = Buffer.from(token); if (a.length === b.length && timingSafeEqual(a, b)) return true }
     if (allowIps.length) return allowIps.includes(clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
-    return !token && local(req)
+    return !token && isLocalRequest(req, settings)
   }
   return (req, res, next) => {
     if (pathOf(req) !== path) return next()

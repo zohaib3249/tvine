@@ -137,7 +137,9 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
   emptyValueDisplay = '-'
   actions: (AdminAction | string)[] = []
   actionsOnTop = true
-  agents = true                     // false: agent-marked requests are refused for this model (owner ruling)
+  // false: agent-marked requests are refused for this model (owner ruling); 'confirm': an agent's writes answer
+  // confirm_required by 'human' (the user must do it) — the default for auth.User / auth.Group (secreview-3 M3)
+  agents: boolean | 'confirm' = true
 
   // Django get_object: undefined = not found (or outside getQueryset)
   async getObject(ctx: Ctx, pk: string | number): Promise<T | undefined> {
@@ -177,7 +179,7 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
       if (!(await checkPerm(admin, ctx, opts.permission ?? 'view'))) throw new DomainError('forbidden', 'forbidden: not allowed')
       if (admin.agents === false && ctx.request.agent.is) throw new DomainError('forbidden', 'forbidden: not for agents')
       return fn.call(admin, params, ctx)
-    }, { permissions: [isStaff], ...(opts.readOnly && { readOnly: true }) })
+    }, { permissions: [isStaff], ...(opts.readOnly ? { readOnly: true } : { confirm: (_p: unknown, ctx: ActionCtx) => (admin.agents === 'confirm' && ctx.request.agent.is ? { by: 'human' as const } : undefined) }) })
     if (opts.title) (def as { title?: string }).title = opts.title
     return def
   }

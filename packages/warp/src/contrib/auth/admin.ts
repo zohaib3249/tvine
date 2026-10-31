@@ -26,6 +26,9 @@ function sudo(ctx: Ctx): void {
 }
 
 export class UserAdmin extends ModelAdmin<UserRow> {
+  // secreview-1 M1 (owner brief): no agents at all on accounts, stricter than secreview-3 M3's 'confirm'.
+  // An app may opt in with agents = 'confirm' (an agent's change then needs the user) or true.
+  agents: boolean | 'confirm' = false
   listDisplay = ['username', 'email', 'isStaff', 'isActive']
   listFilter = ['isStaff', 'isSuperuser', 'isActive']
   searchFields = ['username', 'email']
@@ -37,7 +40,6 @@ export class UserAdmin extends ModelAdmin<UserRow> {
     ['Permissions', { fields: ['isActive', 'isStaff', 'isSuperuser'] }],
     ['Important dates', { fields: ['lastLogin', 'dateJoined'] }],
   ]
-  agents = false
   str(u: Record<string, unknown>) { return String(u.username) }
 
   async saveModel(ctx: Ctx, obj: UserRow | undefined, values: Record<string, unknown>): Promise<UserRow> {
@@ -66,7 +68,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
 }
 
 export class GroupAdmin extends ModelAdmin {
-  agents = false
+  agents: boolean | 'confirm' = false   // as UserAdmin
   searchFields = ['name']
   ordering = ['name']
 }

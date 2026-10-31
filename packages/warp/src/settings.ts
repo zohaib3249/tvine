@@ -68,7 +68,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
       referrerPolicy: 'strict-origin-when-cross-origin',
       coop: 'same-origin',
       corp: 'same-origin',
-      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [] },
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [], usb: [], 'display-capture': [], 'browsing-topics': [], 'clipboard-read': [] },
     },
   },
   cors: {
@@ -107,6 +107,7 @@ const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redi
 const schema: z.ZodType<Settings> = z.object({
   site: z.object({ name: z.string(), description: z.string() }),
   siteUrl: z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'an origin like https://shop.example').optional(),
+  health: z.object({ token: z.string().min(16, 'health.token: at least 16 characters').optional() }).strict().optional(),
   header: z.string(),
   formats: z.object({ default: z.enum(['json', 'notation']), notationPath: z.boolean() }),
   trustProxy: posInt,
@@ -156,6 +157,8 @@ const schema: z.ZodType<Settings> = z.object({
       coop: z.union([z.literal(false), z.enum(['same-origin', 'same-origin-allow-popups', 'unsafe-none'])]),
       corp: z.union([z.literal(false), z.enum(['same-origin', 'same-site', 'cross-origin'])]),
       permissionsPolicy: z.record(z.string().regex(/^[a-z-]+$/), z.union([z.array(z.string().regex(/^(self|\*|https?:\/\/[^\s"()]+)$/, "'self', '*' or an origin")), z.literal(false)])),
+      coep: z.union([z.literal(false), z.enum(['require-corp', 'credentialless'])]).optional(),
+      trustedTypes: z.union([z.literal(false), z.literal('report-only')]).optional(),
     }),
   }),
   cors: corsPolicy.extend({ routes: z.array(corsPolicy.partial().extend({ path: z.string().startsWith('/') })) }),

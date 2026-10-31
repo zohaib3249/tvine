@@ -4,6 +4,6 @@ export { ModelForm, Fieldset, InlineFormset, type ModelFormProps, type ModelForm
 export { Field, type FieldProps, type FieldState } from './field.js'
 export { registerFieldWidget, fieldWidgetFor } from './registry.js'
 export { fromApi, toPayload, fieldPayload, validate, validateField, mapServerErrors, durationSeconds, type ServerErrors } from './values.js'
-export { sanitizeHtml } from './rich.js'
+export { sanitizeHtml, safeHref } from './rich.js'
 export { BUILTIN as builtinFieldWidgets } from './widgets.js'
 export type { FieldKind, FieldMeta, FieldWidget, FieldWidgetProps, FormMeta, InlineMeta, Row, Search, SearchResult } from './types.js'
