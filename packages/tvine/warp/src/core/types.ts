@@ -262,6 +262,7 @@ export interface Settings {
   middleware: unknown[]
   actionMiddleware: Middleware[]    // around dispatch (core/middleware.ts); settings.middleware functions land here
   allowedHosts: string[]            // Django ALLOWED_HOSTS ('*', '.example.com'); required in production
+  dev: { allowedHosts: string[] }   // debug only, never production: extra hosts (port forwarding: '*.devtunnels.ms') on top of localhost / LAN IPs / hostname
   debug: boolean                    // Django DEBUG: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string; auditAccess?: boolean }   // auditAccess: an audit row per private-file read
