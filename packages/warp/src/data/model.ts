@@ -97,7 +97,13 @@ function checkMeta(name: string, fields: Fields, meta: ModelMeta): void {
     if (!x) throw new Error(`${name} Meta ${where}: unknown field "${f}"`)
     if (x.kind === 'm2m') throw new Error(`${name} Meta ${where}: "${f}" is a many-to-many field (no column)`)
   }
-  for (const f of meta.personalData ?? []) has(f, 'personalData')
+  for (const f of meta.personalData ?? []) {
+    has(f, 'personalData')
+    // erase's default 'anonymize' blanks a field: nullable, or text-like (''); anything else needs Meta.onErase
+    const x = fields[f]!
+    if ((meta.onErase ?? 'anonymize') === 'anonymize' && !x.opts.optional && !['text', 'email', 'slug', 'url', 'encrypted'].includes(x.kind))
+      throw new Error(`${name} Meta personalData: "${f}" (${x.kind}, not optional) cannot be anonymized: set Meta.onErase to 'delete' or a function`)
+  }
   for (const [n, f] of Object.entries(fields)) {
     const od = f.opts.onDelete
     if (od !== undefined && f.kind !== 'fk') throw new Error(`${name}.${n}: onDelete is an fk option`)

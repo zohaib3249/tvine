@@ -28,7 +28,13 @@ export function securityNotice(s: Settings, kind: NoticeKind, to: { username: st
 }
 
 // ip /24 (IPv4) or /64 (IPv6): a phone moving between cells of one network stays the same device
-const netOf = (ip: string) => ip.includes(':') ? ip.split(':').slice(0, 4).join(':') : ip.split('.').slice(0, 3).join('.')
+export function netOf(ip: string): string {
+  if (!ip.includes(':')) return ip.split('.').slice(0, 3).join('.')
+  const [head, tail] = ip.split('::') as [string, string?]
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : []
+  const full = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
+  return full.slice(0, 4).map((x) => parseInt(x || '0', 16).toString(16)).join(':')
+}
 
 // at login: a device (browser + OS + network) this user never signed in from → newLogin notice. Stored only as an HMAC.
 // The very first sign-in of an account is not "new" (nothing to compare with).

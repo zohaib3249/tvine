@@ -6,6 +6,7 @@ import { lookup as dnsLookup } from 'node:dns'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { BlockList, isIP, type LookupFunction } from 'node:net'
+import { secretName } from '../core/redact.js'
 
 export class SafeFetchError extends Error {
   constructor(readonly code: 'blocked_scheme' | 'blocked_host' | 'blocked_address' | 'too_many_redirects' | 'timeout' | 'too_large' | 'network', msg: string) {
@@ -20,11 +21,22 @@ for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127
 for (const [a, p] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64], ['2001::', 23], ['2001:db8::', 32],
   ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]] as const) BLOCKED.addSubnet(a, p, 'ipv6')
 
+// 8 hextets of an IPv6 address (handles :: and a dotted IPv4 tail)
+function groups(ip: string): number[] {
+  const m = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
+  const s = m ? ip.slice(0, m.index) + (((+m[1]! << 8) | +m[2]!).toString(16) + ':' + ((+m[3]! << 8) | +m[4]!).toString(16)) : ip
+  const [h, t] = s.split('::') as [string, string?]
+  const a = h ? h.split(':') : [], b = t ? t.split(':') : []
+  return (t === undefined ? a : [...a, ...Array(8 - a.length - b.length).fill('0'), ...b]).map((x) => parseInt(x || '0', 16))
+}
+
 // true for any address an outbound request must never reach (incl. 169.254.169.254 cloud metadata, fd00::/8)
 export function isPrivateAddress(ip: string): boolean {
-  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip)   // IPv4-mapped IPv6
-  if (m) return isPrivateAddress(m[1]!)
   const v = isIP(ip)
+  if (v === 6) {   // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) forms: judge the IPv4 inside
+    const g = groups(ip)
+    if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0 || g[5] === 0xffff) && (g[6] || g[7] || g[5])) return isPrivateAddress([g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255].join('.'))
+  }
   return v === 0 || BLOCKED.check(ip, v === 4 ? 'ipv4' : 'ipv6')
 }
 
@@ -52,7 +64,10 @@ export async function safeFetch(input: string | URL, opts: SafeFetchOpts = {}): 
     const loc = res.headers.get('location')
     if (res.status >= 300 && res.status < 400 && loc) {
       if (hop >= (opts.maxRedirects ?? 3)) throw new SafeFetchError('too_many_redirects', 'too many redirects')
-      url = new URL(loc, url)
+      const next = new URL(loc, url)
+      // another origin never gets the caller's credentials (Authorization, Cookie, any secret-named header)
+      if (next.origin !== url.origin && opts.headers) opts = { ...opts, headers: Object.fromEntries(Object.entries(opts.headers).filter(([k]) => !/^(authorization|proxy-authorization|cookie)$/i.test(k) && !secretName(k.replace(/-/g, '_')))) }
+      url = next
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) { method = 'GET'; body = undefined }
       continue
     }
@@ -65,10 +80,12 @@ function once(url: URL, method: string, body: string | Buffer | undefined, opts:
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   if (opts.allowHosts && !hostAllowed(host, opts.allowHosts)) return Promise.reject(new SafeFetchError('blocked_host', `host ${host} is not allowed`))
   // the address the socket connects to is the one checked here (pinned): a second DNS answer cannot swap it
-  const lookup: LookupFunction = (hostname, o, cb) => dnsLookup(hostname, { ...o, all: false }, (err, address, family) => {
+  const lookup: LookupFunction = (hostname, o, cb) => dnsLookup(hostname, { ...o, all: true }, (err, list) => {
     if (err) return cb(err, '', 0)
-    if (!opts.allowPrivate && isPrivateAddress(address as string)) return cb(new SafeFetchError('blocked_address', `${hostname} resolves to a private address`), '', 0)
-    cb(null, address as string, family as number)
+    const ok = list.filter((a) => opts.allowPrivate || !isPrivateAddress(a.address))
+    if (!ok.length) return cb(new SafeFetchError('blocked_address', `${hostname} resolves to a private address`), '', 0)
+    if ((o as { all?: boolean }).all) return (cb as unknown as (e: null, l: typeof ok) => void)(null, ok)   // Happy Eyeballs asks for all
+    cb(null, ok[0]!.address, ok[0]!.family)
   })
   if (isIP(host) && !opts.allowPrivate && isPrivateAddress(host)) return Promise.reject(new SafeFetchError('blocked_address', `${host} is a private address`))
   const left = deadline - Date.now()

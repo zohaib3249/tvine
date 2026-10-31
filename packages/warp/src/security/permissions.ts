@@ -80,6 +80,8 @@ export function permissionCtx(ctx: Pick<ActionCtx, 'sid' | 'session' | 'request'
 // First deny wins. A permission that throws is a deny (fail closed), never an internal error.
 // A token-authenticated user is also held to the token's scopes: checked where dispatch states whether the action
 // is readOnly (pctx.readOnly present), i.e. once per command before any app permission.
+// a permission may refuse with one of these (the client can act on it: set up 2FA, sign in again)
+const PASS = new Set(['two_factor_required', 'reauth_required'])
 export async function runPermissions(perms: Permission[], pctx: PermissionCtx): Promise<void> {
   const scopes = pctx.user.scopes
   if (scopes && pctx.action && pctx.readOnly !== undefined && !scopeAllows(scopes, pctx.action, pctx.readOnly)) {
@@ -87,7 +89,7 @@ export async function runPermissions(perms: Permission[], pctx: PermissionCtx): 
   }
   for (const p of perms) {
     let ok = false
-    try { ok = await p(pctx) } catch (e) { if (e instanceof DomainError) throw e /* a deliberate refusal keeps its reason */ }
+    try { ok = await p(pctx) } catch (e) { if (e instanceof DomainError && PASS.has(e.code)) throw e /* these refusals keep their reason; any other throw is forbidden */ }
     if (!ok) throw new DomainError('forbidden', `forbidden: not allowed: ${pctx.action}`)
   }
 }

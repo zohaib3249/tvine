@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 import { env, isProduction } from './env.js'
 import { LEVELS } from './log.js'
@@ -193,7 +194,7 @@ const schema: z.ZodType<Settings> = z.object({
     broker: z.enum(['db', 'file', 'memory', 'redis']).optional(), redis: alias, file: z.string().min(1), durable: z.boolean(), claimBatch: z.number().int().min(1).max(100) }),
   admin: z.object({ path: z.string().regex(/^\/[\w\-/]*$/, 'a path starting with /'), title: z.string().optional(),
     theme: z.object({ brand: z.string().optional(), radius: z.string().optional(), dark: z.enum(['auto', 'on', 'off']) }),
-    allowIps: z.array(z.string().regex(/^[0-9a-fA-F:.]+(\/\d{1,3})?$/, 'an address or CIDR')).optional(), require2fa: z.boolean().optional(), idleMs: z.number().int().positive().optional() }),
+    allowIps: z.array(z.string().refine(validCidr, 'an address or CIDR (e.g. 10.0.0.0/8)')).optional(), require2fa: z.boolean().optional(), idleMs: z.number().int().positive().optional() }),
   caches: z.record(alias, z.object({
     backend: z.enum(['memory', 'redis', 'file', 'dummy']), redis: alias, location: z.string().min(1).optional(),
     timeout: z.number().min(0).nullable(), keyPrefix: z.string().max(64), version: z.number().int(), maxEntries: z.number().int().positive(),
@@ -225,6 +226,14 @@ const schema: z.ZodType<Settings> = z.object({
     notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
 }).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] }) as z.ZodType<Settings>
+
+// admin.allowIps entries must parse at boot (a typo must not silently lock everyone out, or let everyone in)
+function validCidr(e: string): boolean {
+  const [a, p, extra] = e.split('/'), v = isIP(a ?? '')
+  if (!v || extra !== undefined) return false
+  if (p === undefined) return true
+  try { new BlockList().addSubnet(a!, Number(p), v === 6 ? 'ipv6' : 'ipv4'); return /^\d{1,3}$/.test(p) } catch { return false }
+}
 
 const isPlain = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)

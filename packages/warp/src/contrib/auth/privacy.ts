@@ -3,6 +3,8 @@
 //   onErase: 'delete' | 'anonymize' | fn  what erase(user) does to those rows (default 'anonymize' when personalData is set)
 // The user's own row is always part of both: export lists its profile; erase anonymizes it (inactive, unusable password,
 // username deleted-<id>, no email) and drops its sessions, tokens, devices and second factor. One transaction, one audit row.
+import { readdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { nanoid } from 'nanoid'
 import { securityEvent } from '../../core/audit.js'
 import type { Request, Settings } from '../../core/types.js'
@@ -62,16 +64,32 @@ export async function eraseData(userId: number, o: { settings?: Settings; reques
     for (const M of [UserSession, KnownDevice, Token, Totp, RecoveryCode] as AnyModel[]) await M.objects.filter({ userId }).delete()
     await User.update(userId, { username: `deleted-${userId}`, email: null, password: '!', isActive: false, isStaff: false, isSuperuser: false })
   })
+  if (o.settings) await removeExports(o.settings, { userId })   // earlier exports of this user are personal data too
   securityEvent('privacy_erase', { userId: String(userId), models: Object.keys(counts) }, { settings: o.settings, request: o.request, level: 'info' })
   return counts
 }
 
 // the export as a private media file: a signed link (24 h, bound to the user) is what the user gets
+// files: <media>/privacy/u<id>_<random>.export; older than the link (24 h) are swept on every new export
+export const EXPORT_TTL_S = 86_400
+const exportDir = (s: Settings) => join(s.media.dir, 'privacy')
+export async function removeExports(settings: Settings, o: { userId?: number; olderThanMs?: number } = {}): Promise<number> {
+  const dir = exportDir(settings), store = new DiskStorage(settings.media.dir, settings.media.route)
+  let n = 0
+  for (const f of await readdir(dir).catch(() => [] as string[])) {
+    if (!f.endsWith('.export') || (o.userId !== undefined && !f.startsWith(`u${o.userId}_`))) continue
+    if (o.olderThanMs !== undefined && Date.now() - ((await stat(join(dir, f)).catch(() => undefined))?.mtimeMs ?? 0) < o.olderThanMs) continue
+    await store.delete(`privacy/${f}`); n++
+  }
+  return n
+}
+
 export async function exportToMedia(userId: number, settings: Settings): Promise<string> {
+  await removeExports(settings, { olderThanMs: EXPORT_TTL_S * 1000 })
   const data = Buffer.from(JSON.stringify(await exportData(userId), null, 2))
-  const key = `privacy/${nanoid()}.export`
+  const key = `privacy/u${userId}_${nanoid()}.export`
   await new DiskStorage(settings.media.dir, settings.media.route).put(key, data, { type: 'application/json', size: data.length, private: true })
-  return media.url(key, { user: userId, expiresIn: 86_400, route: settings.media.route })
+  return media.url(key, { user: userId, expiresIn: EXPORT_TTL_S, route: settings.media.route })
 }
 
 export const privacy = { export: exportData, erase: eraseData, exportToMedia }
