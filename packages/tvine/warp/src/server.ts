@@ -44,7 +44,7 @@ import { loadUrls, setLiveUrls, type UrlTable } from './urls.js'
 import { mcpHandler } from './transport/mcp.js'
 import { TabHub, tabTransport } from './transport/tab.js'
 import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
-import { liveRouteMatcher, routeMatcher } from './transport/routes.js'
+import { appDirRoutes, liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 import { adminSnapshot } from './contrib/admin/agent.js'
 import { adminGroupAllowed } from './contrib/admin/hardening.js'
@@ -210,8 +210,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const signals = await appSignals(appsDir, installed)
   const urls = await loadUrls(appsDir, installed, settings.rootUrlconf)   // the root urls.ts; bad routes fail here, naming the file
   const fe = opts.frontend
-  const routes = fe ? loadNextRoutes(fe.nextDir) : API_ROUTES
-  // dev: `next dev` writes the manifest as pages compile, so an empty table is fine (re-read live below)
+  // dev: next dev writes no route manifest, so the pages come from the app/ tree (and are re-read live below)
+  const routes = fe ? (opts.dev ? appDirRoutes(dirname(fe.nextDir)) : loadNextRoutes(fe.nextDir)) : API_ROUTES
   if (fe && !routes.length && !opts.dev) throw new Error(`no routes in ${join(fe.nextDir, 'app-path-routes-manifest.json')} (run next build)`)
   say(`discovered ${actions.all().length} actions, ${routes.length} routes`)
   if (fe && !opts.dev) for (const w of nextBuildWarnings(fe.nextDir, settings)) say(`WARNING: ${w}`, 'warn')

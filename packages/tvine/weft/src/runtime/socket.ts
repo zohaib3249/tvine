@@ -88,12 +88,16 @@ let connect: (() => void) | undefined
 export function openConnect(): void { connect?.() }
 
 // Read and strip a one-time param from the address bar (approveUrl must not linger in history/Referer).
+// The value is remembered for this document: React StrictMode (on in dev) mounts, unmounts and re-mounts the
+// tab, and the first mount must not swallow the approve code the live (second) mount needs.
+const taken = new Map<string, string>()
 function takeParam(name: string): string | null {
   const l = (globalThis as any).location
   if (!l) return null
   const u = new URL(l.href)
   const v = u.searchParams.get(name)
-  if (v === null) return null
+  if (v === null) return taken.get(name) ?? null
+  taken.set(name, v)
   u.searchParams.delete(name)
   try { history.replaceState(history.state, '', u.pathname + u.search + u.hash) } catch { /* sandboxed */ }
   return v

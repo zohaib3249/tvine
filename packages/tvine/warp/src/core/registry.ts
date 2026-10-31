@@ -88,12 +88,21 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
       }
     } // unknown k: ignored (forward compatible)
   }
-  if (!pg) throw new RegistryError('internal', `route not Tvine-enabled: ${route}`)
+  // every page is agent-readable: without a <Page> its name comes from the route and its title from the
+  // document <title> (auto-HTML already registered its controls); <Page name title> overrides both
+  pg ??= { page: route === '/' || route === '?' ? 'home' : route.replace(/^\//, ''), title: htmlTitle(html) ?? (route === '/' ? 'Home' : route) }
   if (dev()) for (const w of widgets.values()) {
     if (nodes.has(w.id)) console.error(`tvine: widget id "${w.id}" collides with a v1 node on ${route} — the widget is dropped; give one an explicit id`)
   }
   const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
   return { ...out, ...(widgets.size && { widgets: [...widgets.values()] }), ...(Object.keys(folds).length && { folds }) }
+}
+
+// The document <title> text (entity-decoded for the common five), capped; undefined when absent or empty.
+function htmlTitle(html: string): string | undefined {
+  const m = /<title[^>]*>([^<]{1,300})<\/title>/i.exec(html)
+  const t = m?.[1]?.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim()
+  return t || undefined
 }
 
 // Sorted-key JSON so key order never changes the etag.

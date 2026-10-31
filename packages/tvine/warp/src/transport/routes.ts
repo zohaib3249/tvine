@@ -1,5 +1,5 @@
-import { statSync } from 'node:fs'
-import { join } from 'node:path'
+import { readdirSync, statSync, type Dirent } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { loadNextRoutes, type RouteInfo } from './discovery.js'
 
 // Next pattern match: [x] one segment, [...x] one or more, [[...x]] zero or more.
@@ -32,15 +32,39 @@ export function routeMatcher(routes: RouteInfo[]): (path: string) => string | un
   }
 }
 
-// Dev: `next dev` rewrites the route manifest as pages compile. One stat per lookup; the table is rebuilt
-// only when the file's mtime or size changed, so a new page is routable without a restart.
+// The app router's pages, read from the source tree (app/ or src/app/): every page.{tsx,ts,jsx,js,mdx} is a
+// route. Next's folder rules: (group) segments vanish, _private folders and @slot / (.)intercepting segments
+// are not URL routes. Dev needs this: next dev writes no app-path-routes-manifest and compiles pages lazily.
+export function appDirRoutes(projectDir: string): RouteInfo[] {
+  const root = [join(projectDir, 'app'), join(projectDir, 'src', 'app')].find((d) => statSync(d, { throwIfNoEntry: false })?.isDirectory())
+  if (!root) return []
+  const out = new Set<string>()
+  const walk = (dir: string, segs: string[]) => {
+    let ents: Dirent[]
+    try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of ents) {
+      if (e.isFile() && /^page\.(tsx|ts|jsx|js|mdx)$/.test(e.name)) out.add('/' + segs.join('/'))
+      if (!e.isDirectory()) continue
+      const n = e.name
+      if (n.startsWith('_') || n.startsWith('@') || /^\(\.{1,3}\)/.test(n) || n === 'node_modules') continue
+      walk(join(dir, n), /^\(.+\)$/.test(n) ? segs : [...segs, n])
+    }
+  }
+  walk(root, [])
+  return [...out].sort().map((path) => ({ path }))
+}
+
+// Dev: the routes come from the app/ tree (rescanned at most once a second, so a new page is routable without
+// a restart), plus whatever a previous `next build` left in the manifest.
 export function liveRouteMatcher(nextDir: string): (path: string) => string | undefined {
-  const file = join(nextDir, 'app-path-routes-manifest.json')
-  let seen = '', match = routeMatcher([])
+  const projectDir = dirname(nextDir)
+  let at = 0, match = routeMatcher([])
   return (path) => {
-    const st = statSync(file, { throwIfNoEntry: false })
-    const key = st ? `${st.mtimeMs}:${st.size}` : ''
-    if (key !== seen) { seen = key; match = routeMatcher(loadNextRoutes(nextDir)) }
+    if (Date.now() - at > 1000) {
+      at = Date.now()
+      const all = new Map([...loadNextRoutes(nextDir), ...appDirRoutes(projectDir)].map((r) => [r.path, r]))
+      match = routeMatcher([...all.values()])
+    }
     return match(path)
   }
 }
