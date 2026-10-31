@@ -116,6 +116,8 @@ function Upload(p: FieldWidgetProps) {
 const toRef = (o: Opt): SearchResult => ({ pk: o.value, text: o.label })
 const toOpt = (r: SearchResult): Opt => ({ value: r.pk, label: r.text })
 const listed = (p: FieldWidgetProps) => (p.meta.relation && !p.meta.relation.autocomplete && p.meta.choices) || undefined
+// a stored value carries only the pk until the server labels it: take the label from the listed rows
+const labelled = (r: SearchResult, choices?: Opt[]): Opt => choices?.find((c) => c.value === String(r.pk)) ?? toOpt(r)
 function Fk(p: FieldWidgetProps) {
   const v = p.value as SearchResult | null, choices = listed(p)
   if (p.meta.relation?.rawId || (!choices && !p.search)) {   // Django raw_id_fields: type the pk
@@ -123,7 +125,7 @@ function Fk(p: FieldWidgetProps) {
       onChange={(e) => p.onChange(e.target.value ? { pk: e.target.value, text: e.target.value } : null)} {...common(p)} />
   }
   return <div data-part="fk"><Dropdown {...sel(p)} options={choices} search={choices ? undefined : p.search} placeholder={choices ? 'Select…' : 'Search…'}
-    value={v ? toOpt(v) : null} onChange={(o) => p.onChange(o ? toRef(o) : null)} /></div>
+    value={v ? labelled(v, choices) : null} onChange={(o) => p.onChange(o ? toRef(o) : null)} /></div>
 }
 function M2m(p: FieldWidgetProps) {
   const vs = (p.value ?? []) as SearchResult[], choices = listed(p)
@@ -132,7 +134,7 @@ function M2m(p: FieldWidgetProps) {
       onBlur={(e) => p.onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean).map((pk) => ({ pk, text: pk })))} />
   }
   return <div data-part="m2m"><MultiSelect {...sel(p)} options={choices} search={choices ? undefined : p.search} max={p.meta.max}
-    value={vs.map(toOpt)} onChange={(v) => p.onChange(v.map(toRef))} /></div>
+    value={vs.map((r) => labelled(r, choices))} onChange={(v) => p.onChange(v.map(toRef))} /></div>
 }
 
 export const BUILTIN: Record<FieldKind, FieldWidget> = {

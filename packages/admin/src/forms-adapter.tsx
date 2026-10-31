@@ -36,7 +36,7 @@ export function AdminModelForm({ meta, model, obj, call, readOnly, onSaved, onDi
   const id = obj ? 'admin.update' : 'admin.create'
   const keyArgs = { model, ...(obj && { pk: obj.pk }) }
   return (
-    <WeftModelForm form={meta} values={obj?.values} inlines={obj?.inlines as never} readOnly={readOnly} layout="aligned"
+    <WeftModelForm form={meta} values={obj?.values} inlines={obj?.inlines as never} readOnly={readOnly}
       name={model.split('.').pop()} label={obj ? `Change ${obj.display}` : 'Add'} model={model}
       search={async ({ model: from, field, q, page }) => {   // from = the inline's model for an inline row's field
         const r = await call('admin.autocomplete', { model: from ?? model, field, q, page })

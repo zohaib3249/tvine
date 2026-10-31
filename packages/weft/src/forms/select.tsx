@@ -206,7 +206,7 @@ const fileUrl = (v: any): string | undefined => (typeof v === 'string' ? v : v?.
 export function FileDrop(p: { id: string; name: string; label: string; describedBy?: string; invalid: boolean; disabled: boolean; required: boolean
   image: boolean; accept?: string; maxBytes?: number; value: any; onChange(v: File | null): void; check(f: File): string | undefined }) {
   const v = p.value, inp = useRef<HTMLInputElement>(null)
-  const [err, setErr] = useState<string>(), [over, setOver] = useState(false), [preview, setPreview] = useState<string>()
+  const [err, setErr] = useState<string>(), [over, setOver] = useState(false), [preview, setPreview] = useState<string>(), [broken, setBroken] = useState<string>()
   useEffect(() => {
     if (!p.image || !isFile(v) || typeof URL.createObjectURL !== 'function') return setPreview(undefined)
     const u = URL.createObjectURL(v); setPreview(u); return () => URL.revokeObjectURL(u)
@@ -220,7 +220,7 @@ export function FileDrop(p: { id: string; name: string; label: string; described
   }
   return <div className="tf-file" data-part="file" data-filled={v ? '' : undefined} data-over={over ? '' : undefined} data-invalid={err ? '' : undefined} {...drop}>
     {v ? <div className="tf-file-card">
-      {src ? <img className="tf-preview" src={src} alt="" /> : <span className="tf-file-icon">{Icon.file()}</span>}
+      {src && broken !== src ? <img className="tf-preview" src={src} alt="" onError={() => setBroken(src)} /> : <span className="tf-file-icon">{Icon.file()}</span>}
       <div className="tf-file-meta">
         <span className="tf-file-name">{url ? <a href={url} target="_blank" rel="noreferrer">{fileName(v)}</a> : fileName(v)}</span>
         <span className="tf-file-size">{isFile(v) ? `${fmtSize(v.size)} · ready to upload on save` : 'Current file'}</span>
