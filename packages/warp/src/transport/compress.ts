@@ -61,11 +61,11 @@ type Cb = (err?: Error | null) => void
 const len = (c: unknown, enc?: BufferEncoding) => (c == null ? 0 : typeof c === 'string' ? Buffer.byteLength(c, enc) : (c as Uint8Array).length)
 const buf = (c: unknown, enc?: BufferEncoding) => (typeof c === 'string' ? Buffer.from(c, enc) : Buffer.from(c as Uint8Array))
 
-// Wraps res.writeHead/write/end/flushHeaders (+ 'drain' listeners while compressing) on this instance.
+// Wraps res.writeHead/write/end/flushHeaders on this instance; zlib's drain is re-emitted as res 'drain'.
 // Returns the unhook (only valid before anything was written: embedded mode hands the request back).
 export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookOptions): () => void {
   type Fn = (this: unknown, ...a: unknown[]) => unknown
-  const orig = { writeHead: res.writeHead, write: res.write, end: res.end, flushHeaders: res.flushHeaders, on: res.on, addListener: res.addListener } as unknown as Record<'writeHead' | 'write' | 'end' | 'flushHeaders' | 'on' | 'addListener', Fn>
+  const orig = { writeHead: res.writeHead, write: res.write, end: res.end, flushHeaders: res.flushHeaders, on: res.on } as unknown as Record<'writeHead' | 'write' | 'end' | 'flushHeaders' | 'on', Fn>
   const c = o.compression && o.compression.enabled ? o.compression : undefined
   let state: 'open' | 'held' | 'sent' = 'open'
   let enc: Enc | undefined
@@ -108,7 +108,11 @@ export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookO
       : createGzip({ level: c!.gzipLevel })
     const zz = z
     zz.on('data', (chunk: Buffer) => { if (!orig.write.call(res, chunk)) zz.pause() })
-    orig.on.call(res, 'drain', () => zz.resume())
+    // two buffers now: the socket's (resumes zlib) and zlib's (writers waiting on res 'drain' — however and
+    // whenever they registered, Next's writer does it before the first byte — must hear about it)
+    let ownDrain = false
+    orig.on.call(res, 'drain', () => { if (!ownDrain) zz.resume() })
+    zz.on('drain', () => { ownDrain = true; try { res.emit('drain') } finally { ownDrain = false } })
     zz.on('end', () => orig.end.call(res))
     zz.on('error', (e) => res.destroy(e))
     orig.on.call(res, 'close', () => { if (!zz.writableEnded) zz.destroy() })
@@ -202,14 +206,6 @@ export function hookResponse(req: IncomingMessage, res: ServerResponse, o: HookO
     if (state === 'held') release(true)
     z?.flush()
   }
-  // while compressing, writers wait on the zlib stream's drain (its buffer), not the socket's
-  const onDrain = (orig_: Fn) => function (this: ServerResponse, ev: string | symbol, fn: (...x: unknown[]) => void) {
-    if (ev === 'drain' && z) { z.on('drain', fn); return res }
-    return orig_.call(res, ev, fn)
-  } as typeof res.on
-  res.on = onDrain(orig.on)
-  res.addListener = onDrain(orig.addListener)
-
   return () => {
     if (state !== 'open') return
     for (const [k, v] of Object.entries(orig)) {
