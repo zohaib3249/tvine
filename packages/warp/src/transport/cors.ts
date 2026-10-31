@@ -1,6 +1,7 @@
 // transport/cors — settings.cors on the wire (docs/design/server/security-headers.md §CORS): preflight answers
 // and response headers. Whether an allowed origin may ACT is dispatch's call (core/cors-match corsAllows):
 // the Origin header always reaches dispatch untouched. Default closed: only paths a `routes` entry names.
+import { forwardedHostOf } from '../core/request.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Settings } from '../core/types.js'
 import { corsMatch } from '../core/cors-match.js'
@@ -11,10 +12,7 @@ export type CorsPlan = { headers: Record<string, string>; vary: true; dropSetCoo
 
 export function corsLayer(settings: Settings) {
   const m = corsMatch(settings)   // throws on a bad configuration: boot fails, naming the setting
-  const hostOf = (req: IncomingMessage) => {
-    const h = (n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
-    return ((settings.trustProxy > 0 && h('x-forwarded-host')?.split(',')[0]!.trim()) || h('host'))?.toLowerCase()
-  }
+  const hostOf = (req: IncomingMessage) => forwardedHostOf(req, settings.trustProxy)   // X-Forwarded-Host per trusted hops
   const crossOriginOf = (req: IncomingMessage): string | undefined => {
     const origin = req.headers.origin
     if (typeof origin !== 'string') return undefined

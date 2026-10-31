@@ -5,6 +5,7 @@ import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { audited, auditRow, securityEvent, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
+import { forwardedHost } from './request.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -15,6 +16,7 @@ import { SessionBusy, SessionStore } from './session.js'
 import { channelsFor, idempotencyFor, limiterFor, marksFor, sessionsFor } from '../backends/index.js'
 import type { ActionCtx, ActionDef, ChannelLayer, Command, ConfirmAsk, Event, Middleware, Request, Session, Settings, Sid, Snapshot } from './types.js'
 import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
+import { withPending } from '../data/pending.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { ipKey, type Limiter } from '../security/ratelimit.js'
@@ -225,7 +227,7 @@ export function cookieOf(r: Request, s: Settings): string | undefined {
 // No Origin (curl, SDKs, MCP clients) passes. A foreign Origin passes only where settings.cors opted it in
 // for this endpoint + method (core/cors-match corsAllows); the human <Form> path never.
 // the public host of the request (X-Forwarded-Host only through trusted proxies)
-const hostOf = (r: Request, s: Settings) => ((s.trustProxy > 0 && r.headers.get('x-forwarded-host')?.split(',')[0]!.trim()) || r.headers.get('host'))?.toLowerCase() || undefined
+const hostOf = (r: Request, s: Settings) => forwardedHost((n) => r.headers.get(n), s.trustProxy) || undefined   // X-Forwarded-Host per trusted hops
 
 export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
@@ -568,7 +570,7 @@ async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: 
   // lazy: BEGIN only at the handler's first query, so DB-free handlers open nothing
   const tx = server.settings.db.atomicRequests && !def.rules?.readOnly && def.rules?.atomic !== false
   const ac = new AbortController()
-  const work = tx ? atomic(call, { signal: ac.signal, lazy: true }) : call()
+  const work = tx ? atomic(call, { signal: ac.signal, lazy: true }) : withPending(call)   // either way: the reply waits for un-awaited writes
   hold.settled = work
   work.catch(() => undefined)
   let timer: ReturnType<typeof setTimeout> | undefined

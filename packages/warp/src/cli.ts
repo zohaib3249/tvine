@@ -12,7 +12,7 @@ import { installedApps } from './core/apps.js'
 import { connections, openConn } from './data/db.js'
 import { discoverModels, makeMigrations, migrate, migrateCheck, postMigrate, showMigrations, sqlMigrate } from './data/migrate.js'
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
-import { boundaryCheck, boundaryReport } from './cli/boundary.js'
+import { boundaryCheck, boundaryReport, unawaitedReads } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import type { Settings } from './core/types.js'
@@ -271,6 +271,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           io.err(`tvine check: ${bad.length} frontend file(s) reach models/the ORM${level === 'warn' ? ' (settings.frontend.boundary = warn)' : ''}`)
           if (level === 'error') return 1
         }
+        for (const l of unawaitedReads(apps)) io.err(`tvine check: warning: ORM read without await (a Promise, not rows): ${l}`)
         const { url } = srv.ctx.settings.db, installed = srv.ctx.settings.installedApps
         if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }
         io.out(`ok: ${srv.ctx.actions.all().length} actions`)

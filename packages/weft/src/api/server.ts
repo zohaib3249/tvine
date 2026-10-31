@@ -36,7 +36,8 @@ function trusted(v: string | null): string | undefined {
   return parts[parts.length - hops]
 }
 
-export function forwardTransport(o: { url: string; secret: string; cookieName?: string; next?: () => Promise<NextAccess> }): Transport {
+// header: the API server's settings.header (TVINE_HEADER; default 'x-tvine') — weft has no settings in split mode
+export function forwardTransport(o: { url: string; secret: string; cookieName?: string; header?: string; next?: () => Promise<NextAccess> }): Transport {
   // the API server's settings.session (secreview M2): secure in production → the __Host- name; env overrides both
   const secure = process.env.TVINE_SESSION_SECURE !== undefined ? process.env.TVINE_SESSION_SECURE === '1' : process.env.NODE_ENV === 'production'
   const name = o.cookieName ?? (secure ? '__Host-tvine_s' : 'tvine_s')
@@ -52,7 +53,7 @@ export function forwardTransport(o: { url: string; secret: string; cookieName?: 
     const ip = trusted(h.get('x-forwarded-for')) ?? 'unknown'
     const as = h.get('x-tvine-session') ?? undefined   // an agent's snapshot render; the API server checks its nonce
     // secreview H1: a caller that declares itself an agent (x-tvine or the tvine Accept) is forwarded as one
-    const agent = h.get('x-tvine') !== null || /text\/tvine|application\/tvine\+json/.test(h.get('accept') ?? '')
+    const agent = h.get(o.header ?? 'x-tvine') !== null || /text\/tvine|application\/tvine\+json/i.test(h.get('accept') ?? '')
     const fwd = signForward({ cookie: jar.get(name)?.value, ...(as && { as }), ip, agent, path, mode: action ? 'action' : 'render' }, o.secret)
     try {
       const r = await fetch(`${o.url.replace(/\/$/, '')}/tvine/api/${encodeURIComponent(id)}`, {
@@ -75,7 +76,7 @@ export const serverTransport: Transport = (id, params, opts) => {
   if (!url) throw new Error('@tvine/weft/api: no backend. Run the app with `tvine start`/`tvine dev` (one process), or set TVINE_API_URL (and TVINE_SECRET) to a `tvine start --api-only` server')
   const secret = process.env.TVINE_SECRET?.split(',')[0]?.trim()   // a rotation list signs with its first (newest) key
   if (!secret) throw new Error('@tvine/weft/api: TVINE_API_URL is set but TVINE_SECRET is not (it signs x-tvine-forward)')
-  return (forward ??= forwardTransport({ url, secret, cookieName: process.env.TVINE_COOKIE_NAME }))(id, params, opts)
+  return (forward ??= forwardTransport({ url, secret, cookieName: process.env.TVINE_COOKIE_NAME, header: process.env.TVINE_HEADER }))(id, params, opts)
 }
 
 export const api: Api = makeApi(serverTransport)   // annotated: else the d.ts inlines the empty manifest and api.* is never typed

@@ -9,6 +9,7 @@ import type { JobRow } from './models.js'
 import { config, followUp, parseRate, Retry, taskById, type SigJSON, type Task, type TaskCtx } from './task.js'
 import { auditSinkSet, sidHash, writeAudit, type AuditRow } from '../../core/audit.js'
 import { redactSecrets } from '../../core/redact.js'
+import { withPending } from '../../data/pending.js'
 
 export type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
 export interface WorkerOpts {
@@ -184,7 +185,7 @@ export class Worker {
     const parsed = task.schema.safeParse(job.args)
     if (!parsed.success) return this.final(r, 'dead', { error: `invalid args: ${parsed.error.issues[0]?.message ?? 'rejected'}` })
 
-    this.log('info', 'job.start', { ...base, ...(task.opts.logArgs && { args: job.args }) })
+    this.log('info', 'job.start', { ...base, ...(task.opts.logArgs && { args: redactSecrets(job.args) }) })
     const parent = job.parentId ? await this.broker.get(job.parentId) : undefined
     const ctx: TaskCtx = {
       jobId: job.id, task: job.task, attempt: job.attempts, queue: job.queue, signal: r.ac.signal,
@@ -195,7 +196,7 @@ export class Worker {
     }
     const tm = typeof task.opts.timeoutMs === 'number' ? { hard: task.opts.timeoutMs } : { hard: 300_000, ...task.opts.timeoutMs }
     const timers: NodeJS.Timeout[] = []
-    const work = Promise.resolve().then(() => task.run(parsed.data, ctx))
+    const work = Promise.resolve().then(() => withPending(async () => task.run(parsed.data, ctx)))   // un-awaited ORM writes finish (or fail the job)
     work.catch(() => undefined)
     try {
       if (tm.soft !== undefined) timers.push(setTimeout(() => r.ac.abort(new SoftTimeLimit()), tm.soft))
