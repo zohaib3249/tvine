@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 're
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control } from '../widget/types.js'
 import { agentNavigate } from '../runtime/nav.js'
-import { flag, part, type Slots, type SlotProps } from './_parts.js'
+import { flag, part, type Slots, type SlotProps, softNav } from './_parts.js'
 
 // widgets/cart-badge.md: a read-only count on a native <a href="/cart">. Personal (snapshot uncacheable).
 // The accessible name carries the count; changes are announced politely and set data-bumped for 300 ms.
@@ -41,7 +41,7 @@ export function CartBadge(props: DefinedProps<CartBadgeProps, C>) {
   }, [count])
   return <>{w.embed}{part('a', {
     ref: w.ref, ...w.props, 'data-tvine-widget': 'cart-badge', href: disabled ? undefined : href, 'aria-label': nameOf(props),
-    'aria-disabled': disabled || undefined, 'data-empty': flag(count === 0), 'data-bumped': flag(bumped), onClick,
+    'aria-disabled': disabled || undefined, 'data-empty': flag(count === 0), 'data-bumped': flag(bumped), onClick: (e: MouseEvent<HTMLAnchorElement>) => { onClick?.(e); softNav(e) },
   }, { className, ...slots?.root }, s, <>
     {icon && part('span', { 'aria-hidden': true }, slots?.icon, s, icon)}
     {part('span', { 'aria-live': 'polite' }, slots?.count, s, count)}

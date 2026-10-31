@@ -3,7 +3,7 @@ import type { MouseEvent, ReactNode } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control } from '../widget/types.js'
 import { agentNavigate } from '../runtime/nav.js'
-import { flag, part, type SlotProps } from './_parts.js'
+import { flag, part, softNav, type SlotProps } from './_parts.js'
 
 // widgets/link.md: native <a href>. The agent's navigate goes through W8's agentNavigate (same-origin
 // check, then the real click so app onClick / Next transitions run, then settle). Off-site hrefs and
@@ -41,6 +41,6 @@ export function Link(props: DefinedProps<LinkProps, C>) {
   const s = (current ? { current: true } : {}) as S
   return <>{w.embed}{part('a', {
     ref: w.ref, ...w.props, 'data-tvine-widget': 'link', href: disabled ? undefined : href, 'aria-current': current ? 'page' : undefined,
-    'aria-disabled': disabled || undefined, 'data-current': flag(current), 'data-disabled': flag(disabled), onClick,
+    'aria-disabled': disabled || undefined, 'data-current': flag(current), 'data-disabled': flag(disabled), onClick: (e: MouseEvent<HTMLAnchorElement>) => { onClick?.(e); softNav(e) },
   }, props, s, children)}</>
 }

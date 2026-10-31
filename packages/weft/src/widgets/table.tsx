@@ -7,7 +7,7 @@ import type { ActionHandle, Control, ControlCtx, Json } from '../widget/types.js
 import type { Paginated } from '../types.js'
 import { agentNavigate } from '../runtime/nav.js'
 import { submitForm } from '../runtime/submit.js'
-import { AutoOff, flag, headlessOf, inner, invalid, part, useControllable, type Slots, type SlotProps } from './_parts.js'
+import { AutoOff, flag, headlessOf, inner, invalid, part, useControllable, type Slots, type SlotProps, softNav } from './_parts.js'
 
 // widgets/table.md: native <table>. Sort / filter / next page are real links to the ListView query params
 // (`?sort=-price`, `?<field>=v`, `?cursor=`), so the headless `url` map and the in-tab click land on the same URL
@@ -203,7 +203,7 @@ export function Table<T>(props: DefinedProps<TableProps<T>, C>) {
     </tr></AutoOff></thead>
     <w.Scope><Body p={props as TableProps<any>} items={items} start={virtual ? start : 0} end={virtual ? start + per : items.length} toggle={toggle} sel={sel} s={s} /></w.Scope>
   </>)
-  return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': 'table', 'data-disabled': flag(disabled) }, { className, ...slots?.root }, s, <>
+  return part('div', { ref: w.ref, ...w.props, 'data-tvine-widget': 'table', 'data-disabled': flag(disabled), onClick: softNav }, { className, ...slots?.root }, s, <>
     {w.embed}
     <AutoOff>
       {(filterBar.length > 0 || !!bulk?.length) && part('div', { role: 'toolbar', 'aria-label': `${label} tools` }, slots?.toolbar, s, <>

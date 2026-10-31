@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react'
 import { defineWidget, type DefinedProps } from '../widget/defineWidget.js'
 import type { Control, ControlCtx } from '../widget/types.js'
 import { agentNavigate } from '../runtime/nav.js'
-import { AutoOff, flag, headlessOf, invalid, part, type Slots, type SlotProps } from './_parts.js'
+import { AutoOff, flag, headlessOf, invalid, part, type Slots, type SlotProps, softNav } from './_parts.js'
 
 // widgets/pagination.md: <nav aria-label="Pagination"> of real links. Every agent move goes through
 // W8's agentNavigate (same-origin check, real click, settle).
@@ -52,7 +52,7 @@ export function Pagination(props: DefinedProps<PaginationProps, C>) {
   const link = (n: number, slot: SlotProps<S> | undefined, label: string, extra: Record<string, unknown> = {}) => part('a', {
     href: hrefOf(props, n), 'data-page': n, onClick: onPageChange && ((e: MouseEvent) => { void e; onPageChange(n) }), ...extra,
   }, slot, s, label)
-  return part('nav', { ref: w.ref, ...w.props, 'data-tvine-widget': 'pagination', 'aria-label': 'Pagination' }, { className, ...slots?.root }, s, <>
+  return part('nav', { ref: w.ref, ...w.props, 'data-tvine-widget': 'pagination', 'aria-label': 'Pagination', onClick: softNav }, { className, ...slots?.root }, s, <>
     {w.embed}
     <AutoOff>
       {page > 1 ? link(page - 1, slots?.prev, 'Previous', { rel: 'prev' }) : part('span', { 'data-disabled': '' }, slots?.prev, s, 'Previous')}

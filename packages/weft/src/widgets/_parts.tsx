@@ -88,3 +88,18 @@ export async function typeText(ctx: ControlCtx, f: HTMLInputElement | HTMLTextAr
   await ctx.presence.type(f, text)
   if (f.value !== text) setNative(f, text)
 }
+
+// Client navigation for built-in links (#7): a plain same-site left click goes through the App Router
+// (window.next.router, as nav.ts) instead of a document load, so the page, the registry and a WebMCP
+// session survive. Delegated: works on the <a> itself or any ancestor. No router / modifier keys /
+// target / download / off-site / already handled (e.g. Next <Link> asChild) → the browser's default.
+export function softNav(e: { defaultPrevented: boolean; button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; target: EventTarget | null; preventDefault(): void }): void {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+  const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+  const router = (globalThis as { next?: { router?: { push?: (h: string) => void } } }).next?.router
+  if (!a || typeof router?.push !== 'function' || (a.target && a.target !== '_self') || a.hasAttribute('download')) return
+  const u = new URL(a.href, location.href)
+  if (u.origin !== location.origin) return
+  e.preventDefault()
+  router.push(u.pathname + u.search + u.hash)
+}
