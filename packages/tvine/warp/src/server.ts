@@ -1,12 +1,12 @@
 // createAgentServer — the composition root (docs/design/server/server-index.md). The only file allowed
 // to import across layers. Modes: standalone (listen), embedded (handler), API-only (no frontend).
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import type { Duplex } from 'node:stream'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { collect, cookieOf, crossOrigin, dispatch, formResult, rateLimited, serverCtx, type FormResult, type ServerCtx } from './core/dispatch.js'
 import { ev } from './core/events.js'
 import { appModule, importApp, liveManifest, setLiveManifest } from './core/actions.js'
@@ -280,6 +280,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
   const admin = adminBase ? await adminMount(settings, nextRoute) : undefined
+  const shieldPanel = installed.includes('tvine.shield') ? shieldMount(settings) : undefined
   const isDev = settings.debug   // dev-only features need debug on, never just an unset NODE_ENV
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
@@ -345,6 +346,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ...(urls ? [urlsTransport(ctx, urls, { route, tokens, asSession: (v) => internalOf(v, nonce) })] : []),
     httpTransport(ctx, { routes, match: route }),
     ...(admin ? [admin] : []),
+    ...(shieldPanel ? [shieldPanel] : []),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
   // `port`: the one listen() bound, so next dev's lock and log name the real URL (not its default 3000).
@@ -542,6 +544,37 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
     const own = route(p)
     if (own !== undefined && (own === base || own.startsWith(`${base}/`))) return next()
     serve(req, res, next)
+  }
+}
+
+// tvine.shield installed → its panel at settings.shield.panel.path (default /shield), separate from /admin: the HTML shell
+// (CSP nonce) + the prebuilt bundle from tvine/admin's second entry (admin/dist/shield/*) under <path>/_static/. Who may
+// use it is enforced server-side by every shield.* action (login + staffGuard + the panel access condition); the bundle
+// shows the login / 403 pages. No bundle built → a plain "panel not built" page.
+function shieldMount(settings: Settings): Handler {
+  const base = settings.shield.panel.path.replace(/\/$/, '')
+  const dist = fileURLToPath(new URL('../../admin/dist/shield/', import.meta.url))
+  const types: Record<string, string> = { js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', map: 'application/json', svg: 'image/svg+xml', woff2: 'font/woff2' }
+  const esc = (x: string) => x.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+  return (req, res, next) => {
+    const p = pathOf(req)
+    if (p !== base && !p.startsWith(`${base}/`)) return next()
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    const built = existsSync(join(dist, 'shield.js'))
+    if (p.startsWith(`${base}/_static/`)) {
+      const name = p.slice(base.length + 9)
+      const ext = /^[\w.-]+\.(\w+)$/.exec(name)?.[1]
+      if (!built || !ext || !types[ext] || name.includes('..') || !existsSync(join(dist, name))) return void res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
+      return void res.writeHead(200, { 'content-type': types[ext]!, 'cache-control': 'no-cache' }).end(req.method === 'HEAD' ? undefined : readFileSync(join(dist, name)))
+    }
+    const head = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', 'x-robots-tag': 'noindex' }
+    if (!built) return void res.writeHead(200, head).end('<!doctype html><meta charset="utf-8"><title>Shield</title><p>Shield panel not built (packages/tvine/admin: build the shield entry).</p>')
+    const nonce = req.headers['x-nonce'] as string | undefined
+    const n = nonce ? ` nonce="${esc(nonce)}"` : ''
+    const css = existsSync(join(dist, 'shield.css')) ? `<link rel="stylesheet" href="${esc(base)}/_static/shield.css">` : ''
+    res.writeHead(200, head).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
+      `<meta name="robots" content="noindex, nofollow"><title>Shield</title>${css}</head><body class="tva-page"><div id="tva-root" data-base="${esc(base)}" data-prefix="${esc(settings.shield.prefix)}"></div>` +
+      `<script type="module"${n} src="${esc(base)}/_static/shield.js"></script></body></html>`)
   }
 }
 
