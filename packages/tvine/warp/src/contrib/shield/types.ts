@@ -3,8 +3,9 @@
 export type BotCategory = 'search' | 'ai-crawler' | 'ai-agent' | 'monitor' | 'seo' | 'scraper' | 'scanner' | 'automation' | 'browser' | 'unknown'
 export interface Signals {
   ip: string; ipNet: string                       // ipNet = /24 (v4) or /64 (v6) via ipKey
-  country?: string; asn?: number; asnOrg?: string; asnKind?: 'datacenter' | 'residential' | 'mobile' | 'unknown'
+  country?: string; continent?: string; asn?: number; asnOrg?: string; asnKind?: 'datacenter' | 'residential' | 'mobile' | 'unknown'
   tor: boolean
+  local?: boolean                                 // loopback / private / link-local / ULA / CGNAT (no country)
   ua: string; uaFamily?: string                   // e.g. 'chrome', 'firefox', 'safari', 'curl'
   bot: { name?: string; category: BotCategory; verified: boolean; spoofed: boolean; via?: 'rdns' | 'ip-range' | 'web-bot-auth' | 'token' }
   headerScore: number                             // 0..1 consistency (1 = consistent real browser)

@@ -34,6 +34,8 @@ export const ShieldEvent = defineModel('shield_event', {
   ipHash: field.text(),
   ipNet: field.text(),
   country: field.text({ optional: true }),
+  continent: field.text({ optional: true }),
+  local: field.bool({ default: false }),
   asn: field.int({ optional: true }),
   asnOrg: field.text({ optional: true }),
   asnKind: field.text({ optional: true }),
