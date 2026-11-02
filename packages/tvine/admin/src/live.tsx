@@ -53,7 +53,7 @@ export function useLive(group: string | null, onFrame?: (f: LiveFrame) => void):
 
 // One api read kept fresh: reloads on a live frame (debounced ≥ 5 s), polls every 5 s while the stream is offline.
 // A reload keeps the previous data on screen (refetch keeps the frame).
-export function useLiveData<T>(call: Call, id: string, params: unknown, o: { group?: string | null; every?: number; types?: string[] } = {}) {
+export function useLiveData<T>(call: Call, id: string, params: unknown, o: { group?: string | null; every?: number; types?: string[]; minMs?: number } = {}) {
   const [data, setData] = useState<T>()
   const [error, setError] = useState<{ code: string; message: string; reason?: string }>()
   const [loading, setLoading] = useState(true)
@@ -73,7 +73,7 @@ export function useLiveData<T>(call: Call, id: string, params: unknown, o: { gro
   const state = useLive(o.group ?? null, (f) => {
     if (o.types && !o.types.includes(f.type)) return
     if (timer.current) return
-    const wait = Math.max(0, 5000 - (Date.now() - last.current))   // ≥ 5 s between refetches (rate limits)
+    const wait = Math.max(0, (o.minMs ?? 5000) - (Date.now() - last.current))   // ≥ minMs (5 s) between refetches (rate limits)
     timer.current = setTimeout(() => { timer.current = undefined; last.current = Date.now(); void load() }, wait)
   })
   useEffect(() => () => clearTimeout(timer.current), [])

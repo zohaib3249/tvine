@@ -11,7 +11,8 @@ import { BOT_CATEGORIES } from './fields.js'
 import { Ago, FilterBar, Funnel, RangeBar, TopList, WorldMap, countryName, flag, num, pct, useFilters, type FilterState } from './kit.js'
 import type { Analytics as Data, EventPage, EventRow, FilterField, Rule, TopKey } from './types.js'
 
-export const LIVE = { group: 'admin:live', types: ['shield'] }
+// every request Shield sees nudges admin:live: refetch at most every 15 s per widget (stays inside settings.limits.rate, 60/min)
+export const LIVE = { group: 'admin:live', types: ['shield'], minMs: 15_000 }
 // one color per decision, everywhere (stacked bars use the .tvs-dec series order: pass allow log challenge block rateLimit)
 export const DECISION_COLOR: Record<string, string> = { pass: 'var(--tvs-pass)', allow: 'var(--tvs-allow)', log: 'var(--tvs-log)', challenge: 'var(--tvs-challenge)', block: 'var(--tvs-block)', rateLimit: 'var(--tvs-rate)' }
 export const DECISION_LABEL: Record<string, string> = { pass: 'Passed', allow: 'Allowed', log: 'Logged', challenge: 'Challenged', block: 'Blocked', rateLimit: 'Rate limited', custom: 'Custom' }

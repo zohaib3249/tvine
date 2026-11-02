@@ -204,6 +204,9 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       // a block there still applies, except on the panel for a signed-in superuser
       if (decision.action === 'challenge' && exempt(path)) Object.assign(decision, { action: 'pass', reason: `exempt from challenges (${decision.reason})` })
       if (decision.action === 'block' && panelPath(path) && b.userOf && (await b.userOf(req).catch(() => undefined))?.isSuperuser === true) Object.assign(decision, { action: 'pass', reason: `superuser on the panel (${decision.reason})` })
+      // the panel / admin poll their APIs: a signed-in staff user is never rate-limited there (the framework's own
+      // settings.limits.rate still applies to every action)
+      if (decision.action === 'rateLimit' && exempt(path) && b.userOf) { const u = await b.userOf(req).catch(() => undefined); if (u?.isStaff === true || u?.isSuperuser === true) Object.assign(decision, { action: 'pass', reason: `staff on the panel / admin (${decision.reason})` }) }
       req.tvine.shield = { signals: sig, decision }
       record(s, sig, decision, req)
       const enforce = decision.mode === 'enforce'
