@@ -141,16 +141,22 @@ export async function collectSignals(i: SignalInput): Promise<Signals> {
 // L4/L5 sensor (on /verify):           the mean of this score and sensor-score.ts's (its own weights there)
 // Clearance:                           a valid clearance lifts the score to at least the score it was issued with
 export const SCORE_BASE: Record<BotCategory, number> = { browser: 20, unknown: 25, 'ai-agent': 30, monitor: 20, search: 15, seo: 10, scraper: 10, 'ai-crawler': 10, automation: 5, scanner: 1 }
-export function score(s: Signals): number {
-  if (s.bot.spoofed) return 1
-  if (s.bot.verified) return 50
+export function score(s: Signals): number { return scoreParts(s).score }
+// the score with its breakdown (shield.test shows it): each part is one signal and the points it moved the score
+export function scoreParts(s: Signals): { score: number; parts: { signal: string; weight: number }[] } {
+  const parts: { signal: string; weight: number }[] = []
+  const clamp = (n: number) => Math.max(1, Math.min(99, Math.round(n)))
+  if (s.bot.spoofed) return { score: 1, parts: [{ signal: `Spoofed ${s.bot.name ?? 'bot'} (failed verification)`, weight: -98 }] }
+  if (s.bot.verified) return { score: 50, parts: [{ signal: `Verified ${s.bot.name ?? s.bot.category} (${s.bot.via})`, weight: 0 }] }
   let n = s.bot.category === 'browser' ? 20 + 60 * s.headerScore : SCORE_BASE[s.bot.category]
-  if (s.asnKind === 'datacenter') n -= 20
-  else if (s.asnKind === 'residential' || s.asnKind === 'mobile') n += 5
-  if (s.tor) n -= 15
-  if (s.rate.ip > 300) n -= 30
-  else if (s.rate.ip > 120) n -= 15
-  if (s.sensor) n = (n + scoreSensor(s.sensor, s.clearance?.level).score) / 2
-  if (s.clearance?.valid) n = Math.max(n, s.clearance.score)
-  return Math.max(1, Math.min(99, Math.round(n)))
+  parts.push({ signal: s.bot.category === 'browser' ? `Browser, header consistency ${s.headerScore}` : `Category ${s.bot.category}${s.bot.name ? ` (${s.bot.name})` : ''}`, weight: Math.round(n) })
+  const add = (signal: string, w: number) => { n += w; parts.push({ signal, weight: w }) }
+  if (s.asnKind === 'datacenter') add(`Datacenter network${s.asnOrg ? ` (${s.asnOrg})` : ''}`, -20)
+  else if (s.asnKind === 'residential' || s.asnKind === 'mobile') add(`${s.asnKind} network`, 5)
+  if (s.tor) add('Tor exit node', -15)
+  if (s.rate.ip > 300) add(`${s.rate.ip} requests/min from this ip`, -30)
+  else if (s.rate.ip > 120) add(`${s.rate.ip} requests/min from this ip`, -15)
+  if (s.sensor) { const was = n; n = (n + scoreSensor(s.sensor, s.clearance?.level).score) / 2; parts.push({ signal: 'Browser sensor (L4/L5)', weight: Math.round(n - was) }) }
+  if (s.clearance?.valid && s.clearance.score > n) { parts.push({ signal: `Valid clearance (${s.clearance.level})`, weight: Math.round(s.clearance.score - n) }); n = s.clearance.score }
+  return { score: clamp(n), parts }
 }

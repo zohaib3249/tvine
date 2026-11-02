@@ -1,5 +1,5 @@
 'use client'
-import { createContext, createElement, useContext, type ComponentProps, type ComponentType, type ReactNode } from 'react'
+import { createContext, createElement, useContext, useEffect, useState, type ComponentProps, type ComponentType, type ReactNode } from 'react'
 import { useWidget } from '../../weft/dist/index.js'
 import type { ApiResult } from '../../weft/dist/api/client.js'
 import type { Call } from './data.js'
@@ -98,3 +98,15 @@ export const fmt = (r: ApiResult<unknown>) => (r.ok ? '' : r.message)
 // A <form> that is NOT an agent scope (plain JSX <form> scopes its fields as `form:… > input:…`); its fields and
 // buttons still register under the surrounding region.
 export const PlainForm = (p: ComponentProps<'form'>) => createElement('form', p)
+
+// light/dark/auto, remembered per browser ('tva:theme', shared by /admin and /shield); `dark` = the site's default
+export function useTheme(dark?: 'auto' | 'on' | 'off'): ['auto' | 'dark' | 'light', () => void] {
+  const [theme, setTheme] = useState<'auto' | 'dark' | 'light'>(dark === 'on' ? 'dark' : dark === 'off' ? 'light' : 'auto')
+  useEffect(() => { try { const t = localStorage.getItem('tva:theme'); if (t === 'dark' || t === 'light') setTheme(t) } catch { /* */ } }, [])
+  const toggle = () => {
+    const isDark = theme === 'dark' || (theme === 'auto' && matchMedia?.('(prefers-color-scheme: dark)').matches)
+    const t = isDark ? 'light' : 'dark'
+    setTheme(t); try { localStorage.setItem('tva:theme', t) } catch { /* */ }
+  }
+  return [theme, toggle]
+}
