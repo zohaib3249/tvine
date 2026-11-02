@@ -10,12 +10,12 @@ import { staffGuard } from '../admin/hardening.js'
 import { conditionProblem, evaluate } from './conditions.js'
 import { botCatalog, ipdb, rangesStatus } from './data.js'
 import { botRule, botRuleId, customRules, decide, runtimeOf, state, LEVELS } from './engine.js'
-import { ShieldEvent, ShieldList, ShieldRule } from './models.js'
+import { ShieldConfig, ShieldEvent, ShieldList, ShieldRule } from './models.js'
 import { collectSignals, scoreParts } from './signals.js'
 import { changed, ruleProblem, saveConfig, toRule } from './store.js'
-import { updateIpdb } from './tasks.js'
+import { pruneEvents, updateIpdb } from './tasks.js'
 import type { BotCategory, Condition } from './types.js'
-import { ipHash } from './events.js'
+import { counters, ipHash } from './events.js'
 
 // the user row the access condition sees: the user's own fields + groups (names)
 export async function userRow(u: TvineUser): Promise<Record<string, unknown>> {
@@ -65,7 +65,9 @@ export const overview = defineAction('shield.overview', z.object({ range: z.enum
   const now = Date.now()
   const get = async (key: string, from: number, to: number) => (await statRows(key, { from: new Date(from).toISOString(), to: new Date(to).toISOString() })).rows as StatRow[]
   const main = await get('shield', now - span, now), prev = await get('shield', now - 2 * span, now - span)
-  const step = range === '1h' ? 60_000 : range === '24h' ? 3_600_000 : 86_400_000
+  // display bucket: the configured stats.bucket, coarsened so a range shows at most ~200 points
+  const BUCKET = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '1d': 86_400_000 } as const
+  const step = [60_000, 300_000, 900_000, 3_600_000, 86_400_000].find((b) => b >= BUCKET[runtimeOf(ctx.settings).stats.bucket] && span / b <= 200) ?? 86_400_000
   const buckets = new Map<number, number[]>()
   for (const r of main) {
     const x = Math.floor(+new Date(r.bucket) / step) * step
@@ -233,11 +235,15 @@ async function userFields(): Promise<{ name: string; type: string }[]> {
 // ---- settings + ipdb --------------------------------------------------------------------------------------------------
 export const settingsGet = defineAction('shield.settings.get', z.object({}), async (_p, ctx) => {
   const rt = runtimeOf(ctx.settings)
-  return { mode: rt.mode, clearanceTtl: rt.clearanceTtl, levels: rt.levels, access: rt.access, userFields: await userFields(), aiDefaults: rt.aiDefaults, prefix: ctx.settings.shield.prefix, panelPath: ctx.settings.shield.panel.path }
+  return { mode: rt.mode, clearanceTtl: rt.clearanceTtl, levels: rt.levels, access: rt.access, userFields: await userFields(), aiDefaults: rt.aiDefaults, prefix: ctx.settings.shield.prefix, panelPath: ctx.settings.shield.panel.path,
+    events: rt.events, stats: rt.stats, cleanup: rt.cleanup, dropped: counters.dropped }
 }, read)
 export const settingsSave = defineAction('shield.settings.save', z.object({
   mode: z.enum(['off', 'log', 'enforce']).optional(), clearanceTtl: z.string().regex(/^\d+[smhd]$/).optional(),
   levels: z.array(z.enum(LEVELS as ['pow', 'checkbox', 'captcha'])).min(1).optional(), access: z.unknown().optional(),
+  events: z.object({ logAll: z.boolean(), samplePass: z.number().min(0).max(1), maxPerMinute: z.number().int().min(0).max(1_000_000), hardCapPerMinute: z.number().int().min(0).max(10_000_000), retentionDays: z.number().int().min(1).max(3650), storeIp: z.boolean() }).partial().strict().optional(),
+  stats: z.object({ bucket: z.enum(['1m', '5m', '15m', '1h', '1d']), retentionDays: z.number().int().min(1).max(3650) }).partial().strict().optional(),
+  cleanup: z.object({ enabled: z.boolean() }).partial().strict().optional(),
 }), async (p, ctx) => {
   if (p.access !== undefined) {
     const problem = conditionProblem(p.access)
@@ -245,7 +251,10 @@ export const settingsSave = defineAction('shield.settings.save', z.object({
     // never lock yourself out: the saving user must still pass the new condition
     if (!evaluate(p.access as Condition, await userRow(ctx.request.user))) throw bad('access: this condition would lock you out of the panel', 'access')
   }
-  await saveConfig(Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)))
+  const { events: ev, stats, cleanup, ...rest } = p
+  const cur = (await ShieldConfig.objects.order('id').first() as { options?: Record<string, object> } | undefined)?.options ?? {}   // scope: ok
+  const options = { events: { ...cur.events, ...ev }, stats: { ...cur.stats, ...stats }, cleanup: { ...cur.cleanup, ...cleanup } }
+  await saveConfig({ ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)), ...((ev || stats || cleanup) && { options }) })
   await changed(ctx.settings)
   return settingsGet.run({}, ctx as ActionCtx)
 }, write)
@@ -260,3 +269,10 @@ export const ipdbStatus = defineAction('shield.ipdb.status', z.object({}), async
 export const ipdbUpdateNow = defineAction('shield.ipdb.update', z.object({}), async (_p, ctx) => {
   try { return { started: true, ...(await updateIpdb(ctx.settings.shield.ipdb.dir)) } } catch (e) { throw new DomainError('ipdb_update_failed', (e as Error).message.slice(0, 300)) }
 }, write)
+
+// "Delete events older than <date> / now": superuser only (on top of the panel access), audited (a write), batched
+const superuser: Permission = (ctx) => { if (ctx.user.isSuperuser !== true) throw new DomainError('forbidden', 'forbidden: deleting events needs a superuser'); return true }
+export const eventsPurge = defineAction('shield.events.purge', z.object({ before: z.string().datetime({ offset: true }).optional() }), async ({ before }) => {
+  const cut = before ? +new Date(before) : Date.now() + 1000
+  return { deleted: await pruneEvents((Date.now() - cut) / 86_400_000) }
+}, { permissions: [access, superuser], mcp: false })

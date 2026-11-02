@@ -378,5 +378,8 @@ export interface ShieldSettings {
   sensor: 'challenge' | 'all-pages'
   // ShieldEvent rows: every non-pass decision + samplePass (0..1) of passes, at most maxPerMinute per process (the rest
   // counted as dropped), written in batches; storeIp false = only the ip hash + its /24
-  events: { samplePass: number; maxPerMinute: number; retentionDays: number; storeIp: boolean }
+  // logAll: a row for EVERY request (passes too; samplePass / maxPerMinute then don't apply, hardCapPerMinute still does)
+  events: { samplePass: number; maxPerMinute: number; retentionDays: number; storeIp: boolean; logAll: boolean; hardCapPerMinute: number }
+  stats: { bucket: '1m' | '5m' | '15m' | '1h' | '1d'; retentionDays: number }   // chart bucket + how long shield rollups are kept
+  cleanup: { enabled: boolean; schedule: string }  // the events / rollups prune task (cron)
 }

@@ -26,7 +26,9 @@ export function runtimeFrom(settings: Settings, c: Record<string, unknown> | und
   const mode = c?.mode === 'off' || c?.mode === 'log' || c?.mode === 'enforce' ? c.mode : s.mode
   const levels = Array.isArray(c?.levels) ? (c.levels as string[]).filter((l): l is ChallengeLevel => (LEVELS as string[]).includes(l)) : LEVELS
   const access = c?.access && !conditionProblem(c.access) ? c.access as Condition : s.panel.access as Condition
-  return { mode, clearanceTtl: typeof c?.clearanceTtl === 'string' ? c.clearanceTtl : s.clearance.ttl, levels: levels.length ? levels : LEVELS, aiDefaults: { ...s.aiDefaults, ...(c?.aiDefaults as object | undefined) }, access }
+  const o = (c?.options ?? {}) as { events?: object; stats?: object; cleanup?: object }
+  return { mode, clearanceTtl: typeof c?.clearanceTtl === 'string' ? c.clearanceTtl : s.clearance.ttl, levels: levels.length ? levels : LEVELS, aiDefaults: { ...s.aiDefaults, ...(c?.aiDefaults as object | undefined) }, access,
+    events: { ...s.events, ...o.events }, stats: { ...s.stats, ...o.stats }, cleanup: { ...s.cleanup, ...o.cleanup } }
 }
 export async function seedDefaults(settings: Settings): Promise<void> {
   const ai = runtimeFrom(settings, configRow).aiDefaults

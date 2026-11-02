@@ -11,6 +11,7 @@ import { getLogger } from '../../log.js'
 import { secretKeys } from '../../security/signing.js'
 import { ShieldEvent } from './models.js'
 import { countHit } from './store.js'
+import { runtimeOf } from './engine.js'
 import type { Decision, Signals } from './types.js'
 
 export const ipHash = (ip: string) => createHmac('sha256', secretKeys()[0] ?? '').update(`shield:${ip}`).digest('hex').slice(0, 24)
@@ -33,11 +34,11 @@ export function record(settings: Settings, s: Signals, d: Decision, _req: unknow
       securityEvent(`shield_${decision.replace(/-/g, '_')}`, { ip: s.ip, path: s.path, ray: d.ray, rule: d.ruleId ?? null, bot: s.bot.name ?? s.bot.category, score: s.score, mode: d.mode, reason: d.reason.slice(0, 200) }, { settings, audit: false, level: 'info' })
     }
   }
-  const ev = settings.shield.events
-  if (!notable && Math.random() >= ev.samplePass) return
+  const ev = runtimeOf(settings).events
+  if (!ev.logAll && !notable && Math.random() >= ev.samplePass) return
   const m = Math.floor(Date.now() / 60_000)
   if (m !== minute) { minute = m; inMinute = 0 }
-  if (inMinute >= ev.maxPerMinute) { counters.dropped++; return }
+  if (inMinute >= (ev.logAll ? ev.hardCapPerMinute : Math.min(ev.maxPerMinute, ev.hardCapPerMinute))) { counters.dropped++; return }
   inMinute++
   queue.push(eventRow(s, d, decision, ev.storeIp, o))
   if (queue.length >= 200) void flushEvents()

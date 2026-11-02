@@ -52,7 +52,8 @@ export function defaultRules(ai: Settings['shield']['aiDefaults']): Rule[] {
 
 // ---- the live snapshot ------------------------------------------------------------------------------------------------
 export interface ListRow { kind: 'ip' | 'cidr' | 'country' | 'asn'; value: string; list: 'allow' | 'deny' }
-export interface Runtime { mode: 'off' | 'log' | 'enforce'; clearanceTtl: string; levels: ChallengeLevel[]; aiDefaults: Settings['shield']['aiDefaults']; access: Condition }
+type SS = Settings['shield']
+export interface Runtime { mode: 'off' | 'log' | 'enforce'; clearanceTtl: string; levels: ChallengeLevel[]; aiDefaults: SS['aiDefaults']; access: Condition; events: SS['events']; stats: SS['stats']; cleanup: SS['cleanup'] }
 interface Lists { ips: { allow: ReturnType<typeof blockList>; deny: ReturnType<typeof blockList> }; countries: Map<string, 'allow' | 'deny'>; asns: Map<number, 'allow' | 'deny'> }
 export const state = {
   rules: [] as Rule[],
@@ -70,7 +71,7 @@ export function setLists(rows: ListRow[]): void {
     asns: new Map(rows.filter((r) => r.kind === 'asn').map((r) => [Number(String(r.value).replace(/^AS/i, '')), r.list])),
   }
 }
-export const runtimeOf = (s: Settings): Runtime => state.runtime ?? { mode: s.shield.mode, clearanceTtl: s.shield.clearance.ttl, levels: LEVELS, aiDefaults: s.shield.aiDefaults, access: s.shield.panel.access as Condition }
+export const runtimeOf = (s: Settings): Runtime => state.runtime ?? { mode: s.shield.mode, clearanceTtl: s.shield.clearance.ttl, levels: LEVELS, aiDefaults: s.shield.aiDefaults, access: s.shield.panel.access as Condition, events: s.shield.events, stats: s.shield.stats, cleanup: s.shield.cleanup }
 
 // lists run before the rules: deny (ip/cidr, then country, then asn) blocks, allow passes
 export function listVerdict(s: Signals): { list: 'allow' | 'deny'; via: string } | undefined {

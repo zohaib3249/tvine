@@ -68,5 +68,6 @@ export const ShieldConfig = defineModel('shield_config', {
   levels: field.json({ optional: true }),
   aiDefaults: field.json({ optional: true }),
   access: field.json({ optional: true }),
+  options: field.json({ optional: true }),   // events / stats / cleanup overrides (panel Settings)
   version: field.int({ default: 0 }),
 })

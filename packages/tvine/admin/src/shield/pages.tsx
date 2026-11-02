@@ -391,7 +391,7 @@ export function Settings() {
   const dirty = JSON.stringify(s) !== JSON.stringify(settings)
   const save = async () => {
     setBusy(true)
-    const r = await write<ShieldSettings>(call, 'shield.settings.save', { mode: s.mode, clearanceTtl: s.clearanceTtl, levels: s.levels, access: s.access }, 'Settings saved')
+    const r = await write<ShieldSettings>(call, 'shield.settings.save', { mode: s.mode, clearanceTtl: s.clearanceTtl, levels: s.levels, access: s.access, ...(s.events && { events: { logAll: s.events.logAll, retentionDays: s.events.retentionDays } }), ...(s.stats && { stats: s.stats }), ...(s.cleanup && { cleanup: { enabled: s.cleanup.enabled } }) }, 'Settings saved')
     setBusy(false)
     if (r) setSettings(typeof r === 'object' ? { ...s, ...r } : s)
   }
@@ -438,9 +438,62 @@ export function Settings() {
           <ConditionBuilder label="Panel access condition" value={s.access} fields={fields} onChange={(access) => setS({ ...s, access })} />
           <p className="mt-3 flex items-start gap-2 text-xs text-muted"><Icon name="alert" size={14} />Make sure you ({user.username}) still match, or you will lock yourself out. A superuser can always reset it with <code className="tva-kbd">tvine shell</code>.</p>
         </section>
+        {s.events && s.stats && s.cleanup && <DataCard s={s} setS={setS} call={call} />}
         <IpdbCard ipdb={ipdb.data} error={ipdb.error} updating={updating} onUpdate={async () => { setUpdating(true); await write(call, 'shield.ipdb.update', {}, 'Update started'); setUpdating(false); void ipdb.reload() }} />
       </div>
     </Region>
+  )
+}
+// events + rollups: what is kept, for how long, and a manual purge (superuser; the action re-checks)
+function DataCard({ s, setS, call }: { s: ShieldSettings; setS(v: ShieldSettings): void; call: Call }) {
+  const ev = s.events!, st = s.stats!, cl = s.cleanup!
+  const [before, setBefore] = useState(''), [purging, setPurging] = useState(false)
+  const num = (v: string) => Math.max(1, Math.round(Number(v) || 1))
+  const purge = async () => {
+    const when = before ? `older than ${before}` : 'ALL events (up to now)'
+    if (!window.confirm(`Delete ${when}? This cannot be undone.`)) return
+    setPurging(true)
+    await write(call, 'shield.events.purge', before ? { before: new Date(before).toISOString() } : {}, 'Events deleted')
+    setPurging(false)
+  }
+  return (
+    <section className="tva-card p-4 xl:col-span-2">
+      <h2 className="mb-3 font-semibold">Data and cleanup</h2>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex flex-col gap-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" agentId="log-all" className="tva-check mt-0.5" checked={ev.logAll} onChange={(e) => setS({ ...s, events: { ...ev, logAll: e.target.checked } })} />
+            <span><strong className="font-medium">Save every request</strong><span className="block text-muted">Off: only challenges, blocks and a 1% sample of passes are saved.</span></span>
+          </label>
+          {ev.logAll && <p role="alert" className="flex items-start gap-2 rounded-md bg-warn/10 p-3 text-sm text-warn"><Icon name="alert" size={16} />Every request becomes a database row (up to {ev.hardCapPerMinute.toLocaleString()} a minute per server). Expect a large table on busy sites.</p>}
+          <label className={cx(label, 'max-w-xs')}>Keep events for (days)
+            <input agentId="events-retention" type="number" min={1} className="tva-input" value={ev.retentionDays} onChange={(e) => setS({ ...s, events: { ...ev, retentionDays: num(e.target.value) } })} />
+          </label>
+          <label className={cx(label, 'max-w-xs')}>Keep chart data for (days)
+            <input agentId="stats-retention" type="number" min={1} className="tva-input" value={st.retentionDays} onChange={(e) => setS({ ...s, stats: { ...st, retentionDays: num(e.target.value) } })} />
+          </label>
+        </div>
+        <div className="flex flex-col gap-3">
+          <label className={cx(label, 'max-w-xs')}>Chart bucket
+            <select agentId="stats-bucket" className="tva-input" value={st.bucket} onChange={(e) => setS({ ...s, stats: { ...st, bucket: e.target.value as typeof st.bucket } })}>
+              {(['1m', '5m', '15m', '1h', '1d'] as const).map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+            <span className="text-xs font-normal text-muted">Changing it affects new data only.</span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" agentId="cleanup-enabled" className="tva-check mt-0.5" checked={cl.enabled} onChange={(e) => setS({ ...s, cleanup: { ...cl, enabled: e.target.checked } })} />
+            <span><strong className="font-medium">Clean up old data automatically</strong><span className="block text-muted">Runs on schedule {cl.schedule ?? 'daily'} (needs tvine.tasks and a beat).</span></span>
+          </label>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className={label}>Delete events older than
+              <input agentId="purge-before" type="date" className="tva-input" value={before} onChange={(e) => setBefore(e.target.value)} />
+            </label>
+            <button type="button" agentId="purge" className="tva-btn tva-btn-danger-solid" disabled={purging} onClick={() => void purge()}>{purging ? 'Deleting…' : before ? 'Delete' : 'Delete all now'}</button>
+          </div>
+          {!!s.dropped && <p className="text-xs text-muted">{s.dropped.toLocaleString()} events skipped by the per-minute cap since this server started.</p>}
+        </div>
+      </div>
+    </section>
   )
 }
 function IpdbCard({ ipdb, error, updating, onUpdate }: { ipdb?: IpdbStatus; error?: { code: string; message: string }; updating: boolean; onUpdate(): void }) {

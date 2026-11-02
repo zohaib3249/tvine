@@ -8,6 +8,7 @@ import { safeFetch } from '../../security/safe-fetch.js'
 import type { Settings } from '../../core/types.js'
 import { ASN_FILE, COUNTRY_FILE, loadIpdb, rangesSeed, setRanges, type RangesFile } from './data.js'
 import { ShieldEvent } from './models.js'
+import { runtimeOf } from './engine.js'
 
 type Fetcher = (url: string, maxBytes: number) => Promise<Response>
 const fetcher: Fetcher = (url, maxBytes) => safeFetch(url, { timeoutMs: 120_000, maxBytes, maxRedirects: 3 })
@@ -63,4 +64,24 @@ export async function pruneEvents(days = conf()?.events.retentionDays ?? 14, now
 
 export const ipdbUpdate = defineTask('ipdb_update', async () => updateIpdb(), { schedule: { cron: '0 4 3 * *' } })
 export const rangesUpdate = defineTask('ranges_update', async () => updateRanges(), { schedule: { cron: '30 4 * * *' } })
-export const eventsPrune = defineTask('events_prune', async () => ({ deleted: await pruneEvents() }), { schedule: { cron: '0 3 * * *' } })
+// shield rollups (admin_stat keys shield*) older than stats.retentionDays, batched
+export async function pruneStats(days: number, now = Date.now(), batch = 5000): Promise<number> {
+  const s = loadedSettings() as Settings | undefined
+  if (!s?.installedApps.includes('tvine.admin')) return 0
+  const { AdminStat } = await import('../admin/models.js')
+  const old = AdminStat.objects.filter({ key__in: ['shield', 'shield_score', 'shield_country', 'shield_asn', 'shield_rule'], bucket__lt: new Date(now - days * 86_400_000) })
+  let n = 0
+  for (;;) {
+    const ids = await old.order('id').limit(batch).valuesList('id', { flat: true }).all() as number[]
+    if (!ids.length) return n
+    n += await AdminStat.objects.filter({ id__in: ids }).delete()
+  }
+}
+// the cron is read once when tasks load (settings.shield.cleanup.schedule); cleanup.enabled / retention are read each run
+export const cleanup = defineTask('cleanup', async () => {
+  const s = loadedSettings() as Settings | undefined
+  if (!s) return { skipped: true }
+  const rt = runtimeOf(s)
+  if (!rt.cleanup.enabled) return { skipped: true }
+  return { events: await pruneEvents(rt.events.retentionDays), stats: await pruneStats(rt.stats.retentionDays) }
+}, { schedule: { cron: conf()?.cleanup.schedule ?? '30 3 * * *' } })

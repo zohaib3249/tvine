@@ -76,7 +76,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     mode: 'log', prefix: '/tvine/shield', clearance: { ttl: '30m' }, ipdb: { source: 'dbip-lite', dir: './data/shield', update: 'monthly' },
     aiDefaults: { agents: 'allow', crawlers: 'challenge', search: 'allow' },
     panel: { path: '/shield', access: { all: [{ field: 'isSuperuser', op: 'eq', value: true }] } },
-    sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true },
+    sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true, logAll: false, hardCapPerMinute: 20_000 },
+    stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' },
   },
   security: {
     headers: {
@@ -187,7 +188,9 @@ const schema: z.ZodType<Settings> = z.object({
     aiDefaults: z.object({ agents: shieldStance, crawlers: shieldStance, search: shieldStance }).strict(),
     panel: z.object({ path: z.string().regex(/^\/[\w\-/]*[\w-]$/, 'a path starting with / (no trailing /)'), access: z.record(z.string(), z.unknown()) }).strict(),   // a Condition: checked in full by tvine.shield ready()
     sensor: z.enum(['challenge', 'all-pages']),
-    events: z.object({ samplePass: z.number().min(0).max(1), maxPerMinute: z.number().int().min(0).max(1_000_000), retentionDays: z.number().int().positive(), storeIp: z.boolean() }).strict(),
+    events: z.object({ samplePass: z.number().min(0).max(1), maxPerMinute: z.number().int().min(0).max(1_000_000), retentionDays: z.number().int().positive(), storeIp: z.boolean(), logAll: z.boolean(), hardCapPerMinute: z.number().int().min(0).max(10_000_000) }).strict(),
+    stats: z.object({ bucket: z.enum(['1m', '5m', '15m', '1h', '1d']), retentionDays: z.number().int().positive() }).strict(),
+    cleanup: z.object({ enabled: z.boolean(), schedule: z.string().regex(/^\S+( \S+){4}$/, 'a 5-field cron') }).strict(),
   }).strict(),
   security: z.object({
     headers: z.object({

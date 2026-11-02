@@ -66,6 +66,7 @@ export default migration({
       levels: field.json({ optional: true }),
       aiDefaults: field.json({ optional: true }),
       access: field.json({ optional: true }),
+      options: field.json({ optional: true }),
       version: field.int({ default: 0 }),
     }),
   ],
