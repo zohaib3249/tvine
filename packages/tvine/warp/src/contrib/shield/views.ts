@@ -235,10 +235,10 @@ export const analytics = defineAction('shield.analytics', z.object({ range: z.en
     previous = sum(await rollups('shield', prevFrom, w.from, false))
     hist = Array(10).fill(0) as number[]
     for (const r of await rollups('shield_score', w.from, w.to, minute)) hist[Math.min(9, Number(r.dims.b) || 0)]! += r.count
-    // the country / asn / rule rollups carry the decision but not the mode (a log-mode block counts as mitigated)
-    for (const [k, key, dim] of [['countries', 'shield_country', 'g'], ['asns', 'shield_asn', 'a'], ['rules', 'shield_rule', 'r']] as const)
-      for (const r of await rollups(key, w.from, w.to, minute)) bump(roll[k], r.dims[dim], r.count, MIT.has(r.dims.d ?? ''))
-    tally = { ...ev.tally, countries: roll.countries, asns: roll.asns, rules: roll.rules, botCategories: roll.botCategories }
+    // the rule rollup has the decision but not the mode (a log-mode block counts as mitigated). Countries / asns stay on
+    // the weighted events: their rollups only hold the notable decisions, so a map of all requests needs the passes
+    for (const r of await rollups('shield_rule', w.from, w.to, minute)) bump(roll.rules, r.dims.r, r.count, MIT.has(r.dims.d ?? ''))
+    tally = { ...ev.tally, rules: roll.rules, botCategories: roll.botCategories }
   }
   const names = new Map(state.rules.map((r) => [r.id, r.name]))
   const top = Object.fromEntries((Object.keys(TOPS) as TopName[]).map((k) => [k,
