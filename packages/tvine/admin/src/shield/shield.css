@@ -60,6 +60,7 @@
   /* feed, events, test */
   .tvs-feed-row { display: grid; grid-template-columns: 5.5rem 6.5rem minmax(0, 1fr) minmax(0, 14rem) 2.5rem; gap: .75rem; align-items: center; width: 100%; padding: .35rem 1rem; border-top: 1px solid var(--tva-line); text-align: left; }
   .tvs-feed-row:hover { background: var(--tva-sunken); }
+  .tvs-feed-row > .tvs-decision { justify-self: start; }
   .tvs-feed-row.is-new { animation: tva-flash 1.2s ease-out; }
   @media (max-width: 639px) { .tvs-feed-row { grid-template-columns: 4.6rem 5.8rem minmax(0, 1fr) 2rem; } }
   .tvs-kv { display: grid; gap: 0; border: 1px solid var(--tva-line); border-radius: var(--tva-radius); overflow: hidden; }
