@@ -39,8 +39,9 @@ progress::-moz-progress-bar { background: var(--accent); }
 .check input { width: 24px; height: 24px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .prompt { font-weight: 600; margin: 0 0 10px; }
 .grid { position: relative; width: 100%; max-width: 316px; aspect-ratio: 1; margin: 0 auto; }
-.image, .image svg, .tiles { position: absolute; inset: 0; width: 100%; height: 100%; }
-.image svg { border-radius: 8px; }
+.image, .image img, .tiles { position: absolute; inset: 0; width: 100%; height: 100%; }
+.image img { border-radius: 8px; }
+.text img { width: 220px; max-width: 100%; height: auto; border-radius: 6px; }
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.3%; padding: 1.3%; }
 .tiles button {
   background: transparent; border: 3px solid transparent; border-radius: 6px; cursor: pointer; padding: 0;

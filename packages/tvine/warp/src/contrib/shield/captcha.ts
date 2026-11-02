@@ -1,19 +1,20 @@
 // Shield image captcha (last-resort challenge level). No third party, no deps.
-// A 3x3 grid of procedurally drawn shapes; the user picks every tile showing the target kind.
-// Every shape (and every decoy) is the same kind of SVG node: a <path> resampled to the same number of
-// jittered points, rotated, scaled and colour-jittered, so the source carries no class/id/element hint.
-// A text question is issued alongside for screen-reader users (`question`); either answer passes.
+// Two server-rendered RASTER PNGs (encoded here with zlib), so the client never gets vectors, text or numbers to parse:
+//  - a 3x3 grid of procedurally drawn shapes; the user picks every tile showing the target kind. Shapes are jittered,
+//    rotated, filled/outlined in random colours over noisy tiles, crossed by scribbles, then pixel-noised, sine-warped, blurred.
+//  - an arithmetic task ("7 + 5 = ?") drawn glyph by glyph from stroke polylines, each glyph randomly scaled/rotated/moved,
+//    with noise dots, crossing lines, warp and blur. There is no plain-text alternative: no answer-revealing text reaches
+//    the client. Either answer passes; a scripted (OCR / vision) solve still also costs the PoW + attempt limits.
 // Answers are kept only as HMACs (key derived from settings.secret) in the shield claim store (claims.ts: no eviction;
 // redis across servers), read-and-deleted on the first check (single-use), 2-minute expiry.
-// The text question is not arithmetic: a word task with varied phrasing (large answer space). It is still scriptable by
-// design (accessibility); what makes a scripted solve cost is the PoW the captcha level also requires + attempt limits.
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { crc32, deflateSync } from 'node:zlib'
 import { claims } from './claims.js'
 import { loadedSettings } from '../../security/signing.js'
 import type { Settings } from '../../core/types.js'
 import { secretKeys } from '../../security/signing.js'
 
-export interface Captcha { id: string; svg: string; prompt: string; question: string; answerHash: string }
+export interface Captcha { id: string; image: string; prompt: string; mathImage: string; answerHash: string }
 
 const TTL_MS = 2 * 60_000
 const key = () => createHmac('sha256', secretKeys()[0]!).update('tvine.shield.captcha').digest()
@@ -26,7 +27,6 @@ const TILE = 100, GAP = 4, SIZE = TILE * 3 + GAP * 4
 
 const mac = (id: string, answer: string) => createHmac('sha256', key()).update(`${id}\n${answer}`).digest()
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
-const f = (n: number) => n.toFixed(1)
 
 /** Vertices of the unit outline (radius 1, centred at 0,0). */
 function vertices(kind: Kind): [number, number][] {
@@ -44,7 +44,7 @@ function resample(v: [number, number][]): [number, number][] {
   const seg = v.map((p, i) => { const q = v[(i + 1) % v.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) })
   const total = seg.reduce((a, b) => a + b, 0)
   const out: [number, number][] = []
-  const start = Math.random() * total       // random start point: the first M is not a vertex
+  const start = Math.random() * total       // random start point: the outline does not start on a vertex
   for (let k = 0; k < N; k++) {
     let d = (start + (k / N) * total) % total, i = 0
     while (d > seg[i]) { d -= seg[i]; i++ }
@@ -54,22 +54,133 @@ function resample(v: [number, number][]): [number, number][] {
   return out
 }
 
-function shapePath(kind: Kind, cx: number, cy: number): string {
+// ── raster: an RGB buffer drawn into with discs / scanline fills, then noised, warped, blurred, PNG-encoded ──
+type RGB = [number, number, number]
+interface Img { w: number; h: number; px: Buffer }
+function image(w: number, h: number, bg: RGB): Img {
+  const px = Buffer.alloc(w * h * 3)
+  for (let i = 0; i < px.length; i += 3) px.set(bg, i)
+  return { w, h, px }
+}
+const clamp = (n: number) => (n < 0 ? 0 : n > 255 ? 255 : n)
+
+function hsl(h: number, s: number, l: number): RGB {
+  h = ((h % 360) + 360) % 360; s /= 100; l /= 100
+  const k = (n: number) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l)
+  return [0, 8, 4].map((n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))))) as RGB
+}
+
+function plot(m: Img, x: number, y: number, c: RGB, alpha = 1) {
+  x = Math.round(x); y = Math.round(y)
+  if (x < 0 || y < 0 || x >= m.w || y >= m.h) return
+  const i = (y * m.w + x) * 3
+  for (let k = 0; k < 3; k++) m.px[i + k] = Math.round(m.px[i + k] * (1 - alpha) + c[k] * alpha)
+}
+
+/** A thick polyline: discs of radius r stamped every half pixel (each pixel blended once). */
+function stroke(m: Img, pts: [number, number][], r: number, c: RGB, alpha = 1) {
+  const done = new Set<number>(), R = Math.ceil(r)
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2))
+    for (let t = 0; t <= n; t++) {
+      const cx = x0 + ((x1 - x0) * t) / n, cy = y0 + ((y1 - y0) * t) / n
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        if (dx * dx + dy * dy > r * r) continue
+        const x = Math.round(cx + dx), y = Math.round(cy + dy), id = y * m.w + x
+        if (x < 0 || x >= m.w || done.has(id)) continue
+        done.add(id); plot(m, x, y, c, alpha)
+      }
+    }
+  }
+}
+
+/** Filled polygon, scanline even-odd rule. */
+function fill(m: Img, pts: [number, number][], c: RGB) {
+  for (let y = 0; y < m.h; y++) {
+    const sy = y + 0.5, xs: number[] = []
+    pts.forEach(([x0, y0], i) => {
+      const [x1, y1] = pts[(i + 1) % pts.length]
+      if ((y0 <= sy) !== (y1 <= sy)) xs.push(x0 + ((sy - y0) / (y1 - y0)) * (x1 - x0))
+    })
+    xs.sort((a, b) => a - b)
+    for (let k = 0; k + 1 < xs.length; k += 2) for (let x = Math.ceil(xs[k] - 0.5); x < xs[k + 1] - 0.5; x++) plot(m, x, y, c)
+  }
+}
+
+function noise(m: Img, amp: number) {
+  for (let i = 0; i < m.px.length; i++) m.px[i] = clamp(m.px[i] + Math.round(rnd(-amp, amp)))
+}
+
+/** Sine-wave warp: every pixel is displaced by up to `amp` px along both axes. */
+function warp(m: Img, amp: number) {
+  const src = Buffer.from(m.px), ph = [rnd(0, 7), rnd(0, 7)], wl = [rnd(14, 26), rnd(14, 26)]
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    const sx = Math.min(m.w - 1, Math.max(0, Math.round(x + amp * Math.sin(y / wl[0] + ph[0]))))
+    const sy = Math.min(m.h - 1, Math.max(0, Math.round(y + amp * Math.sin(x / wl[1] + ph[1]))))
+    src.copy(m.px, (y * m.w + x) * 3, (sy * m.w + sx) * 3, (sy * m.w + sx) * 3 + 3)
+  }
+}
+
+/** 3x3 box blur (radius 1). */
+function blur(m: Img) {
+  const src = Buffer.from(m.px)
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) for (let k = 0; k < 3; k++) {
+    let sum = 0, n = 0
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy
+      if (xx >= 0 && yy >= 0 && xx < m.w && yy < m.h) { sum += src[(yy * m.w + xx) * 3 + k]; n++ }
+    }
+    m.px[(y * m.w + x) * 3 + k] = Math.round(sum / n)
+  }
+}
+
+function png(m: Img): string {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]), out = Buffer.alloc(body.length + 8)
+    out.writeUInt32BE(data.length, 0); body.copy(out, 4); out.writeUInt32BE(crc32(body), body.length + 4)
+    return out
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(m.w, 0); ihdr.writeUInt32BE(m.h, 4); ihdr[8] = 8; ihdr[9] = 2   // 8-bit truecolour RGB, no interlace
+  const row = m.w * 3, raw = Buffer.alloc((row + 1) * m.h)                          // filter byte 0 at the start of each row
+  for (let y = 0; y < m.h; y++) m.px.copy(raw, y * (row + 1) + 1, y * row, (y + 1) * row)
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  return 'data:image/png;base64,' + Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64')
+}
+
+// ── grid puzzle ──
+function shapePoints(kind: Kind, cx: number, cy: number): [number, number][] {
   const r = rnd(26, 36), rot = rnd(0, 2 * Math.PI), c = Math.cos(rot), s = Math.sin(rot)
   cx += rnd(-6, 6); cy += rnd(-6, 6)
-  const pts = resample(vertices(kind)).map(([x, y]) => {
+  return resample(vertices(kind)).map(([x, y]) => {
     const jx = x * r + rnd(-1.2, 1.2), jy = y * r + rnd(-1.2, 1.2)
     return [cx + jx * c - jy * s, cy + jx * s + jy * c]
   })
-  return 'M' + pts.map((p) => `${f(p[0])} ${f(p[1])}`).join('L') + 'Z'
 }
 
-const hsl = (h: number, s: number, l: number) => `hsl(${Math.round(h)},${Math.round(s)}%,${Math.round(l)}%)`
+/** Open scribble: a wobbly line across `w` px. */
+const scribble = (x0: number, y0: number, w: number): [number, number][] =>
+  Array.from({ length: N }, (_, i) => [x0 + (i / (N - 1)) * w + rnd(-4, 4), y0 + rnd(-w / 6, w / 6)])
 
-/** Open scribble decoy: same point count, never closed, so it is not a shape. */
-function scribble(x0: number, y0: number, w: number): string {
-  const pts = Array.from({ length: N }, (_, i) => [x0 + (i / N) * w + rnd(-4, 4), y0 + rnd(-w / 2, w / 2)])
-  return 'M' + pts.map((p) => `${f(p[0])} ${f(p[1])}`).join('L')
+function drawGrid(kinds: Kind[]): string {
+  const m = image(SIZE, SIZE, hsl(rnd(0, 360), 15, 96)), hue = rnd(0, 360)
+  kinds.forEach((kind, i) => {
+    const x = GAP + (i % 3) * (TILE + GAP), y = GAP + Math.floor(i / 3) * (TILE + GAP)
+    const bg = hsl(hue + rnd(-20, 20), rnd(20, 40), rnd(85, 94))
+    for (let yy = y; yy < y + TILE; yy++) for (let xx = x; xx < x + TILE; xx++) plot(m, xx, yy, bg.map((v) => clamp(v + rnd(-14, 14))) as RGB)
+    const draw = [
+      () => {
+        const pts = shapePoints(kind, x + TILE / 2, y + TILE / 2), h = rnd(0, 360)
+        fill(m, pts, hsl(h, rnd(45, 75), rnd(42, 60)))
+        stroke(m, [...pts, pts[0]], rnd(1, 1.8), hsl(h + rnd(-30, 30), 35, rnd(18, 28)))          // darker outline
+      },
+      () => stroke(m, scribble(x + 6, y + rnd(15, 85), TILE - 12), rnd(0.6, 1.2), hsl(rnd(0, 360), 40, 45), 0.5),
+    ]
+    for (const d of Math.random() < 0.5 ? draw : draw.reverse()) d()
+  })
+  for (let k = 0; k < 6; k++) stroke(m, scribble(0, rnd(20, SIZE - 20), SIZE), rnd(0.5, 1), hsl(rnd(0, 360), 35, 50), 0.4)
+  noise(m, 6); warp(m, rnd(2, 3.5)); blur(m)
+  return png(m)
 }
 
 function shuffle<T>(a: T[]): T[] {
@@ -77,17 +188,58 @@ function shuffle<T>(a: T[]): T[] {
   return a
 }
 
-const WORDS = ['harbor', 'velvet', 'lantern', 'meadow', 'pickle', 'cobalt', 'falcon', 'tundra', 'walnut', 'orchid', 'quartz', 'saddle', 'thimble',
-  'garnet', 'beacon', 'canyon', 'dolphin', 'ember', 'fjord', 'glacier', 'hammock', 'iguana', 'juniper', 'kettle', 'lagoon', 'marble', 'nutmeg', 'oyster',
-  'pebble', 'quiver', 'raisin', 'sapphire', 'tangerine', 'umbrella', 'vortex', 'wombat', 'yonder', 'zephyr', 'biscuit', 'compass', 'meteor', 'figment']
-const ORD = ['first', 'second', 'third', 'fourth', 'fifth']
-// a word task: [question, answer]
-function wordTask(): [string, string] {
-  const w = WORDS[randomInt(WORDS.length)]!, k = randomInt(4)
-  if (k === 0) return [`Type the word "${w}" backwards.`, [...w].reverse().join('')]
-  if (k === 1) { const i = randomInt(3), j = 3 + randomInt(2); return [`Type the ${ORD[i]} and the ${ORD[j]} letters of "${w}".`, `${w[i]}${w[j]}`] }
-  if (k === 2) return [`How many letters are in the word "${w}"? Answer with a number.`, String(w.length)]
-  return [`Type "${w}" without its vowels.`, w.replace(/[aeiou]/g, '')]
+// ── math puzzle: glyphs as stroke polylines on a unit box (x right, y down) ──
+const GLYPHS: Record<string, [number, number][][]> = {
+  '0': [[[0.5, 0], [0.85, 0.15], [0.95, 0.5], [0.85, 0.85], [0.5, 1], [0.15, 0.85], [0.05, 0.5], [0.15, 0.15], [0.5, 0]]],
+  '1': [[[0.25, 0.2], [0.55, 0], [0.55, 1]], [[0.25, 1], [0.85, 1]]],
+  '2': [[[0.1, 0.2], [0.3, 0], [0.7, 0], [0.9, 0.2], [0.9, 0.4], [0.1, 1], [0.9, 1]]],
+  '3': [[[0.1, 0], [0.9, 0], [0.45, 0.42], [0.8, 0.55], [0.9, 0.75], [0.75, 0.95], [0.5, 1], [0.1, 0.9]]],
+  '4': [[[0.7, 1], [0.7, 0], [0.05, 0.7], [0.95, 0.7]]],
+  '5': [[[0.9, 0], [0.15, 0], [0.1, 0.45], [0.5, 0.38], [0.85, 0.55], [0.9, 0.8], [0.6, 1], [0.1, 0.9]]],
+  '6': [[[0.8, 0.05], [0.4, 0.1], [0.15, 0.45], [0.1, 0.75], [0.3, 0.98], [0.65, 1], [0.9, 0.8], [0.85, 0.55], [0.55, 0.45], [0.15, 0.6]]],
+  '7': [[[0.1, 0], [0.9, 0], [0.4, 1]]],
+  '8': [[[0.5, 0], [0.82, 0.12], [0.82, 0.35], [0.5, 0.47], [0.18, 0.35], [0.18, 0.12], [0.5, 0]],
+    [[0.5, 0.47], [0.88, 0.6], [0.88, 0.88], [0.5, 1], [0.12, 0.88], [0.12, 0.6], [0.5, 0.47]]],
+  '9': [[[0.85, 0.4], [0.45, 0.55], [0.15, 0.4], [0.15, 0.12], [0.45, 0], [0.8, 0.1], [0.85, 0.4], [0.75, 0.75], [0.4, 1], [0.15, 0.95]]],
+  '+': [[[0.5, 0.2], [0.5, 0.8]], [[0.15, 0.5], [0.85, 0.5]]],
+  '−': [[[0.15, 0.5], [0.85, 0.5]]],
+  '×': [[[0.2, 0.25], [0.8, 0.75]], [[0.8, 0.25], [0.2, 0.75]]],
+  '=': [[[0.15, 0.36], [0.85, 0.36]], [[0.15, 0.64], [0.85, 0.64]]],
+  '?': [[[0.15, 0.25], [0.3, 0.05], [0.6, 0], [0.85, 0.15], [0.85, 0.35], [0.5, 0.55], [0.5, 0.75]], [[0.5, 0.92], [0.5, 0.98]]],
+}
+
+/** A random arithmetic task: [glyphs, answer]. a+b (1–20 each), a−b (never negative), a×b (2–9). */
+function mathTask(): [string, number] {
+  const k = randomInt(3)
+  if (k === 2) { const a = 2 + randomInt(8), b = 2 + randomInt(8); return [`${a}×${b}=?`, a * b] }
+  let a = 1 + randomInt(20), b = 1 + randomInt(20)
+  if (k === 0) return [`${a}+${b}=?`, a + b]
+  if (b > a) [a, b] = [b, a]
+  return [`${a}−${b}=?`, a - b]
+}
+
+function drawMath(text: string): string {
+  const W = 220, H = 70, m = image(W, H, hsl(rnd(0, 360), rnd(15, 35), rnd(88, 95)))
+  const ink = () => hsl(rnd(0, 360), rnd(45, 75), rnd(22, 40))
+  for (let k = 0; k < 220; k++) plot(m, rnd(0, W), rnd(0, H), ink(), rnd(0.3, 0.8))            // noise dots
+  const glyphs = [...text], hs = glyphs.map(() => rnd(40, 50)), adv = hs.map((h) => h * 0.55 + rnd(8, 14))
+  const total = adv.reduce((a, b) => a + b, 0), scale = Math.min(1, (W - 16) / total)
+  let x = (W - total * scale) / 2 + rnd(-4, 4)
+  glyphs.forEach((g, i) => {
+    const h = hs[i] * scale, w = h * 0.55, rot = rnd(-0.3, 0.3), c = Math.cos(rot), s = Math.sin(rot)
+    const ox = x + w / 2, oy = H / 2 + rnd(-4, 4), col = ink(), r = rnd(1.4, 2.2)
+    for (const line of GLYPHS[g]) stroke(m, line.map(([u, v]): [number, number] => {
+      const px = (u - 0.5) * w, py = (v - 0.5) * h
+      return [ox + px * c - py * s, oy + px * s + py * c]
+    }), r, col)
+    x += adv[i] * scale
+  })
+  for (let k = 0, n = 2 + randomInt(2); k < n; k++) {                                          // crossing lines
+    const y0 = rnd(10, H - 10), y1 = rnd(10, H - 10)
+    stroke(m, Array.from({ length: 12 }, (_, i): [number, number] => [(i / 11) * W, y0 + ((y1 - y0) * i) / 11 + rnd(-3, 3)]), rnd(0.7, 1.3), ink(), 0.8)
+  }
+  noise(m, 10); warp(m, rnd(1.5, 2.5)); blur(m)
+  return png(m)
 }
 
 export async function makeCaptcha(): Promise<Captcha> {
@@ -97,26 +249,11 @@ export async function makeCaptcha(): Promise<Captcha> {
   const count = 2 + randomInt(3)                                    // 2..4 targets
   const kinds = shuffle([...Array(count).fill(target), ...Array.from({ length: 9 - count }, () => others[randomInt(others.length)])])
   const answer = kinds.flatMap((k, i) => (k === target ? [i] : [])).join(',')
+  const [task, result] = mathTask()
 
-  const hue = rnd(0, 360)
-  const nodes: string[] = []
-  kinds.forEach((kind, i) => {
-    const x = GAP + (i % 3) * (TILE + GAP), y = GAP + Math.floor(i / 3) * (TILE + GAP)
-    const cx = x + TILE / 2, cy = y + TILE / 2
-    nodes.push(`<path d="M${x} ${y}h${TILE}v${TILE}h-${TILE}Z" fill="${hsl(hue + rnd(-20, 20), rnd(20, 40), rnd(88, 95))}"/>`)
-    const draw = [
-      `<path d="${shapePath(kind, cx, cy)}" fill="${hsl(rnd(0, 360), rnd(45, 75), rnd(40, 58))}" stroke="${hsl(rnd(0, 360), 30, 25)}" stroke-width="${f(rnd(1.5, 3))}"/>`,
-      `<path d="${scribble(x + 8, y + rnd(15, 85), TILE - 16)}" fill="none" stroke="${hsl(rnd(0, 360), 40, 45)}" stroke-opacity="0.45" stroke-width="${f(rnd(1, 2))}"/>`,
-    ]
-    nodes.push(...(Math.random() < 0.5 ? draw : draw.reverse()))
-  })
-  for (let k = 0; k < 6; k++) nodes.push(`<path d="${scribble(0, rnd(20, SIZE - 20), SIZE)}" fill="none" stroke="${hsl(rnd(0, 360), 35, 50)}" stroke-opacity="0.3" stroke-width="1"/>`)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}" role="img" aria-label="Image puzzle: 3 by 3 grid of shapes">${nodes.join('')}</svg>`
-
-  const [question, textAnswer] = wordTask()
   const grid = mac(id, `grid:${answer}`)
-  await claims.set(loadedSettings() as Settings | undefined, `captcha:${id}`, JSON.stringify({ grid: grid.toString('hex'), text: mac(id, `text:${textAnswer}`).toString('hex') }), TTL_MS)
-  return { id, svg, prompt: `Select all the ${PLURAL[target]}`, question, answerHash: grid.toString('hex') }
+  await claims.set(loadedSettings() as Settings | undefined, `captcha:${id}`, JSON.stringify({ grid: grid.toString('hex'), text: mac(id, `text:${result}`).toString('hex') }), TTL_MS)
+  return { id, image: drawGrid(kinds), prompt: `Select all the ${PLURAL[target]}`, mathImage: drawMath(task), answerHash: grid.toString('hex') }
 }
 
 /** `answer` is `grid:<tile indices, comma separated>` or `text:<number>`. Single-use: always consumes `id`. */
