@@ -98,7 +98,7 @@ async function topNotable(since: number, col: 'ipNet' | 'botName') {
 const H = 3_600_000, D = 24 * H, CAP = 50_000
 const SPAN = { '1h': H, '24h': D, '7d': 7 * D, '30d': 30 * D } as const
 const STEP = { minute: 60_000, hour: H, day: D } as const
-const FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
+const FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
 const filterIn = z.object({ field: z.enum(FIELDS), op: z.enum(['eq', 'neq']), value: z.string().max(500) })
 const filtersIn = z.array(filterIn).max(20).default([])
 type Filter = z.infer<typeof filterIn>
@@ -116,7 +116,7 @@ function applyFilters(qs: QS, filters: Filter[]): QS {
       case 'method': w = { method: v.toUpperCase() }; break
       case 'asn': w = { asn: num(v.replace(/^AS/i, '')) }; break
       case 'status': w = { status: num(v) }; break
-      case 'ipNet': w = v.includes('/') ? { ipNet: v } : { ipHash: ipHash(v) }; break
+      case 'ip': case 'ipNet': w = v.includes('/') ? { ipNet: v } : { ipHash: ipHash(v) }; break   // 'ip': the panel's "filter by this IP"
       case 'mode': w = { decision__startswith: 'would-' }; if (v !== 'log') op = op === 'eq' ? 'neq' : 'eq'; break
       default: w = { [f.field]: v }
     }
