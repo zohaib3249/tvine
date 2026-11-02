@@ -79,7 +79,7 @@ function shuffle<T>(a: T[]): T[] {
 
 const WORDS = ['harbor', 'velvet', 'lantern', 'meadow', 'pickle', 'cobalt', 'falcon', 'tundra', 'walnut', 'orchid', 'quartz', 'saddle', 'thimble',
   'garnet', 'beacon', 'canyon', 'dolphin', 'ember', 'fjord', 'glacier', 'hammock', 'iguana', 'juniper', 'kettle', 'lagoon', 'marble', 'nutmeg', 'oyster',
-  'pebble', 'quiver', 'raisin', 'sapphire', 'tangerine', 'umbrella', 'vortex', 'wombat', 'yonder', 'zephyr', 'biscuit', 'compass', 'drizzle', 'figment']
+  'pebble', 'quiver', 'raisin', 'sapphire', 'tangerine', 'umbrella', 'vortex', 'wombat', 'yonder', 'zephyr', 'biscuit', 'compass', 'meteor', 'figment']
 const ORD = ['first', 'second', 'third', 'fourth', 'fifth']
 // a word task: [question, answer]
 function wordTask(): [string, string] {
