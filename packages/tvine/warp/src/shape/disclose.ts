@@ -22,7 +22,7 @@ export interface WidgetFrag {
   at?: string[]                     // set by the extractor: every parent of a merged entity
 }
 // folds: link id → the entity node it directly followed in the page (extractor), for `href` folding
-export interface ShapeSource { page: string; title: string; nodes: V1Node[]; links: V1Link[]; widgets?: WidgetFrag[]; folds?: Record<string, string> }
+export interface ShapeSource { page: string; title: string; nodes: V1Node[]; links: V1Link[]; widgets?: WidgetFrag[]; folds?: Record<string, string>; md?: string }
 
 export type View = 'full' | 'L1' | 'L0' | 'L2'
 export interface NavLink { href: string; label: string; params?: string[] }
@@ -82,14 +82,19 @@ export function signature(name: string, c: CtlFrag): string {
 // Sensitive widgets report {filled} only (security.md §5), whatever the fragment carried.
 const filled = (s: Json) => ({ filled: !!(s && typeof s === 'object' && 'value' in s ? (s as { value: unknown }).value : s) })
 
-function fromWidget(w: WidgetFrag, headless: boolean): T {
-  const hide = new Set(w.hidden ?? [])
-  const data = w.data && fmtData(Object.fromEntries(Object.entries(w.data).filter(([k]) => !hide.has(k))))
+// The control signatures an agent may use on a widget (none while humanOnly). Shared with view=md.
+export function controlsOf(w: WidgetFrag, headless: boolean): string[] {
   // h.params.agent === false: the control's server action is not agent-callable → not listed
   const callable = (c: CtlFrag) => { const h = c.h as { params?: { agent?: unknown }; agent?: unknown } | undefined; return h?.params?.agent !== false && h?.agent !== false }
   // headless: only controls with a headless path; a form field's control (h.field: set it in the form's submit) never works alone
   const alone = (c: CtlFrag) => c.h !== undefined && typeof (c.h as { field?: unknown }).field !== 'string'
-  const ctl = w.ho ? [] : Object.entries(w.ctl ?? {}).filter(([, c]) => c.enabled !== false && callable(c) && (!headless || alone(c))).map(([k, c]) => signature(k, c))
+  return w.ho ? [] : Object.entries(w.ctl ?? {}).filter(([, c]) => c.enabled !== false && callable(c) && (!headless || alone(c))).map(([k, c]) => signature(k, c))
+}
+
+function fromWidget(w: WidgetFrag, headless: boolean): T {
+  const hide = new Set(w.hidden ?? [])
+  const data = w.data && fmtData(Object.fromEntries(Object.entries(w.data).filter(([k]) => !hide.has(k))))
+  const ctl = controlsOf(w, headless)
   return {
     id: w.id, kind: kindOfWidget(w), label: w.label, desc: w.desc,
     state: w.sensitive ? filled(w.state) : w.state, data,

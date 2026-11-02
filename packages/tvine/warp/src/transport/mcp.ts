@@ -33,7 +33,7 @@ export type McpTool = Tool & { action?: ActionId }
 
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
 export const GENERIC = {
-  read_page: 'Open a page of this site and get its data + callable actions. Returns a sid — include it in every later call. Re-call this whenever an action returns a stale/expired error.' + UNTRUSTED_TOOL,
+  read_page: 'Open a page of this site. Use view=md first: the page as compact Markdown with control ids inline ({id controls}), then ui to act. Other views give JSON widgets/actions. Returns a sid — include it in every later call. Re-read after stale/expired errors.' + UNTRUSTED_TOOL,
   expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.' + UNTRUSTED_TOOL,
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
   do: 'Advanced: prefer ui on the page\'s widgets. Run a backend action listed on a page from read_page. Pass url (that page), action (its id), params, and the sid read_page returned. Copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
@@ -44,7 +44,7 @@ export const GENERIC = {
 // fresh instances: a reused zod instance becomes a $ref in the JSON Schema
 const opt = () => z.string().optional()
 const envelope = z.object({ url: z.string().default('/'), sid: opt(), cmdId: opt(), bind: opt() })
-const readPage = z.object({ url: z.string(), sid: opt(), view: z.enum(['auto', 'full', 'L1', 'L0']).optional() })
+const readPage = z.object({ url: z.string(), sid: opt(), view: z.enum(['md', 'auto', 'full', 'L1', 'L0']).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(100).max(100_000).optional() })
 const expandIn = z.object({ url: z.string(), id: z.string(), sid: opt(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() })
 const doInput = envelope.extend({ url: z.string(), action: z.string(), params: z.record(z.unknown()).default({}) })
 const controlIn = z.object({ name: z.string().max(200).optional(), reason: z.string().max(500).optional(), sid: opt() })
@@ -193,7 +193,9 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     }
     if (name === 'read_page') {
       const p = readPage.safeParse(args)
-      return p.success ? page(server, opts, src, p.data, { view: p.data.view }) : bad(server, p.error)
+      if (!p.success) return bad(server, p.error)
+      const { view, offset, limit } = p.data
+      return page(server, opts, src, p.data, view === 'md' ? { md: { offset, limit } } : { view })
     }
     if (name === 'expand') {
       const p = expandIn.safeParse(args)
@@ -256,11 +258,13 @@ function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
 }
 
 // Every snapshot an MCP client sees is remembered for its session (expand serves L2 from it), then filtered.
-function reply(server: ServerCtx, events: Event[], ctx: Ctx, shape: { view?: ViewOpt; expand?: ExpandOpt } = {}): CallToolResult {
+function reply(server: ServerCtx, events: Event[], ctx: Ctx, shape: Shape = {}): CallToolResult {
   for (const e of events) if (e.kind === 'snapshot') server.sessions.remember(e.snapshot)
   events = events.map((e) => e.kind === 'snapshot' ? ev.snapshot(filterSnapshot(server, e.snapshot))
     : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterSnapshot(server, e.snapshot) } : e)
-  const text = render(events, server.settings.formats.default, server.settings, { ctx, ...shape })
+  const { md, ...rest } = shape
+  const text = render(events, md ? 'md' : server.settings.formats.default, server.settings,
+    { ctx, ...rest, ...(md && { md: { ...md, more: (n: number) => `call read_page again with view "md", offset ${n}` } }) })
   return { content: [{ type: 'text', text }], ...(events.some((e) => e.kind === 'err') && { isError: true }) }
 }
 const bad = (server: ServerCtx, e: z.ZodError) => {
@@ -302,7 +306,8 @@ async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: st
 }
 
 // read_page (view) and expand (L2 of one node from the session's cached snapshot; unknown id → L0 map).
-async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: string; sid?: string }, shape: { view?: ViewOpt; expand?: ExpandOpt }): Promise<CallToolResult> {
+type Shape = { view?: ViewOpt; expand?: ExpandOpt; md?: { offset?: number; limit?: number } }
+async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: string; sid?: string }, shape: Shape): Promise<CallToolResult> {
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)

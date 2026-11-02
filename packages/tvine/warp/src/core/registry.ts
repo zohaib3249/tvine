@@ -5,6 +5,7 @@ import type { SessionStore } from './session.js'
 import { DomainError, Goto } from './errors.js'
 import { siteRedirect } from './redirect.js'
 import { entityType, type WidgetFrag } from '../shape/disclose.js'
+import { htmlToMd } from '../shape/markdown.js'
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
 export class RegistryError extends Error {
@@ -94,7 +95,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
   if (dev()) for (const w of widgets.values()) {
     if (nodes.has(w.id)) console.error(`tvine: widget id "${w.id}" collides with a v1 node on ${route} — the widget is dropped; give one an explicit id`)
   }
-  const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()] }
+  const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()], md: htmlToMd(html, widgets.values()) }
   return { ...out, ...(widgets.size && { widgets: [...widgets.values()] }), ...(Object.keys(folds).length && { folds }) }
 }
 
@@ -124,8 +125,8 @@ const deepFreeze = <T>(v: T): T => {
 // The cached part of a snapshot (no sid/rev) and its content etag. Deep-frozen: shared between requests.
 export type SnapBody = Body
 export function cacheBody(snap: Body | Snapshot): { etag: string; body: Body } {
-  const { page, title, nodes, links, widgets, folds } = snap
-  const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }), ...(folds && { folds }) })
+  const { page, title, nodes, links, widgets, folds, md } = snap
+  const body = deepFreeze({ page, title, nodes, links, ...(widgets && { widgets }), ...(folds && { folds }), ...(md !== undefined && { md }) })
   return { etag: createHash('sha1').update(canon(body)).digest('hex'), body }
 }
 

@@ -18,8 +18,8 @@ Read this file before you write any code. It covers the layout, the commands, co
 
   All four run the same pipeline: zod validation, permissions, rate limit, one DB transaction.
 - **Weft pages are agent-readable.** `<Page>`, widgets and plain `<form>/<button>/<input>` register in a control
-  tree. An agent gets the page as JSON (`x-tvine: 1` header, or the MCP `read_page` tool) and drives it with `do`
-  and `ui`.
+  tree. An agent reads the page as Markdown with control ids inline (`Accept: text/markdown`, or MCP
+  `read_page view=md`: the recommended first read), or as JSON (`x-tvine: 1` header), then drives it with `ui` and `do`.
 
 ## Project layout
 

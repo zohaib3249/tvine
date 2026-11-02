@@ -32,6 +32,7 @@ export interface Snapshot {
   nodes: Node[]; links: Link[]
   widgets?: WidgetFrag[]            // v2 `k:"w"` fragments (snapshot-format.md); absent on v1-only pages
   folds?: Record<string, string>    // link id → entity node it directly followed (v2 `href` folding)
+  md?: string                       // view=md: the rendered page as Markdown + control markers (shape/markdown.ts)
 }
 
 export interface Command {
