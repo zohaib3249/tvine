@@ -102,6 +102,7 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
   }
 
   return {
+    frame: { ancestors: ancestors.join(' '), xfo },   // the site's frame rule, for pages served outside this layer (Shield challenge)
     // Request side, before anything runs: the nonce Next stamps on its scripts. Client copies never survive.
     begin(req: IncomingMessage, https: boolean): HeaderPlan {
       delete req.headers['content-security-policy']

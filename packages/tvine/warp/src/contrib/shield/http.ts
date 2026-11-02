@@ -60,11 +60,11 @@ async function readJson(req: IncomingMessage, cap = 32_768): Promise<Record<stri
 // the challenge page: static/challenge.html with {{nonce}} {{prefix}} {{level}} {{return}}. ONE CSP (review C1): when the
 // Security middleware already ran (Shield listed after it) its nonce is used and its CSP is the only one sent;
 // otherwise (Shield before Security, or no Security) the page sends its own strict CSP.
-export function challengePage(prefix: string, level: ChallengeLevel, ret: string, reqNonce?: string): { html: string; csp?: string } {
+export function challengePage(prefix: string, level: ChallengeLevel, ret: string, reqNonce?: string, frameAncestors = "'none'"): { html: string; csp?: string } {
   const nonce = reqNonce ?? randomBytes(16).toString('base64')
   const html = file('challenge.html').toString('utf8').replace(/\{\{(nonce|prefix|level|return)\}\}/g, (_, k: string) => esc(k === 'nonce' ? nonce : k === 'prefix' ? prefix : k === 'level' ? level : ret))
   if (reqNonce) return { html }
-  const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+  const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors ${frameAncestors}`
   return { html, csp }
 }
 // only the nonce the Security middleware set (req.tvine.cspNonce), never a client-sent x-nonce header
@@ -74,6 +74,8 @@ const cspHeader = (p: { csp?: string }): Record<string, string> => (p.csp ? { 'c
 export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware {
   const s = b.settings
   const prefix = ((o.prefix as string | undefined) ?? s.shield.prefix).replace(/\/$/, '')
+  // same frame rule as the site (dev: localhost iframes like the editor's Simple Browser); no Security layer → none
+  const frame = b.sec?.frame ?? { ancestors: "'none'", xfo: 'DENY' as string | undefined }
   const tlsHeader = s.trustProxy >= 1 ? s.shield.tlsHeader : undefined   // L2 only through a trusted proxy
 
   async function signals(req: MwRequest, extra: Partial<SignalInput> = {}): Promise<Signals> {
@@ -124,8 +126,8 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       const u = new URL(req.url ?? '/', 'http://x')
       const r = u.searchParams.get('r') ?? ''
       const { l } = readReturn(r)
-      const page = challengePage(prefix, l, r, nonceOf(req))
-      send(res, 200, page.html, 'text/html; charset=utf-8', { ...cspHeader(page), 'x-frame-options': 'DENY', 'referrer-policy': 'same-origin', 'x-robots-tag': 'noindex' })
+      const page = challengePage(prefix, l, r, nonceOf(req), frame.ancestors)
+      send(res, 200, page.html, 'text/html; charset=utf-8', { ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'referrer-policy': 'same-origin', 'x-robots-tag': 'noindex' })
       return
     }
     if (method !== 'POST' || (sub !== 'start' && sub !== 'verify')) return json(res, 404, { error: 'not_found' })
@@ -228,7 +230,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       if (req.method === 'GET' || req.method === 'HEAD') {
         return send(res, 302, '', 'text/plain; charset=utf-8', { ...out, location: `${prefix}/challenge?r=${encodeURIComponent(r)}&l=${decision.level ?? 'pow'}` })
       }
-      const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req))
+      const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors)
       return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page) })
     },
   }
