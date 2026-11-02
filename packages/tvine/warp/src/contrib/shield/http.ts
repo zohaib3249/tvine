@@ -226,12 +226,10 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       }
       // challenge: the agent surface (and any non-browser JSON client) never gets HTML
       if (agentSurface) return json(res, 403, { error: 'challenge_required', reason: decision.reason, level: decision.level, ray }, out)
+      // shown in place on the visitor's own URL (no redirect); after /verify the page reloads that URL with the clearance
       const r = signReturn(req.url && req.url.startsWith('/') ? req.url : path, decision.level ?? 'pow')
-      if (req.method === 'GET' || req.method === 'HEAD') {
-        return send(res, 302, '', 'text/plain; charset=utf-8', { ...out, location: `${prefix}/challenge?r=${encodeURIComponent(r)}&l=${decision.level ?? 'pow'}` })
-      }
       const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors)
-      return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page) })
+      return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'cache-control': 'no-store', 'x-robots-tag': 'noindex' })
     },
   }
 }
