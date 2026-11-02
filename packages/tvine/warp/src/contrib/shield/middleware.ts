@@ -126,15 +126,16 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       : !!cap && !!p.c && (cap.id === undefined || cap.id === p.c) && typeof cap.answer === 'string' && await checkCaptcha(p.c, cap.answer)
     const sensor = sensorOf(body.sensor)
     const next: ChallengeLevel = LEVELS[Math.min(LEVELS.indexOf(p.l) + 1, LEVELS.length - 1)]!
-    if (!solved || !sensor) { record(s, sig0, verdict('challenge', 'challenge failed', sig0, req), req, { failed: true }); return json(res, 200, { ok: false, level: p.l === 'captcha' ? 'captcha' : next }) }
+    const solveMs = cb && typeof cb.t === 'number' ? Math.round(cb.t) : sensor ? Math.round(sensor.behaviour.dwellMs) : undefined
+    if (!solved || !sensor) { record(s, sig0, verdict('challenge', 'challenge not solved', sig0, req), req, { failed: true, level: p.l, solveMs }); return json(res, 200, { ok: false, level: p.l === 'captcha' ? 'captcha' : next }) }
     const sensed = scoreSensor(sensor, p.l)
     const combined = Math.max(1, Math.min(99, Math.round((sig0.score + sensed.score) / 2)))
     // pass marks per level: a solved captcha needs only "not automation said so" (webdriver), the lighter levels a score
     const pass = !sensor.webdriver && (p.l === 'captcha' ? sensed.score >= 10 : sensed.score >= (p.l === 'checkbox' ? 20 : 30))
-    if (!pass) { record(s, sig0, verdict('challenge', `sensor ${sensed.reasons.join(',')}`, sig0, req), req, { failed: true }); return json(res, 200, { ok: false, level: next }) }
+    if (!pass) { record(s, sig0, verdict('challenge', 'sensor check failed', sig0, req), req, { failed: true, level: p.l, solveMs, sensorFlags: sensed.reasons, fpHash: fpHash(sensor) }); return json(res, 200, { ok: false, level: next }) }
     const ttl = dur(runtimeOf(s).clearanceTtl)
     const cookie = issueClearance({ n: sig0.ipNet, u: uaHash(sig0.ua), f: fpHash(sensor), s: combined, l: p.l, e: Date.now() + ttl })
-    record(s, sig0, verdict('allow', `challenge passed (${p.l})`, sig0, req), req, { passed: true })
+    record(s, sig0, verdict('allow', `challenge passed (${p.l})`, sig0, req), req, { passed: true, level: p.l, solveMs, sensorFlags: sensed.reasons, fpHash: fpHash(sensor) })
     return json(res, 200, { ok: true, return: p.r ?? ret.p }, { 'set-cookie': clearanceCookie(cookie, req.tvine.https, ttl) })
   }
 

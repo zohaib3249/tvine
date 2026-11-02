@@ -7,6 +7,7 @@ import { conditionProblem } from './conditions.js'
 import { loadIpdb, rangesSeed, setRanges, type RangesFile } from './data.js'
 import { defaultRules, setRules } from './engine.js'
 import { flushHits, loadAll } from './store.js'
+import { flushEvents } from './events.js'
 
 export async function ready(server: ServerCtx): Promise<void> {
   const s = server.settings
@@ -24,5 +25,5 @@ export async function ready(server: ServerCtx): Promise<void> {
   setRanges(ranges)
   const t = setInterval(() => void flushHits().catch(() => undefined), 30_000)
   t.unref()
-  server.onClose(async () => { clearInterval(t); await flushHits().catch(() => undefined) })
+  server.onClose(async () => { clearInterval(t); await flushHits().catch(() => undefined); await flushEvents() })
 }

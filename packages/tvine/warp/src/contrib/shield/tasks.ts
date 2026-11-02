@@ -51,8 +51,8 @@ export async function updateRanges(dir = conf()?.ipdb.dir ?? './data/shield', f:
 }
 
 // batched like contrib/audit/prune.ts
-export async function pruneEvents(days = conf()?.events.retentionDays ?? 30, now = Date.now(), batch = 5000): Promise<number> {
-  const old = ShieldEvent.objects.filter({ at__lt: new Date(now - days * 86_400_000) })
+export async function pruneEvents(days = conf()?.events.retentionDays ?? 14, now = Date.now(), batch = 5000): Promise<number> {
+  const old = ShieldEvent.objects.filter({ ts__lt: new Date(now - days * 86_400_000) })
   let n = 0
   for (;;) {
     const ids = await old.order('id').limit(batch).valuesList('id', { flat: true }).all() as number[]

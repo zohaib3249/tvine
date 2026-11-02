@@ -376,5 +376,7 @@ export interface ShieldSettings {
   aiDefaults: { agents: ShieldStance; crawlers: ShieldStance; search: ShieldStance }
   panel: { path: string; access: unknown }         // access: contrib/shield/types Condition
   sensor: 'challenge' | 'all-pages'
-  events: { sample: number; retentionDays: number; storeIp: boolean }   // sample: 0..1 of pass rows kept (non-pass always)
+  // ShieldEvent rows: every non-pass decision + samplePass (0..1) of passes, at most maxPerMinute per process (the rest
+  // counted as dropped), written in batches; storeIp false = only the ip hash + its /24
+  events: { samplePass: number; maxPerMinute: number; retentionDays: number; storeIp: boolean }
 }

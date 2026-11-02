@@ -37,51 +37,69 @@ const read = { permissions: [access], readOnly: true, mcp: false }
 const write = { permissions: [access], mcp: false }
 const bad = (msg: string, param?: string) => new DomainError('invalid_param', msg, param)
 
-// ---- overview + events ----------------------------------------------------------------------------------------------
-const RANGES = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 } as const
-type Ev = { at: Date; ray: string; ipHash: string; ip?: string | null; country?: string | null; asn?: number | null; path: string; bot?: string | null; category: string; score: number; decision: string; ruleId?: string | null; mode: string }
-const top = (rows: Ev[], key: (r: Ev) => string | null | undefined, n = 10) => {
-  const m = new Map<string, number>()
-  for (const r of rows) { const k = key(r); if (k) m.set(k, (m.get(k) ?? 0) + 1) }
-  return [...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, count]) => ({ key: k, count }))
-}
+// ---- overview (admin_stat rollups, never a ShieldEvent scan) + events ------------------------------------------------
+type StatRow = { bucket: Date; key: string; dims: Record<string, string>; count: number; sum: number }
 const SERIES = [{ name: 'pass', label: 'Passed' }, { name: 'log', label: 'Logged' }, { name: 'challenge', label: 'Challenged' }, { name: 'block', label: 'Blocked' }]
-const bucketOf = (d: string) => (d === 'block' || d === 'rateLimit' || d === 'challenge-failed' ? 3 : d === 'challenge' ? 2 : d === 'log' || d.startsWith('would-') ? 1 : 0)
-function totals(rows: Ev[]) {
-  const passed = rows.filter((r) => r.decision === 'challenge-passed').length, failed = rows.filter((r) => r.decision === 'challenge-failed').length
-  return {
-    requests: rows.length, blocked: rows.filter((r) => bucketOf(r.decision) === 3).length, challenged: rows.filter((r) => r.decision === 'challenge').length,
-    passRate: passed + failed ? Math.round((passed / (passed + failed)) * 1000) / 10 : 0, avgScore: rows.length ? Math.round(rows.reduce((a, r) => a + r.score, 0) / rows.length) : 0,
-  }
+const bucketOf = (d: string) => (d === 'block' || d === 'rateLimit' || d === 'challenge-failed' ? 3 : d === 'challenge' ? 2 : d === 'log' ? 1 : 0)
+const topOfRows = (rows: StatRow[], dim: string, n = 10, label?: (k: string) => string | undefined) => {
+  const m = new Map<string, number>()
+  for (const r of rows) { const k = r.dims[dim]; if (k && k !== '(other)') m.set(k, (m.get(k) ?? 0) + r.count) }
+  return [...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([key, count]) => ({ key, count, ...(label?.(key) && { label: label(key) }) }))
 }
-export const overview = defineAction('shield.overview', z.object({ range: z.enum(['1h', '24h', '7d', '30d']).default('24h') }), async ({ range }) => {
-  // ponytail: aggregates up to 50k (sampled) event rows in JS; SQL GROUP BY if a site keeps millions
-  const span = RANGES[range], now = Date.now()
-  const all = await ShieldEvent.objects.filter({ at__gte: new Date(now - 2 * span) }).order('-at').limit(100_000).all() as Ev[]   // scope: ok
-  const rows = all.filter((r) => +new Date(r.at) >= now - span), prev = all.filter((r) => +new Date(r.at) < now - span)
-  const step = range === '1h' ? 300_000 : range === '24h' ? 3_600_000 : 86_400_000
-  const n = Math.round(span / step), first = Math.floor((now - span) / step) * step + step
-  const points = Array.from({ length: n }, (_, i) => ({ x: new Date(first + i * step).toISOString(), values: [0, 0, 0, 0] }))
-  for (const r of rows) { const i = Math.min(n - 1, Math.max(0, Math.floor((+new Date(r.at) - first) / step) + 1)); points[i]!.values[bucketOf(r.decision)]!++ }
-  const blocked = rows.filter((r) => bucketOf(r.decision) === 3)
-  const histogram = Array.from({ length: 10 }, () => 0)
-  for (const r of rows) histogram[Math.min(9, Math.floor(r.score / 10))]!++
+function totals(rows: StatRow[]) {
+  let requests = 0, blocked = 0, challenged = 0, passed = 0, failed = 0, sum = 0
+  for (const r of rows) {
+    const d = r.dims.d ?? 'pass', blk = bucketOf(d) === 3 || (r.dims.m === 'log' && d !== 'pass' && d !== 'allow' && d !== 'log')
+    requests += r.count; sum += r.sum
+    if (blk && d !== 'challenge') blocked += r.count
+    if (d === 'challenge') challenged += r.count
+    if (d === 'challenge-passed') passed += r.count
+    if (d === 'challenge-failed') failed += r.count
+  }
+  return { requests, blocked, challenged, passRate: passed + failed ? Math.round((passed / (passed + failed)) * 1000) / 10 : 0, avgScore: requests ? Math.round(sum / requests) : 0 }
+}
+export const overview = defineAction('shield.overview', z.object({ range: z.enum(['1h', '24h', '7d', '30d']).default('24h') }), async ({ range }, ctx) => {
+  if (!ctx.settings.installedApps.includes('tvine.admin')) return { totals: totals([]), series: { series: SERIES, points: [] }, top: { ips: [], asns: [], countries: [], bots: [] }, histogram: Array(10).fill(0), note: "charts need 'tvine.admin' installed (its hourly rollups)" }
+  const { statRows } = await import('../admin/system.js')
+  const span = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 }[range]
+  const now = Date.now()
+  const get = async (key: string, from: number, to: number) => (await statRows(key, { from: new Date(from).toISOString(), to: new Date(to).toISOString() })).rows as StatRow[]
+  const main = await get('shield', now - span, now), prev = await get('shield', now - 2 * span, now - span)
+  const step = range === '1h' ? 60_000 : range === '24h' ? 3_600_000 : 86_400_000
+  const buckets = new Map<number, number[]>()
+  for (const r of main) {
+    const x = Math.floor(+new Date(r.bucket) / step) * step
+    const v = buckets.get(x) ?? [0, 0, 0, 0]
+    v[r.dims.m === 'log' && r.dims.d !== 'pass' && r.dims.d !== 'allow' ? 1 : bucketOf(r.dims.d ?? 'pass')]! += r.count
+    buckets.set(x, v)
+  }
+  const hist = Array(10).fill(0) as number[]
+  for (const r of await get('shield_score', now - span, now)) hist[Number(r.dims.b) || 0]! += r.count
+  const asns = await get('shield_asn', now - span, now), countries = await get('shield_country', now - span, now)
   return {
-    totals: { ...totals(rows), previous: totals(prev) },
-    series: { groupBy: step >= 86_400_000 ? 'day' : 'hour', series: SERIES, points },
-    top: { ips: top(blocked, (r) => r.ip ?? r.ipHash.slice(0, 12)), asns: top(blocked, (r) => (r.asn ? `AS${r.asn}` : null)).map((c) => ({ ...c, label: ipdb.orgs.get(Number(c.key.slice(2))) })), countries: top(blocked, (r) => r.country), bots: top(rows, (r) => r.bot) },
-    histogram,
+    totals: { ...totals(main), previous: totals(prev) },
+    series: { groupBy: step >= 86_400_000 ? 'day' : 'hour', series: SERIES, points: [...buckets].sort((a, b) => a[0] - b[0]).map(([x, values]) => ({ x: new Date(x).toISOString(), values })) },
+    // rollups hold no ips (owner policy): the top-ip list comes from the sampled event rows of the range
+    top: { ips: await topIps(now - span), asns: topOfRows(asns, 'a', 10, (k) => ipdb.orgs.get(Number(k))).map((c) => ({ ...c, key: `AS${c.key}` })), countries: topOfRows(countries, 'g'), bots: [] as { key: string; count: number }[] },
+    histogram: hist,
   }
 }, read)
+async function topIps(since: number) {
+  const rows = await ShieldEvent.objects.filter({ ts__gte: new Date(since), decision__in: ['block', 'rateLimit', 'would-block', 'would-rateLimit'] }).order('-ts').limit(5000).valuesList('ipNet', { flat: true }).all() as string[]   // scope: ok (indexed, capped)
+  const m = new Map<string, number>()
+  for (const k of rows) m.set(k, (m.get(k) ?? 0) + 1)
+  return [...m].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([key, count]) => ({ key, count }))
+}
 
-const eventRow = (r: Ev) => ({ ts: new Date(r.at).toISOString(), ray: r.ray, ...(r.ip && { ip: r.ip }), ...(r.country && { country: r.country }), ...(r.asn && { asn: r.asn }), path: r.path, ...(r.bot && { bot: r.bot }), score: r.score, decision: r.mode === 'log' && !['pass', 'allow', 'log'].includes(r.decision) ? `would-${r.decision}` : r.decision, ...(r.ruleId && { ruleId: r.ruleId }) })
+type Ev = Record<string, unknown> & { ts: Date; ray: string; path: string; score: number; decision: string }
+const eventRow = (r: Ev) => ({ ts: new Date(r.ts).toISOString(), ray: r.ray, ...(r.ip ? { ip: r.ip as string } : { ip: r.ipNet as string }), ...(r.country ? { country: r.country } : {}), ...(r.asn ? { asn: r.asn } : {}), path: r.path, method: r.method, ...(r.botName ? { bot: r.botName } : {}), score: r.score, decision: r.decision, ...(r.ruleId ? { ruleId: r.ruleId } : {}) })
 const eventFilters = z.object({ decision: z.string().max(40).optional(), category: z.string().max(40).optional(), country: z.string().max(2).optional(), bot: z.string().max(100).optional(), path: z.string().max(200).optional(), ray: z.string().max(128).optional(), ip: z.string().max(64).optional(), rule: z.string().max(64).optional(), scoreLt: z.number().optional() })
-export const events = defineAction('shield.events', z.object({ filters: eventFilters.default({}), page: z.number().int().min(1).max(1000).default(1), pageSize: z.number().int().min(1).max(200).default(50) }), async ({ filters, page, pageSize }) => {
+export const events = defineAction('shield.events', z.object({ filters: eventFilters.default({}), page: z.number().int().min(1).max(10_000).default(1), pageSize: z.number().int().min(1).max(200).default(50) }), async ({ filters, page, pageSize }) => {
   const f: Record<string, unknown> = {}
-  if (filters.decision) f.decision = filters.decision.replace(/^would-/, '')
-  if (filters.category) f.category = filters.category
+  if (filters.decision) f.decision = filters.decision
+  if (filters.category) f.botCategory = filters.category
   if (filters.country) f.country = filters.country.toUpperCase()
-  if (filters.bot) f.bot = filters.bot
+  if (filters.bot) f.botName = filters.bot
   if (filters.ray) f.ray = filters.ray
   if (filters.rule) f.ruleId = filters.rule
   if (filters.path) f.path__startswith = filters.path
@@ -89,13 +107,17 @@ export const events = defineAction('shield.events', z.object({ filters: eventFil
   if (filters.ip) f.ipHash = ipHash(filters.ip)
   const qs = ShieldEvent.objects.filter(f)   // scope: ok
   const count = await qs.count()
-  return { rows: (await qs.order('-at').offset((page - 1) * pageSize).limit(pageSize).all() as Ev[]).map(eventRow), count, page, pages: Math.max(1, Math.ceil(count / pageSize)) }
+  return { rows: (await qs.order('-ts').offset((page - 1) * pageSize).limit(pageSize).all() as Ev[]).map(eventRow), count, page, pages: Math.max(1, Math.ceil(count / pageSize)) }
 }, read)
-// signals + headers are not stored per event (privacy, size): the row and its decision only
+// the stored row, its decision and its signals as stored (no header list is kept: owner data policy)
 export const event = defineAction('shield.event', z.object({ ray: z.string().min(1).max(128) }), async ({ ray }) => {
-  const r = await ShieldEvent.objects.filter({ ray }).order('-at').first() as Ev | undefined   // scope: ok
+  const r = await ShieldEvent.objects.filter({ ray }).order('-ts').first() as Ev | undefined   // scope: ok
   if (!r) throw new DomainError('not_found', `no shield event with ray ${ray}`)
-  return { event: eventRow(r), decision: { action: r.decision, ...(r.ruleId && { ruleId: r.ruleId }), reason: r.ruleId ? `rule ${r.ruleId}` : r.decision, mode: r.mode, score: r.score, ray: r.ray, ms: 0 } }
+  const signals = { ip: r.ip ?? r.ipNet, ipNet: r.ipNet, country: r.country, asn: r.asn, asnOrg: r.asnOrg, asnKind: r.asnKind, tor: false, ua: r.ua, uaFamily: r.uaFamily,
+    bot: { name: r.botName, category: r.botCategory, verified: r.botVerified, spoofed: r.spoofed, via: r.botVia }, headerScore: r.headerScore, ...(r.tlsJa4 ? { tls: { ja4: r.tlsJa4 } } : {}),
+    path: r.path, method: r.method, host: r.host, rate: { ip: 0, asn: 0, path: 0 }, score: r.score }
+  const decision = { action: String(r.decision).replace(/^would-/, ''), ...(r.ruleId ? { ruleId: r.ruleId } : {}), ...(r.level ? { level: r.level } : {}), ...(r.status ? { status: r.status } : {}), reason: r.reason, mode: String(r.decision).startsWith('would-') ? 'log' : 'enforce', score: r.score, ray: r.ray, ms: 0 }
+  return { event: { ...eventRow(r), ...(r.outcome ? { outcome: r.outcome, solveMs: r.solveMs, sensorFlags: r.sensorFlags } : {}) }, signals, decision }
 }, read)
 
 // ---- rules ------------------------------------------------------------------------------------------------------------
