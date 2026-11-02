@@ -20,7 +20,7 @@ export type Op = 'eq' | 'neq' | 'in' | 'notIn' | 'contains' | 'startsWith' | 'en
 export interface Cond { field: string; op: Op; value: unknown }
 export type Condition = Cond | { all: Condition[] } | { any: Condition[] } | { not: Condition }
 export type Action =
-  | { type: 'allow' } | { type: 'log' }
+  | { type: 'allow'; rateExempt?: boolean } | { type: 'log' }   // rateExempt: only an explicit admin rule skips the rate limits
   | { type: 'challenge'; level: 'auto' | ChallengeLevel; ttl?: string }
   | { type: 'block'; status?: 403 | 404 | 429 | 451; message?: string }
   | { type: 'rateLimit'; limit: number; window: string; key: 'ip' | 'asn' | 'path' | 'ip+path' }

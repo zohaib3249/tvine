@@ -31,6 +31,7 @@ export interface RequestState {
   onHeaders(fn: () => void): void    // run right before the status line + headers go out
   log: Logger                        // tvine.request, bound to the request id
   verifiedAgent?: { directory: string; keyid: string }   // Shield: a valid Web Bot Auth signature (request.agent.verified)
+  cspNonce?: string                  // Security: this response's CSP nonce (set only by the Security middleware)
   shield?: unknown                   // Shield: this request's Signals + Decision (contrib/shield)
 }
 export type MwRequest = IncomingMessage & { tvine: RequestState }
@@ -164,6 +165,8 @@ export const CATALOG: Record<string, Factory> = {
     processRequest(req) {
       const plan = b.sec.begin(req, req.tvine.https)
       ;(req as MwRequest & { [PLAN]?: unknown })[PLAN] = plan
+      const n = req.headers['x-nonce']
+      if (typeof n === 'string' && n) req.tvine.cspNonce = n   // the nonce THIS middleware set (a client's x-nonce never counts)
     },
     processResponse(req, res) { b.sec.apply(res, (req as MwRequest & { [PLAN]?: never })[PLAN]!) },
   }),

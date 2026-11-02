@@ -69,7 +69,8 @@ export function ruleProblem(r: Partial<Rule>): string | undefined {
   if ((a.type === 'challenge' || a.type === 'block') && ['/', '/x/y', '/tvine/api/a.b'].every((path) => evaluate(r.when as Condition, ruleContext(PROBE(path)))))
     return 'when: this condition matches every request; narrow it (a path, a bot category, a score…)'
   switch (a.type) {
-    case 'allow': case 'log': return undefined
+    case 'allow': return a.rateExempt === undefined || typeof a.rateExempt === 'boolean' ? undefined : 'then.rateExempt: true or false'
+    case 'log': return undefined
     case 'challenge': return ['auto', ...LEVELS].includes(a.level) ? (a.ttl === undefined || /^\d+[smhd]$/.test(a.ttl) ? undefined : "then.ttl: a duration like '24h'") : 'then.level: auto | pow | checkbox | captcha'
     case 'block': return a.status === undefined || [403, 404, 429, 451].includes(a.status) ? (a.message === undefined || (typeof a.message === 'string' && a.message.length <= 200) ? undefined : 'then.message: at most 200 chars') : 'then.status: 403 | 404 | 429 | 451'
     case 'rateLimit': return Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 1_000_000 && /^\d+[smhd]$/.test(a.window) && ['ip', 'asn', 'path', 'ip+path'].includes(a.key) ? undefined : "then: rateLimit needs limit 1..1000000, window like '1m', key ip | asn | path | ip+path"

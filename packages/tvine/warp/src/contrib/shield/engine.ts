@@ -34,20 +34,22 @@ export function registerRule(name: string, fn: CustomRule): void {
 // ---- default rule set (owner decisions; editable, shield.rules.reset restores it) -------------------------------------
 export const stanceAction = (s: ShieldStance): Action => (s === 'allow' ? { type: 'allow' } : s === 'block' ? { type: 'block', status: 403 } : { type: 'challenge', level: 'auto' })
 export const botRuleId = (c: BotCategory) => `bot:${c}`
+// an ALLOW stance needs a VERIFIED bot (rDNS, published IP ranges, allowlisted Web Bot Auth, a Tvine token): an
+// unverified UA claim gets no allow and is an ordinary request (score + challenge rules). Search is verified-only always.
 export function botRule(category: BotCategory, stance: ShieldStance, order: number): Rule {
-  const when: Condition = category === 'search'   // only a VERIFIED search engine gets the search stance
-    ? { all: [{ field: 'bot.category', op: 'eq', value: 'search' }, { field: 'bot.verified', op: 'eq', value: true }] }
+  const when: Condition = category === 'search' || stance === 'allow'
+    ? { all: [{ field: 'bot.category', op: 'eq', value: category }, { field: 'bot.verified', op: 'eq', value: true }] }
     : { field: 'bot.category', op: 'eq', value: category }
   return { id: botRuleId(category), name: `${category} bots: ${stance}`, enabled: true, order, when, then: stanceAction(stance) }
 }
 export function defaultRules(ai: Settings['shield']['aiDefaults']): Rule[] {
   return [
+    { id: 'default:rate', name: 'Rate limit 300/min per ip', enabled: true, order: 5, when: { all: [] }, then: { type: 'rateLimit', limit: 300, window: '1m', key: 'ip' } },
     { id: 'default:spoofed', name: 'Block spoofed bots (claims a verified bot, fails verification)', enabled: true, order: 10, when: { field: 'bot.spoofed', op: 'eq', value: true }, then: { type: 'block', status: 403, message: 'spoofed bot' } },
     botRule('search', ai.search, 20),
     botRule('ai-agent', ai.agents, 40),
     botRule('scanner', 'block', 50),
     botRule('ai-crawler', ai.crawlers, 60),
-    { id: 'default:rate', name: 'Rate limit 300/min per ip', enabled: true, order: 70, when: { all: [] }, then: { type: 'rateLimit', limit: 300, window: '1m', key: 'ip' } },
     { id: 'default:low-score', name: 'Challenge low scores on pages', enabled: true, order: 80, when: { all: [{ field: 'page', op: 'eq', value: true }, { field: 'score', op: 'lt', value: 30 }] }, then: { type: 'challenge', level: 'auto' } },
   ]
 }
@@ -133,9 +135,23 @@ export async function decide(s: Signals, o: DecideOpts): Promise<{ decision: Dec
     return lv.list === 'deny' ? done('block', `deny list (${lv.via})`, { ruleId: `list:deny`, status: 403 }) : done('allow', `allow list (${lv.via})`, { ruleId: 'list:allow' })
   }
   const ctx = ruleContext(s, o.headers)
+  // rate limits ALWAYS run first, whatever their order: an allow never skips them, unless an enabled matching admin rule
+  // says { type: 'allow', rateExempt: true }
+  const exemptRule = state.rules.find((r) => r.enabled && r.then.type === 'allow' && r.then.rateExempt === true && evaluate(r.when, ctx))
+  if (!exemptRule) {
+    for (const r of state.rules) {
+      if (!r.enabled || r.then.type !== 'rateLimit') continue
+      const a = r.then, r0 = performance.now(), matched = evaluate(r.when, ctx)
+      trace.push({ ruleId: r.id, matched, ms: Math.round((performance.now() - r0) * 1000) / 1000, ...(matched && { action: a.type }) })
+      if (!matched || o.dryRun) continue
+      const key = a.key === 'ip' ? s.ipNet.endsWith('/64') ? s.ipNet : s.ip : a.key === 'asn' ? String(s.asn ?? s.ip) : a.key === 'path' ? s.path : `${s.ip}|${s.path}`
+      const got = await safeCheck(limiter(o.settings, a.limit, dur(a.window, 60_000)), `shield-${a.key}:${key}`, o.settings)
+      if (!got.ok) return done('rateLimit', `rate limit ${a.limit}/${a.window} per ${a.key}`, { ruleId: r.id, status: 429 }, { action: a, rule: r, retryAfterMs: got.retryAfterMs })
+    }
+  }
   let logged: Rule | undefined
   for (const r of state.rules) {
-    if (!r.enabled) continue
+    if (!r.enabled || r.then.type === 'rateLimit') continue
     const r0 = performance.now()
     const matched = evaluate(r.when, ctx)
     let action: Action | undefined = matched ? r.then : undefined

@@ -66,7 +66,8 @@ export function challengePage(prefix: string, level: ChallengeLevel, ret: string
   const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
   return { html, csp }
 }
-const nonceOf = (req: IncomingMessage) => { const n = req.headers['x-nonce']; return typeof n === 'string' && n ? n : undefined }
+// only the nonce the Security middleware set (req.tvine.cspNonce), never a client-sent x-nonce header
+const nonceOf = (req: MwRequest) => req.tvine.cspNonce
 const cspHeader = (p: { csp?: string }): Record<string, string> => (p.csp ? { 'content-security-policy': p.csp } : {})
 
 export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware {
