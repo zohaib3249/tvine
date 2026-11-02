@@ -1,6 +1,6 @@
 'use client'
 // Analytics: one shield.analytics call per (range | from/to, filters). Sticky range bar + filter chips (URL-backed),
-// KPI strip with deltas + sparklines, served vs mitigated (drag to zoom), decisions (stacked + donut), world map,
+// KPI strip with deltas + sparklines, served vs mitigated (drag to zoom), decisions (stacked + donut), globe or flat map + by-region card,
 // top-N grid with "Filter for" / "Exclude", score histogram, challenge funnel, recent events. Live frames refetch.
 import { useState } from 'react'
 import { ChartCard, DonutChart, Sparkline, XYChart, type ChartData } from '../charts.js'
@@ -8,8 +8,9 @@ import { LivePill, useLiveData } from '../live.js'
 import { Empty, ErrorBox, Icon, Region, cx } from '../ui.js'
 import { useShield } from './ctx.js'
 import { BOT_CATEGORIES } from './fields.js'
-import { Ago, FilterBar, Funnel, RangeBar, TopList, WorldMap, countryName, flag, num, pct, useFilters, type FilterState } from './kit.js'
-import type { Analytics as Data, EventPage, EventRow, FilterField, Rule, TopKey } from './types.js'
+import { Ago, CONTINENTS, FilterBar, Funnel, RangeBar, TopList, continentOf, countryName, flag, num, pct, useFilters, type FilterState } from './kit.js'
+import { WorldMap } from './map.js'
+import type { Analytics as Data, EventPage, EventRow, FilterField, Rule, TopKey, TopRow } from './types.js'
 
 // every request Shield sees nudges admin:live: refetch at most every 15 s per widget (stays inside settings.limits.rate, 60/min)
 export const LIVE = { group: 'admin:live', types: ['shield'], minMs: 15_000 }
@@ -20,6 +21,19 @@ export const decisionTone = (d: string) => (/block|rateLimit/.test(d) ? 'error' 
 export const DecisionBadge = ({ d }: { d: string }) => <span className="tvs-decision" data-t={decisionTone(d)}>{d.startsWith('would-') ? `would ${d.slice(6)}` : DECISION_LABEL[d] ?? d}</span>
 
 // the analytics input for the current URL state
+// by continent: the server's top.continents, or (older servers) summed from geo
+export function continents(d: Data): TopRow[] {
+  if (d.top.continents) return d.top.continents.map((r) => ({ ...r, label: r.label ?? CONTINENTS[r.key] ?? r.key }))
+  const m = new Map<string, TopRow>()
+  for (const g of d.geo) {
+    const k = g.continent ?? continentOf(g.country)
+    if (!k) continue
+    const t = m.get(k) ?? { key: k, label: CONTINENTS[k] ?? k, count: 0, mitigated: 0 }
+    t.count += g.requests; t.mitigated += g.mitigated; m.set(k, t)
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count)
+}
+
 export const analyticsInput = (s: FilterState) => ({ range: s.range, ...s.custom, filters: s.filters })
 
 const TOPS: { key: TopKey; title: string; field: FilterField }[] = [
@@ -56,6 +70,7 @@ export function Overview() {
     points: d.histogram.map((n, i) => ({ x: `${i * 10 + 1}–${i === 9 ? 99 : i * 10 + 10}`, values: [n] })) }
   const zoom = (i0: number, i1: number) => { const p = d!.series.points; s.setWindow(p[i0]!.x, p[i1]!.x) }
   const empty = d && d.totals.requests === 0
+  const localOnly = !!d?.top.countries?.length && d.top.countries.every((r) => r.key === 'LOCAL')
   return (
     <Region id="shield:analytics" label="Security analytics" state={{ range: s.custom ? 'custom' : s.range, filters: s.filters.length, requests: t?.requests ?? null, mitigated: t?.mitigated ?? null, sampled: d?.sampled ?? null, loading: a.loading }}>
       <RangeBar title="Security analytics" sub="Every request Shield saw, what it decided, and why." s={s}>
@@ -91,18 +106,19 @@ export function Overview() {
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
-            <WorldMap geo={d?.geo} onPick={(cc) => s.add({ field: 'country', op: 'eq', value: cc })} />
-            <div className="grid gap-4">
-              <ChartCard id="scores" title="Bot score distribution" subtitle="1 = surely a bot · 99 = surely a human" type="bar" data={hist} loading={a.loading} height={150} className="tvs-hist" />
-              <Funnel f={d?.funnel} />
-            </div>
+            <WorldMap geo={d?.geo} localOnly={localOnly} onPick={(cc) => s.add({ field: 'country', op: 'eq', value: cc })} />
+            <TopList id="continents" title="By region" field="continent" rows={d && continents(d)} onFilter={s.add} />
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <ChartCard id="scores" title="Bot score distribution" subtitle="1 = surely a bot · 99 = surely a human" type="bar" data={hist} loading={a.loading} height={150} className="tvs-hist" />
+            <Funnel f={d?.funnel} />
           </div>
 
           <h2 className="mt-6 mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Top by</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {TOPS.map((x) => (
               <TopList key={x.key} id={x.key} title={x.title} field={x.field} rows={d ? d.top[x.key] ?? [] : undefined} onFilter={s.add}
-                render={x.key === 'countries' ? (r) => <>{flag(r.key)} {r.label ?? countryName(r.key)}</>
+                render={x.key === 'countries' ? (r) => <>{flag(r.key)} {r.key === 'LOCAL' ? countryName(r.key) : r.label ?? countryName(r.key)}</>
                   : x.key === 'asns' ? (r) => <><span className="font-mono text-xs">AS{r.key.replace(/^AS/i, '')}</span> {r.label && <span className="text-muted">{r.label}</span>}</>
                   : x.key === 'rules' ? (r) => r.label ?? ruleName(r.key)
                   : x.key === 'botCategories' ? (r) => BOT_CATEGORIES.find((c) => c.value === r.key)?.label ?? r.key
@@ -168,7 +184,7 @@ function FeedRow({ r, onOpen }: { r: EventRow; onOpen(): void }) {
         <span className="text-muted"><Ago ts={r.ts} /></span>
         <DecisionBadge d={r.decision} />
         <span className="truncate font-mono text-xs">{r.method ?? 'GET'} {r.path}</span>
-        <span className="hidden truncate text-muted sm:inline">{[r.country && `${flag(r.country)} ${r.country}`, r.bot, r.ip].filter(Boolean).join(' · ')}</span>
+        <span className="hidden truncate text-muted sm:inline">{[r.local ? '🏠 Local' : r.country && `${flag(r.country)} ${r.country}`, r.bot, r.ip].filter(Boolean).join(' · ')}</span>
         <span className="text-right tabular-nums" title="Score">{r.score}</span>
       </button>
     </li>

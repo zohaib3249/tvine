@@ -49,7 +49,7 @@ export function Slotted({ slot, meta, children }: { slot: Slot; meta?: ModelMeta
 // ---- agent regions: a scope with a stable id, so children read `admin:changelist > row:12 > checkbox:select` --------
 export function Region({ id, label, as: Tag = 'div', className, state, children, ...rest }: {
   id: string; label: string; as?: 'div' | 'section' | 'aside' | 'header' | 'nav' | 'main' | 'tr' | 'form' | 'li'; className?: string
-  state?: Record<string, string | number | boolean | null>; children?: ReactNode
+  state?: Record<string, string | number | boolean | null | number[]>; children?: ReactNode
 } & Record<string, unknown>) {
   const w = useWidget({ id, kind: 'x-region' as `x-${string}`, label: label.slice(0, 40), state: state ?? null })
   const T = Tag as 'div'

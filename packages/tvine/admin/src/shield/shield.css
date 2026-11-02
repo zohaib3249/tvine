@@ -125,10 +125,27 @@
   .tvs-top-act button { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 5px; background: var(--tva-surface); border: 1px solid var(--tva-line); color: var(--tva-muted); }
   .tvs-top-act button:hover { color: var(--tva-accent); border-color: var(--tva-accent); }
 
-  .tvs-map path { stroke: var(--tva-surface); stroke-width: .5; }
-  .tvs-map path:not([fill]) { fill: color-mix(in oklab, var(--tva-line) 70%, var(--tva-sunken)); }
+  .tvs-map { touch-action: none; user-select: none; }
+  .tvs-map:focus-visible { outline: 2px solid var(--tva-accent); outline-offset: 2px; border-radius: var(--tva-radius); }
+  .tvs-map.is-globe { cursor: grab; }
+  .tvs-map.is-globe:active { cursor: grabbing; }
+  .tvs-map path[data-cc] { stroke: var(--tva-surface); stroke-width: .5; stroke-linejoin: round; }
+  .tvs-map path[data-cc]:not([fill]) { fill: color-mix(in oklab, var(--tva-line) 70%, var(--tva-sunken)); }
+  .tvs-map.is-globe path[data-cc]:not([fill]) { fill: color-mix(in oklab, var(--tva-line) 55%, var(--tva-surface)); }
   .tvs-map path.has { cursor: pointer; }
   .tvs-map path.has:hover, .tvs-map path.has:focus-visible { stroke: var(--tva-fg); stroke-width: 1; outline: none; }
+  .tvs-ocean-hi { stop-color: color-mix(in oklab, var(--tva-c1) 16%, var(--tva-surface)); }
+  .tvs-ocean-lo { stop-color: color-mix(in oklab, var(--tva-c1) 22%, var(--tva-sunken)); }
+  .tvs-atmo { stop-color: var(--tva-c1); stop-opacity: .28; }
+  .tvs-sphere { stroke: color-mix(in oklab, var(--tva-c1) 35%, transparent); stroke-width: .75; }
+  .tvs-grat { stroke: color-mix(in oklab, var(--tva-c1) 22%, transparent); stroke-width: .5; pointer-events: none; }
+  .tvs-dot { pointer-events: none; fill: #f38020; }
+  .tvs-dot .tvs-pulse { fill: color-mix(in oklab, #f38020 35%, transparent); transform-box: fill-box; transform-origin: center; animation: tvs-pulse 2.4s ease-out infinite; }
+  @keyframes tvs-pulse { from { transform: scale(.6); opacity: .9; } to { transform: scale(1.8); opacity: 0; } }
+  .tvs-globe-ctl { position: absolute; right: .25rem; top: .25rem; display: grid; grid-template-columns: repeat(4, 1.75rem); gap: 2px; }
+  .tvs-globe-ctl button { display: grid; place-items: center; height: 1.75rem; border-radius: 6px; background: color-mix(in oklab, var(--tva-surface) 88%, transparent); border: 1px solid var(--tva-line); color: var(--tva-muted); font-size: 14px; line-height: 1; }
+  .tvs-globe-ctl button:hover:not(:disabled) { color: var(--tva-accent); border-color: var(--tva-accent); }
+  .tvs-globe-ctl button:disabled { opacity: .4; }
   .tvs-ramp { display: inline-block; width: 5rem; height: .5rem; border-radius: 999px; background: linear-gradient(90deg, color-mix(in oklab, var(--tva-c1) 18%, var(--tva-sunken)), var(--tva-c1)); }
   .tvs-ramp[data-m="mitigated"] { background: linear-gradient(90deg, color-mix(in oklab, var(--tva-c2) 18%, var(--tva-sunken)), var(--tva-c2)); }
 
