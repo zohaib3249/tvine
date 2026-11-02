@@ -101,9 +101,11 @@ export function Legend({ d, kind = 'line' }: { d: ChartData; kind?: 'line' | 're
 }
 
 // ---- line / area / bar: one XY frame ------------------------------------------------------------------------------
-export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartData; kind: 'line' | 'area' | 'bar'; stacked?: boolean; height?: number }) {
+// onBrush: drag across the plot to pick a span of points (inclusive indices), e.g. zoom a time range
+export function XYChart({ d, kind, stacked = false, height = 220, onBrush }: { d: ChartData; kind: 'line' | 'area' | 'bar'; stacked?: boolean; height?: number; onBrush?(from: number, to: number): void }) {
   const [ref, W] = useWidth()
   const [hi, setHi] = useState<number | null>(null)
+  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null)
   const n = d.points.length
   const compact = W < 420
   // a multi-series area stacks (parts of a whole over time); lines never stack
@@ -120,11 +122,14 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
   const band = iw / Math.max(1, n)
   const x = (i: number) => (kind === 'bar' ? padL + band * (i + 0.5) : padL + (n <= 1 ? iw / 2 : (i * iw) / (n - 1)))
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / (compact ? 70 : 90)))))
-  const pick = (clientX: number, el: SVGSVGElement) => {
+  const idx = (clientX: number, el: SVGSVGElement) => {
     const r = el.getBoundingClientRect(), px = ((clientX - r.left) / (r.width || W)) * W
     const i = kind === 'bar' ? Math.floor((px - padL) / band) : Math.round(((px - padL) / iw) * (n - 1))
-    setHi(Math.max(0, Math.min(n - 1, i)))
+    return Math.max(0, Math.min(n - 1, i))
   }
+  const pick = (clientX: number, el: SVGSVGElement) => { const i = idx(clientX, el); setHi(i); if (drag) setDrag({ ...drag, b: i }) }
+  const down = (e: React.PointerEvent<SVGSVGElement>) => { if (!onBrush || e.button !== 0) return; const i = idx(e.clientX, e.currentTarget); setDrag({ a: i, b: i }); e.currentTarget.setPointerCapture?.(e.pointerId) }
+  const up = () => { if (drag && drag.a !== drag.b) onBrush?.(Math.min(drag.a, drag.b), Math.max(drag.a, drag.b)); setDrag(null) }
   const key = (e: KeyboardEvent) => {
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); setHi((h) => Math.max(0, Math.min(n - 1, (h ?? (e.key === 'ArrowRight' ? -1 : n)) + (e.key === 'ArrowRight' ? 1 : -1)))) }
     if (e.key === 'Escape') setHi(null)
@@ -139,7 +144,8 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
     <div ref={ref} className="relative">
       <svg width="100%" height={height} viewBox={`0 0 ${W} ${height}`} role="img" tabIndex={0} className="tva-plot"
         aria-label={`${d.title ?? 'Chart'}: ${n} points, use arrow keys to read values`}
-        onPointerMove={(e) => pick(e.clientX, e.currentTarget)} onPointerLeave={() => setHi(null)} onKeyDown={key} onBlur={() => setHi(null)}>
+        onPointerMove={(e) => pick(e.clientX, e.currentTarget)} onPointerLeave={() => setHi(null)} onKeyDown={key} onBlur={() => setHi(null)}
+        onPointerDown={down} onPointerUp={up} onPointerCancel={() => setDrag(null)} style={onBrush ? { cursor: 'crosshair', touchAction: 'pan-y' } : undefined}>
         {ticks.map((t) => (
           <g key={t}>
             <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} className={t === 0 ? 'tva-axis' : 'tva-grid'} />
@@ -171,6 +177,7 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
             {n === 1 && <circle cx={x(0)} cy={y(cum(0, k))} r={4} fill={color(k)} />}
           </g>
         ))}
+        {drag && drag.a !== drag.b && <rect x={Math.min(x(drag.a), x(drag.b))} y={padT} width={Math.abs(x(drag.b) - x(drag.a))} height={ih} className="tva-brush" />}
         {kind !== 'bar' && hi !== null && (
           <g>
             <line x1={x(hi)} x2={x(hi)} y1={padT} y2={padT + ih} className="tva-cross" />
@@ -185,7 +192,8 @@ export function XYChart({ d, kind, stacked = false, height = 220 }: { d: ChartDa
 }
 
 // ---- donut: one series over categories (≤ 7 slices + "Other") ----------------------------------------------------
-export function DonutChart({ d, size = 168 }: { d: ChartData; size?: number }) {
+// colors: a fixed color per category label (e.g. one per decision), else the categorical order by size
+export function DonutChart({ d, size = 168, colors }: { d: ChartData; size?: number; colors?: Record<string, string> }) {
   const [hi, setHi] = useState<number | null>(null)
   let rows = d.points.map((p) => ({ label: p.x, v: Math.max(0, p.values[0] ?? 0) })).sort((a, b) => b.v - a.v)
   if (rows.length > 8) rows = [...rows.slice(0, 7), { label: 'Other', v: rows.slice(7).reduce((a, r) => a + r.v, 0) }]
@@ -209,7 +217,7 @@ export function DonutChart({ d, size = 168 }: { d: ChartData; size?: number }) {
     <div className="flex flex-wrap items-center gap-5">
       <div className="relative" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${d.title ?? 'Breakdown'}: ${rows.length} parts`} className="tva-donut">
-          {arcs.map((p, i) => <path key={i} d={p} fill={color(i)} fillRule="evenodd" tabIndex={0} aria-label={`${rows[i]!.label}: ${fmtValue(rows[i]!.v, d.unit, d.currency)}`}
+          {arcs.map((p, i) => <path key={i} d={p} fill={colors?.[rows[i]!.label] ?? color(i)} fillRule="evenodd" tabIndex={0} aria-label={`${rows[i]!.label}: ${fmtValue(rows[i]!.v, d.unit, d.currency)}`}
             className={cx('tva-slice', shown === i && 'is-hi')} onPointerEnter={() => setHi(i)} onPointerLeave={() => setHi(null)} onFocus={() => setHi(i)} onBlur={() => setHi(null)} />)}
         </svg>
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
@@ -222,7 +230,7 @@ export function DonutChart({ d, size = 168 }: { d: ChartData; size?: number }) {
       <ul className="min-w-36 flex-1 space-y-1 text-[13px]" aria-label="Legend">
         {rows.map((r, i) => (
           <li key={r.label} className={cx('flex items-center gap-2 rounded px-1', shown === i && 'bg-sunken')} onPointerEnter={() => setHi(i)} onPointerLeave={() => setHi(null)}>
-            <span className="tva-key-rect" style={{ background: color(i) }} /><span className="flex-1 truncate">{r.label}</span>
+            <span className="tva-key-rect" style={{ background: colors?.[r.label] ?? color(i) }} /><span className="flex-1 truncate">{r.label}</span>
             <span className="tabular-nums text-muted">{Math.round((r.v / total) * 100)}%</span>
           </li>
         ))}

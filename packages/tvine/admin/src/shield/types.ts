@@ -11,7 +11,7 @@ export type Action =
   | { type: 'block'; status?: 403 | 404 | 429 | 451; message?: string }
   | { type: 'rateLimit'; limit: number; window: string; key: 'ip' | 'asn' | 'path' | 'ip+path' }
   | { type: 'custom'; name: string }
-export interface Rule { id: string; name: string; enabled: boolean; order: number; when: Condition; then: Action; ttl?: string; hits?: number }
+export interface Rule { id: string; name: string; enabled: boolean; order: number; when: Condition; then: Action; ttl?: string; hits?: number; hits24h?: number; spark?: number[] }
 export interface SensorReport {
   webdriver: boolean; headless: string[]; webgl?: string; canvas?: string; audio?: string
   screen: string; tz: string; langs: string[]; touch: number; cores?: number; plugins: number
@@ -47,7 +47,8 @@ export type Overview = {
 export type ListEntry = { id: string; kind: 'ip' | 'cidr' | 'country' | 'asn'; value: string; list: 'allow' | 'deny'; note?: string }
 export type BotInfo = { name: string; category: BotCategory; verified: boolean; via?: string; hits?: number }
 export type Bots = { stances: Partial<Record<BotCategory, Stance>>; catalog: BotInfo[] }
-export type EventRow = { ts: string; ray: string; ip?: string; country?: string; asn?: number; path: string; method?: string; bot?: string; score: number; decision: Decision['action'] | `would-${string}`; ruleId?: string }
+export type EventRow = { ts: string; ray: string; ip?: string; country?: string; asn?: number; path: string; method?: string; bot?: string; score: number; decision: Decision['action'] | `would-${string}`; ruleId?: string
+  ua?: string; uaFamily?: string; botCategory?: BotCategory; asnOrg?: string; status?: number; reason?: string; level?: ChallengeLevel; host?: string; mode?: 'log' | 'enforce'; solveMs?: number }
 export type EventPage = { rows: EventRow[]; count: number; page: number; pages: number }
 // shield.event { ray }
 export type EventDetail = { event: EventRow; signals?: Signals; decision?: Decision; headers?: Record<string, string> }
@@ -59,3 +60,29 @@ export type ShieldSettings = { mode: Mode; clearanceTtl: string; levels: Challen
   events?: EventsConf; stats?: { bucket: StatsBucket; retentionDays: number }; cleanup?: { enabled: boolean; schedule?: string }; dropped?: number }
 export type IpdbStatus = { source: string; updatedAt?: string; ok: boolean; rows?: number; next?: string; message?: string }
 export type FieldType = 'string' | 'number' | 'boolean' | 'ip' | 'country' | 'category' | 'kind' | 'list'
+
+// ---- analytics (shield.analytics / shield.events / shield.ip / shield.rules.preview) --------------------------------
+export type Range = '1h' | '24h' | '7d' | '30d'
+export const FILTER_FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
+export type FilterField = typeof FILTER_FIELDS[number]
+export type Filter = { field: FilterField; op: 'eq' | 'neq'; value: string }
+export type TopRow = { key: string; label?: string; count: number; mitigated: number }
+export type TopKey = 'countries' | 'asns' | 'paths' | 'ips' | 'bots' | 'botCategories' | 'rules' | 'methods' | 'uaFamilies' | 'statuses' | 'ja4' | 'hosts'
+type Totals = { requests: number; served: number; mitigated: number; blocked: number; challenged: number; rateLimited: number; solved: number; failed: number; logged: number; avgScore: number }
+type CD = { groupBy?: 'hour' | 'day' | 'time'; series: { name: string; label: string }[]; points: { x: string; values: number[] }[] }
+export type Analytics = {
+  range: { from: string; to: string; step: string }; source: 'rollups' | 'events'; sampled: boolean; sampleRate: number
+  totals: Totals & { previous?: Partial<Totals> }
+  series: CD; decisions: CD; histogram: number[]
+  funnel: { issued: number; solved: number; failed: number; solveMsP50?: number; solveMsP95?: number }
+  geo: { country: string; requests: number; mitigated: number }[]
+  top: Partial<Record<TopKey, TopRow[]>>
+}
+export type IpProfile = {
+  ip: string; ipNet: string; country?: string; asn?: number; asnOrg?: string; asnKind?: string; tor: boolean
+  lists: { kind: ListEntry['kind']; value: string; list: ListEntry['list']; id: string }[]
+  counts: { requests: number; mitigated: number; byDecision: Record<string, number> }
+  firstSeen?: string; lastSeen?: string; recent: EventRow[]
+  test: { action: string; reason: string; ruleId?: string; score: number }
+}
+export type RulePreview = { matched: number; scanned: number; sample: EventRow[] }
