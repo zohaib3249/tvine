@@ -275,8 +275,7 @@ Out of the box (editable in /shield → Rules, "reset" restores them):
 |---|---|
 | Spoofed bots (Googlebot UA that fails reverse DNS) | blocked |
 | Verified search engines | allowed |
-| Web Bot Auth signed agents, Tvine API tokens | allowed |
-| AI agents acting for a user (Claude-User, ChatGPT-User…) | allowed |
+| AI agents acting for a user (Claude-User, ChatGPT-User…, Tvine API tokens, Web Bot Auth agents from `shield.webBotAuth.directories`) | allowed |
 | Scanners (sqlmap, nikto…) | blocked |
 | AI crawlers (GPTBot, ClaudeBot, CCBot…) | challenged |
 | More than 300 requests a minute from one IP | 429 |
@@ -289,6 +288,8 @@ Out of the box (editable in /shield → Rules, "reset" restores them):
   `shield.registerRule('vip', (req, s) => s.country === 'IS' ? { type: 'allow' } : undefined)`; pick it in the panel.
 - Country / ASN: run the `shield.ipdb_update` task (or "update now" in Settings) to download DB-IP Lite (monthly,
   CC BY 4.0). Without it those signals are empty. AI-crawler IP ranges and Tor exits: `shield.ranges_update` (daily).
+- Locked out? `tvine shield mode off` or `tvine shield rules disable --all` (running servers pick it up within 3 s). The
+  panel, the admin and sign-in are never challenged.
 - Behind a proxy, set `trustProxy`; TLS fingerprints come only from `shield.tlsHeader` through a trusted proxy.
 - Who may open /shield: Settings → Panel access, a condition on the user (`isStaff eq true`, `groups contains
   security`, any custom user field). Every shield.* action re-checks it, plus the admin hardening (allowIps, 2FA).
