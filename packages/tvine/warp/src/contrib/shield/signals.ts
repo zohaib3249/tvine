@@ -48,7 +48,7 @@ export function headerScore(ua: string, h: (n: string) => string | undefined, se
   return Math.round((checks.filter(Boolean).length / checks.length) * 100) / 100
 }
 
-// ---- L7: reverse + forward DNS (search engines), cached 1 h, 1.5 s cap -------------------------------------------------
+// ---- L7: reverse + forward DNS (search engines), cached 24 h when verified / 1 h when not, 1.5 s cap -------------------------------------------------
 export interface Resolver { reverse(ip: string): Promise<string[]>; lookup(host: string): Promise<string[]> }
 export const resolver: { r: Resolver } = {
   r: { reverse: (ip) => dns.reverse(ip), lookup: async (host) => (await dns.lookup(host, { all: true })).map((a) => a.address) },
@@ -59,7 +59,7 @@ const timeout = <T>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<n
 export async function verifyRdns(ip: string, suffixes: string[]): Promise<boolean> {
   const key = `${ip}|${suffixes.join(',')}`
   const hit = rdnsCache.get(key)
-  if (hit && Date.now() - hit.at < 3_600_000) return hit.ok
+  if (hit && Date.now() - hit.at < (hit.ok ? 86_400_000 : 3_600_000)) return hit.ok
   let ok = false
   try {
     const names = await timeout(resolver.r.reverse(ip), 1500)
