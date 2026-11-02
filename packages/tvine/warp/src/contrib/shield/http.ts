@@ -1,4 +1,4 @@
-// tvine.middleware.Shield (CATALOG entry in middleware/index.ts lazy-loads this): the decision pipeline, the modes,
+// tvine.middleware.Shield (CATALOG entry in middleware/index.ts lazy-loads this; not named middleware.ts: that name is an app's action middleware): the decision pipeline, the modes,
 // the response headers, the challenge redirect, the <prefix>/challenge|start|verify endpoints and their static files.
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'

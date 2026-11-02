@@ -343,7 +343,7 @@ export const CATALOG: Record<string, Factory> = {
     return {
       name: 'Shield',
       async processRequest(req, res) {
-        const m = await (mw ??= import('../contrib/shield/middleware.js').then((x) => x.shield(o, b)))
+        const m = await (mw ??= import('../contrib/shield/http.js').then((x) => x.shield(o, b)))
         return m.processRequest!(req, res)
       },
     }
