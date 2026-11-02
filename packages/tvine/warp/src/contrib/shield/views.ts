@@ -15,8 +15,10 @@ import { ShieldConfig, ShieldEvent, ShieldList, ShieldRule } from './models.js'
 import { collectSignals, ipNetOf, scoreParts } from './signals.js'
 import { changed, ruleProblem, saveConfig, toRule } from './store.js'
 import { pruneEvents, updateIpdb } from './tasks.js'
-import type { BotCategory, Condition } from './types.js'
+import type { Action, BotCategory, Condition } from './types.js'
 import { counters, ipHash } from './events.js'
+import { securityEvent } from '../../core/audit.js'
+import { CODE_ACTIONS, CODE_FIELDS, CODE_MAX, CODE_TEMPLATE, SAMPLE_REQUEST, checkCode, codeInput, codeStats, codeStatus, runCode, sourceHash } from './code.js'
 
 // the user row the access condition sees: the user's own fields + groups (names)
 export async function userRow(u: TvineUser): Promise<Record<string, unknown>> {
@@ -321,35 +323,55 @@ export const rulesList = defineAction('shield.rules.list', z.object({}), async (
     const { weight } = weightOf(ctx.settings)
     for (const r of await ShieldEvent.objects.filter({ ts__gte: new Date(start) }).order('-ts').limit(CAP).values('ruleId', 'ts', 'decision').all() as Row[]) add(r.ruleId, +new Date(r.ts), weight(r.decision))   // scope: ok (indexed ts, capped)
   }
-  return (await allRules()).map((r) => { const a = (spark.get(r.id) ?? Array(24).fill(0) as number[]).map(Math.round); return { ...r, spark: a, hits24h: a.reduce((x, y) => x + y, 0) } })
+  return (await allRules()).map((r) => { const a = (spark.get(r.id) ?? Array(24).fill(0) as number[]).map(Math.round); return { ...r, spark: a, hits24h: a.reduce((x, y) => x + y, 0), ...(r.then.type === 'code' && { code: codeStatus(r.id) }) } })
 }, read)
 // how many stored events of the last sinceHours a condition matches (their stored signals; no headers / rate / clearance)
-export const rulesPreview = defineAction('shield.rules.preview', z.object({ when: z.unknown(), sinceHours: z.number().int().min(1).max(168).default(24) }), async ({ when, sinceHours }) => {
+// then: a code action also runs its code on each condition match (at most CODE_CAP rows: the sandbox is ~µs, not free)
+const CODE_CAP = 5000
+export const rulesPreview = defineAction('shield.rules.preview', z.object({ when: z.unknown(), then: z.unknown().optional(), sinceHours: z.number().int().min(1).max(168).default(24) }), async ({ when, then, sinceHours }, ctx) => {
   const problem = conditionProblem(when)
   if (problem) throw bad(`when: ${problem}`, 'when')
-  const rows = await ShieldEvent.objects.filter({ ts__gte: new Date(Date.now() - sinceHours * H) }).order('-ts').limit(CAP).all() as Ev[]   // scope: ok (indexed ts, capped)
-  let matched = 0
-  const sample: ReturnType<typeof eventRow>[] = []
+  const code = then && typeof then === 'object' && (then as Action).type === 'code' ? String((then as { source?: unknown }).source ?? '') : undefined
+  if (code !== undefined) { const c = await checkCode(code); if (!c.ok) throw bad(`then.source: ${c.errors.map((e) => `${e.line}:${e.column} ${e.message}`).join('; ')}`, 'then') }
+  const rows = await ShieldEvent.objects.filter({ ts__gte: new Date(Date.now() - sinceHours * H) }).order('-ts').limit(code === undefined ? CAP : CODE_CAP).all() as Ev[]   // scope: ok (indexed ts, capped)
+  let matched = 0, codeErrors = 0
+  let lastError: { kind: string; message: string } | undefined
+  const sample: ReturnType<typeof eventRow>[] = [], actions: Record<string, number> = {}
   for (const r of rows) {
     const s = signalsOf(r)
     if (!evaluate(when as Condition, ruleContext({ ...s, ip: s.ip.split('/')[0]! } as never))) continue
+    if (code !== undefined) {
+      const out = await runCode(code, codeInput({ ...s, ip: s.ip.split('/')[0]! } as never), { settings: ctx.settings })
+      if (out.error) { codeErrors++; lastError = { kind: out.error.kind, message: out.error.message } }
+      if (!out.action) continue
+      actions[out.action.type] = (actions[out.action.type] ?? 0) + 1
+    }
     matched++
     if (sample.length < 10) sample.push(eventRow(r))
   }
-  return { matched, scanned: rows.length, sample }
+  return { matched, scanned: rows.length, sample, ...(code !== undefined && { code: { actions, errors: codeErrors, ...(lastError && { lastError }) } }) }
 }, read)
 export const rulesSave = defineAction('shield.rules.save', z.object({ rule: ruleIn }), async ({ rule }, ctx) => {
   const problem = ruleProblem(rule as never)
   if (problem) throw bad(problem, 'rule')
+  const then = rule.then as Action
+  if (then.type === 'code') {
+    if (ctx.settings.shield.code?.enabled === false) throw bad('code rules are turned off (settings.shield.code.enabled: false)', 'rule')
+    const c = await checkCode(then.source)
+    if (!c.ok) throw bad(`then.source ${c.errors.map((e) => `${e.line}:${e.column}: ${e.message}`).join('; ')}`, 'rule')
+  }
   const existing = rule.id ? await ShieldRule.objects.filter({ rid: rule.id }).first() as { id: number; order: number } | undefined : undefined   // scope: ok
   const order = rule.order ?? existing?.order ?? ((await ShieldRule.objects.order('-order').first() as { order: number } | undefined)?.order ?? 0) + 10
   const data = { name: rule.name.trim(), enabled: rule.enabled, order, when: rule.when, then: rule.then, ttl: rule.ttl ?? null }
   const rid = rule.id ?? `r_${randomBytes(6).toString('hex')}`
   if (existing) await ShieldRule.update(existing.id, data as never)
   else await ShieldRule.create({ ...data, rid } as never)
+  codeStats.delete(rid)   // new code: error counters + pause start over
   await changed(ctx.settings)
+  // the audit row: the rule without its code (a sha256 instead); the action itself is not audited (its params carry the source)
+  securityEvent('shield_rule_saved', { ruleId: rid, name: data.name, enabled: data.enabled, order, when: data.when, then: then.type === 'code' ? { type: 'code', sha256: sourceHash(then.source) } : then }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid, level: 'info' })
   return (await allRules()).find((r) => r.id === rid) ?? null
-}, write)
+}, { ...write, audit: false })
 export const rulesDelete = defineAction('shield.rules.delete', z.object({ id: z.string().max(64) }), async ({ id }, ctx) => {
   const n = await ShieldRule.objects.filter({ rid: id }).delete()
   if (!n) throw new DomainError('not_found', `no rule ${id}`)
@@ -367,6 +389,29 @@ export const rulesReset = defineAction('shield.rules.reset', z.object({}), async
   return allRules()
 }, write)
 export const customRulesList = defineAction('shield.customRules', z.object({}), async () => [...customRules.keys()], read)
+
+// ---- code rules (contrib/shield/code.ts): the editor's template + field list, a syntax check, one dry run ---------------
+// check / run are not audited: their params are the code
+const codeRead = { ...read, audit: false }
+export const codeTemplate = defineAction('shield.code.template', z.object({}), async () => ({ template: CODE_TEMPLATE, fields: CODE_FIELDS, actions: CODE_ACTIONS }), read)
+export const codeCheck = defineAction('shield.code.check', z.object({ source: z.string().max(CODE_MAX * 2) }), async ({ source }) => checkCode(source), codeRead)
+export const codeRun = defineAction('shield.code.run', z.object({ source: z.string().max(CODE_MAX * 2), input: z.record(z.string(), z.unknown()).optional(), ray: z.string().min(1).max(128).optional() }), async ({ source, input, ray }, ctx) => {
+  if (source.length > CODE_MAX) return { ok: false, error: { kind: 'compile', message: `the code is over ${CODE_MAX} characters` }, ms: 0, logs: [] }
+  let req: Record<string, unknown> = SAMPLE_REQUEST
+  if (ray) {
+    const r = await ShieldEvent.objects.filter({ ray }).order('-ts').first() as Ev | undefined   // scope: ok
+    if (!r) throw new DomainError('not_found', `no shield event with ray ${ray}`)
+    const s = signalsOf(r)
+    req = codeInput({ ...s, ip: s.ip.split('/')[0]! } as never)
+  }
+  if (typeof input?.ip === 'string' && !conditionProblem({ field: 'ip', op: 'cidr', value: input.ip })) {   // a flat ip: its geo / network, unless given
+    const g = lookupIp(input.ip), kind = g.asn ? asnKind(g.asn, g.asnOrg) : undefined
+    req = { ...req, ipNet: ipNetOf(input.ip), country: g.country, continent: g.continent, asn: g.asn, asnOrg: g.asnOrg, asnKind: kind, local: isLocal(input.ip), tor: isTor(input.ip) }
+  }
+  if (input) req = { ...req, ...input, bot: { ...(req.bot as object), ...(input.bot as object | undefined) }, rate: { ...(req.rate as object), ...(input.rate as object | undefined) }, headers: { ...(req.headers as object), ...(input.headers as object | undefined) } }
+  const out = await runCode(source, req, { settings: ctx.settings, logs: true })
+  return { ok: !out.error, ...(!out.error && { result: out.action ?? null }), ...(out.error && { error: { kind: out.error.kind, message: out.error.message, ...(out.error.line && { line: out.error.line }) } }), ms: out.ms, logs: out.logs }
+}, codeRead)
 
 // ---- lists ------------------------------------------------------------------------------------------------------------
 type ListRow = { id: number; kind: string; value: string; list: string; note?: string | null }

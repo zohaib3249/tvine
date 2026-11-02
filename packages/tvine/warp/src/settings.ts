@@ -78,6 +78,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     panel: { path: '/shield', access: { all: [{ field: 'isSuperuser', op: 'eq', value: true }] } },
     sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true, logAll: false, hardCapPerMinute: 20_000 },
     stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' }, webBotAuth: { directories: [] },
+    code: { enabled: true, timeoutMs: 5 },
   },
   security: {
     headers: {
@@ -193,6 +194,7 @@ const schema: z.ZodType<Settings> = z.object({
     stats: z.object({ bucket: z.enum(['1m', '5m', '15m', '1h', '1d']), retentionDays: z.number().int().positive() }).strict(),
     cleanup: z.object({ enabled: z.boolean(), schedule: z.string().regex(/^\S+( \S+){4}$/, 'a 5-field cron') }).strict(),
     webBotAuth: z.object({ directories: z.array(z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d+)?$/, 'an https origin, e.g. https://chatgpt.com')) }).strict(),
+    code: z.object({ enabled: z.boolean(), timeoutMs: z.number().int().min(1).max(50) }).strict(),
   }).strict(),
   security: z.object({
     headers: z.object({

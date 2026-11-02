@@ -26,6 +26,7 @@ export type Action =
   | { type: 'block'; status?: 403 | 404 | 429 | 451; message?: string }
   | { type: 'rateLimit'; limit: number; window: string; key: 'ip' | 'asn' | 'path' | 'ip+path' }
   | { type: 'custom'; name: string }               // shield.registerRule(name, fn)
+  | { type: 'code'; source: string }               // admin JavaScript, run in the QuickJS sandbox (code.ts); returns one of the above
 export interface Rule { id: string; name: string; enabled: boolean; order: number; when: Condition; then: Action; ttl?: string; hits?: number }
 export interface Decision { action: Action['type'] | 'pass'; ruleId?: string; level?: ChallengeLevel; status?: number; reason: string; mode: 'log' | 'enforce'; score: number; ray: string; ms: number }
 export interface SensorReport {

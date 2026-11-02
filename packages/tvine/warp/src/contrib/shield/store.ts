@@ -4,6 +4,7 @@ import type { Settings } from '../../core/types.js'
 import { conditionProblem, evaluate } from './conditions.js'
 import { LEVELS, ruleContext, customRules, defaultRules, setLists, setRules, state, type Runtime } from './engine.js'
 import { ShieldConfig, ShieldList, ShieldRule } from './models.js'
+import { CODE_MAX } from './code.js'
 import type { Action, ChallengeLevel, Condition, Rule } from './types.js'
 
 type RuleRow = { id: number; rid: string; order: number; name: string; enabled: boolean; when: unknown; then: unknown; ttl?: string | null; hits: number }
@@ -74,6 +75,7 @@ export function ruleProblem(r: Partial<Rule>): string | undefined {
     case 'challenge': return ['auto', ...LEVELS].includes(a.level) ? (a.ttl === undefined || /^\d+[smhd]$/.test(a.ttl) ? undefined : "then.ttl: a duration like '24h'") : 'then.level: auto | pow | checkbox | captcha'
     case 'block': return a.status === undefined || [403, 404, 429, 451].includes(a.status) ? (a.message === undefined || (typeof a.message === 'string' && a.message.length <= 200) ? undefined : 'then.message: at most 200 chars') : 'then.status: 403 | 404 | 429 | 451'
     case 'rateLimit': return Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 1_000_000 && /^\d+[smhd]$/.test(a.window) && ['ip', 'asn', 'path', 'ip+path'].includes(a.key) ? undefined : "then: rateLimit needs limit 1..1000000, window like '1m', key ip | asn | path | ip+path"
+    case 'code': return typeof a.source === 'string' && a.source.trim() && a.source.length <= CODE_MAX ? undefined : `then.source: 1..${CODE_MAX} characters of JavaScript`   // + checkCode (async) in rulesSave
     case 'custom': return customRules.has(a.name) ? undefined : `then.name: no custom rule "${String(a.name)}" (shield.registerRule)`
     default: return `then.type: unknown action "${String((a as { type?: unknown }).type)}"`
   }
