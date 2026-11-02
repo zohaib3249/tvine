@@ -81,6 +81,7 @@ export type Layout = { order: string[]; hidden: string[]; sizes: Record<string, 
 export type DashboardData = { widgets: DashWidget[]; layout: Layout | null; autoRefreshMs: number }
 export type Range = '1h' | '24h' | '7d' | '30d' | '90d' | { from: string; to: string }
 export const DEFAULT_RANGE: Range = '30d'
+export const RANGES = ['1h', '24h', '7d', '30d', '90d'] as const
 
 // only the chart actions take a range; anything else gets its own params untouched
 const paramsOf = (w: DashWidget, range: Range) => ({ ...w.data!.params, ...(['admin.chart', 'admin.widget'].includes(w.data!.id) && { range }) })
@@ -101,3 +102,6 @@ export async function loadDashboard(call: Call, site: { widgets?: { id: string; 
   }
 }
 
+
+// a failure worth retrying (never a Login screen): rate limits, a network error, a server error
+export const retryable = (e?: { code: string; reason?: string }) => !!e && (e.code === 'rate_limited' || e.code === 'internal' || e.reason === 'network')

@@ -30,6 +30,9 @@ export interface RequestState {
   compression: CompressionSettings | false   // GZip turns it on
   onHeaders(fn: () => void): void    // run right before the status line + headers go out
   log: Logger                        // tvine.request, bound to the request id
+  verifiedAgent?: { directory: string; keyid: string }   // Shield: a valid Web Bot Auth signature (request.agent.verified)
+  cspNonce?: string                  // Security: this response's CSP nonce (set only by the Security middleware)
+  shield?: unknown                   // Shield: this request's Signals + Decision (contrib/shield)
 }
 export type MwRequest = IncomingMessage & { tvine: RequestState }
 type Maybe<T> = T | Promise<T>
@@ -63,7 +66,7 @@ type Opts = Record<string, unknown>
 type Factory = (o: Opts, b: BuildCtx) => HttpMiddleware
 
 const PREFIX = 'tvine.middleware.'
-const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
+export const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
 const prefixed = (paths: unknown, p: string) => Array.isArray(paths) && paths.some((x) => typeof x === 'string' && (p === x || p.startsWith(x.endsWith('/') ? x : `${x}/`)))
 const send = (res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {
   if (res.headersSent) { res.destroy(); return }
@@ -97,7 +100,8 @@ export function devHosts(s: Settings): string[] {
   return [...DEV_HOSTS, ...lanIps(), h, `${h}.local`, ...(s.dev?.allowedHosts ?? []), ...env.list('TVINE_DEV_ALLOWED_HOSTS', [])]
 }
 
-function blockList(list: unknown, name: string): BlockList {
+// the one shared CIDR helper (IpFilter, Maintenance, tvine.shield lists + the `cidr` condition op)
+export function blockList(list: unknown, name: string): BlockList {
   const b = new BlockList()
   for (const e of (list as string[] | undefined) ?? []) {
     const [addr, bits, extra] = String(e).split('/')
@@ -110,7 +114,7 @@ function blockList(list: unknown, name: string): BlockList {
   }
   return b
 }
-const ipIn = (b: BlockList, ip: string) => { const v = isIP(ip); return !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4') }
+export const ipIn = (b: BlockList, ip: string) => { const v = isIP(ip); return !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4') }
 
 // ---- the catalog --------------------------------------------------------------------------------------------
 export const CATALOG: Record<string, Factory> = {
@@ -161,6 +165,8 @@ export const CATALOG: Record<string, Factory> = {
     processRequest(req) {
       const plan = b.sec.begin(req, req.tvine.https)
       ;(req as MwRequest & { [PLAN]?: unknown })[PLAN] = plan
+      const n = req.headers['x-nonce']
+      if (typeof n === 'string' && n) req.tvine.cspNonce = n   // the nonce THIS middleware set (a client's x-nonce never counts)
     },
     processResponse(req, res) { b.sec.apply(res, (req as MwRequest & { [PLAN]?: never })[PLAN]!) },
   }),
@@ -332,6 +338,19 @@ export const CATALOG: Record<string, Factory> = {
     name: 'ServerTiming',
     processResponse(req, res) { if (b.debug) res.appendHeader('server-timing', `app;dur=${(performance.now() - req.tvine.start).toFixed(1)}`) },
   }),
+
+  // tvine.shield (docs/design/contrib/shield.md): signals → score → rules → pass / challenge / block. Needs 'tvine.shield'
+  // installed (settings refine). Loaded on first request so apps without it never load its models.
+  Shield: (o, b) => {
+    let mw: Promise<HttpMiddleware> | undefined
+    return {
+      name: 'Shield',
+      async processRequest(req, res) {
+        const m = await (mw ??= import('../contrib/shield/http.js').then((x) => x.shield(o, b)))
+        return m.processRequest!(req, res)
+      },
+    }
+  },
 
   // known-bad scanners' User-Agents get a 403. The agent surface (/mcp, /tvine/*, discovery, agent.json) is never blocked.
   BotGuard: (o, b) => {

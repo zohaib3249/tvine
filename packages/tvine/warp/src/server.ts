@@ -280,6 +280,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
   const admin = adminBase ? await adminMount(settings, nextRoute) : undefined
+  const shieldPanel = installed.includes('tvine.shield') ? await shieldMount(settings) : undefined
   const isDev = settings.debug   // dev-only features need debug on, never just an unset NODE_ENV
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
@@ -345,6 +346,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ...(urls ? [urlsTransport(ctx, urls, { route, tokens, asSession: (v) => internalOf(v, nonce) })] : []),
     httpTransport(ctx, { routes, match: route }),
     ...(admin ? [admin] : []),
+    ...(shieldPanel ? [shieldPanel] : []),
   ]
   let next: Promise<{ app: NextApp; handle: ReturnType<NextApp['getRequestHandler']>; upgrade?: ReturnType<NonNullable<NextApp['getUpgradeHandler']>> }> | undefined
   // `port`: the one listen() bound, so next dev's lock and log name the real URL (not its default 3000).
@@ -542,6 +544,23 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
     const own = route(p)
     if (own !== undefined && (own === base || own.startsWith(`${base}/`))) return next()
     serve(req, res, next)
+  }
+}
+
+// tvine.shield installed → its panel at settings.shield.panel.path (default /shield), separate from /admin: tvine/admin's
+// shieldHandler (HTML shell with the CSP nonce + the prebuilt shield bundle under <path>/_static/). Who may use it is
+// enforced server-side by every shield.* action (login + staffGuard + the panel access condition); the bundle shows the
+// login / 403 pages. tvine/admin not built → a plain "panel not built" page.
+async function shieldMount(settings: Settings): Promise<Handler> {
+  const base = settings.shield.panel.path.replace(/\/$/, '')
+  let serve: Handler | undefined
+  try { serve = ((await import(new URL('../../admin/dist/serve.js', import.meta.url).href)) as { shieldHandler?(o: { path: string; title?: string }): Handler }).shieldHandler?.({ path: base, title: 'Shield' }) } catch { serve = undefined }
+  return (req, res, next) => {
+    const p = pathOf(req)
+    if (p !== base && !p.startsWith(`${base}/`)) return next()
+    if (serve) return serve(req, res, next)
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end('<!doctype html><meta charset="utf-8"><title>Shield</title><p>Shield panel not built (build packages/tvine/admin).</p>')
   }
 }
 

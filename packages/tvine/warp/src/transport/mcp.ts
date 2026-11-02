@@ -28,7 +28,7 @@ export interface McpOptions {
   tabs?: TabHub   // transport/tab: request_control/release, and calls of a sid that controls a tab go to that tab
 }
 // base: the site's public origin as the MCP request reached it (approveUrl); mcpHandler derives it from its own request
-export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers'>> & { base?: string }
+export type McpCaller = Pick<McpSource, 'ip'> & Partial<Pick<McpSource, 'headers' | 'verified'>> & { base?: string }
 export type McpTool = Tool & { action?: ActionId }
 
 // Load-bearing: the only schema a generic client's model sees. Budget ≤ 150 tokens each (tested).
@@ -364,7 +364,7 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : v
     const ip = clientIp(headers['x-forwarded-for'] ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    const srv = mcpServer(server, opts, { ip, headers, base: originOf(req, settings) }, tools)
+    const srv = mcpServer(server, opts, { ip, headers, base: originOf(req, settings), verified: (req as { tvine?: { verifiedAgent?: { directory: string; keyid: string } } }).tvine?.verifiedAgent }, tools)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => { void transport.close(); void srv.close() })
     await srv.connect(transport)

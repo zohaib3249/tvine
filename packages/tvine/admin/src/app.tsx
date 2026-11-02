@@ -2,10 +2,10 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api as browserApi } from '../../weft/dist/api/client.js'
 import { Dialog, Drawer, Menu, Toaster, toast } from '../../weft/dist/widgets/index.js'
-import { caller, keyOf, loadRoute, loadSite, type Call, type RouteData } from './data.js'
+import { caller, keyOf, loadRoute, loadSite, retryable, type Call, type RouteData } from './data.js'
 import { href, parse, type Query, type Route } from './routes.js'
 import type { ModelMeta, Site, User } from './types.js'
-import { AdminCtx, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
+import { AdminCtx, useTheme, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
 import { Changelist } from './changelist.js'
 import { ChangeForm } from './form.js'
 import { AppIndex, DeleteView, HistoryView, Login, PasswordChange } from './pages.js'
@@ -105,16 +105,7 @@ export function AdminApp(p: AdminAppProps) {
   }
 
   // ---- theme ------------------------------------------------------------------------------------------------------
-  const [theme, setTheme] = useState<'auto' | 'dark' | 'light'>(() => {
-    const d = site?.theme?.dark
-    return d === 'on' ? 'dark' : d === 'off' ? 'light' : 'auto'
-  })
-  useEffect(() => { try { const t = localStorage.getItem('tva:theme'); if (t === 'dark' || t === 'light') setTheme(t) } catch { /* */ } }, [])
-  const toggleTheme = () => {
-    const dark = theme === 'dark' || (theme === 'auto' && matchMedia?.('(prefers-color-scheme: dark)').matches)
-    const t = dark ? 'light' : 'dark'
-    setTheme(t); try { localStorage.setItem('tva:theme', t) } catch { /* */ }
-  }
+  const [theme, toggleTheme] = useTheme(site?.theme?.dark)
   const t = site?.theme
   const style = { ...(t?.brand && { '--tva-brand': t.brand }), ...(t?.radius !== undefined && { '--tva-radius': typeof t.radius === 'number' ? `${t.radius}px` : t.radius }) } as React.CSSProperties
   const root = (body: ReactNode) => <div className={cx('tva', slotClass('shell'))} data-theme={theme} style={style}>{body}<Toaster name="toasts" label="Notifications" /></div>
@@ -401,8 +392,7 @@ function Shortcuts() {
 
 export { toast }
 
-// a failure worth retrying (never a Login screen): rate limits, a network error, a server error
-export const retryable = (e?: { code: string; reason?: string }) => !!e && (e.code === 'rate_limited' || e.code === 'internal' || e.reason === 'network')
+export { retryable }
 function Retrying({ error }: { error: { code: string; message: string } }) {
   return (
     <div role="status" className="grid h-full place-items-center p-6">

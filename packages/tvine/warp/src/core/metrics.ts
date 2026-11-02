@@ -98,6 +98,7 @@ export type Stat =
   | { k: 'mail'; ok: boolean; n: number }
   | { k: 'search'; term: string; results?: number; via: string; sid?: string }     // raw term: the collector normalizes + drops PII
   | { k: 'page'; path: string; agent: boolean; sid?: string; entry: boolean }       // a page view: raw path (query kept), the collector strips it
+  | { k: 'shield'; decision: string; category: string; mode: string; country?: string; asn?: number; rule?: string; score: number }   // tvine.shield: one per decided request
 const TAP = Symbol.for('tvine.statsTap')
 export const stats: { tap?: (s: Stat) => void } = ((globalThis as { [TAP]?: { tap?: (s: Stat) => void } })[TAP] ??= {})
 export const statTap = (s: Stat): void => { try { stats.tap?.(s) } catch { /* a broken listener never breaks the caller */ } }

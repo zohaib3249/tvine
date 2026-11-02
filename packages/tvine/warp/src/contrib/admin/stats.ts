@@ -113,7 +113,7 @@ export function pagePath(raw: string, keep: string[] = [], skip: string[] = ['/a
   return clean(p, 200) + (kept.length ? `?${kept.join('&')}` : '')
 }
 export const OTHER = '(other)'
-const CAPS: Record<string, [dim: string, n: number]> = { search: ['term', 500], searcher: ['term', 500], page: ['p', 1000], visitor: ['p', 1000], entry: ['p', 1000] }
+const CAPS: Record<string, [dim: string, n: number]> = { search: ['term', 500], searcher: ['term', 500], page: ['p', 1000], visitor: ['p', 1000], entry: ['p', 1000], shield_country: ['g', 1000], shield_asn: ['a', 1000], shield_rule: ['r', 1000] }
 const MAX_DIMS = 300                 // distinct dims per key per cell; more fold into { other: '1' }
 const HOUR = 3_600_000, MIN = 60_000, TICK = 10_000
 
@@ -137,7 +137,7 @@ export class Collector {
   private lastPrune = 0
   private readonly capSeen = new WeakMap<Cells, Map<string, Set<string>>>()
   private distinct = { hour: 0, seen: new Set<string>() }   // (key, term/path, visitor hash) seen this hour
-  onLive?: (type: 'agent' | 'security' | 'tick') => void
+  onLive?: (type: 'agent' | 'security' | 'tick' | 'shield') => void
 
   constructor(readonly o: {
     slowMs: number; retentionDays: number; now?: () => number
@@ -227,6 +227,18 @@ export class Collector {
       return
     }
     if (s.k === 'cache') { this.inc('cache', { c: s.alias, h: s.hit ? '1' : '0' }); return }
+    if (s.k === 'shield') {   // tvine.shield rollups: decisions by category, plus top-N dims of the notable ones (capped per hour)
+      const d = s.decision
+      this.inc('shield', { d, c: s.category, m: s.mode }, s.score)
+      this.inc('shield_score', { b: String(Math.min(9, Math.floor(s.score / 10))) })
+      if (d !== 'pass' && d !== 'allow') {
+        if (s.country) this.inc('shield_country', { g: s.country, d })
+        if (s.asn) this.inc('shield_asn', { a: String(s.asn), d })
+      }
+      if (s.rule) this.inc('shield_rule', { r: clean(s.rule, 64), d })
+      this.onLive?.('shield')
+      return
+    }
     if (s.k === 'mail') {
       this.inc('mail', { ok: s.ok ? '1' : '0' }, undefined, s.n)
       if (!s.ok) this.mailFailedAt = this.now()
