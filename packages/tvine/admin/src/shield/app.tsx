@@ -17,6 +17,8 @@ import { Bots, Denied, Lists, Settings, TestRequest } from './pages.js'
 import { Events, IpProfile } from './events.js'
 import type { ShieldSettings } from './types.js'
 
+// path → decoded segments: rule ids like 'default:rate' arrive as default%3Arate
+export const segmentsOf = (path: string) => path.split('/').filter(Boolean).map((s) => { try { return decodeURIComponent(s) } catch { return s } })
 export type ShieldAppProps = { base?: string; segments: string[]; query?: Query; api?: unknown }
 export const PAGES = [
   { page: '', title: 'Analytics', icon: 'chart', section: 'Monitor' }, { page: 'events', title: 'Events', icon: 'table', section: 'Monitor' },
@@ -63,11 +65,11 @@ export function ShieldApp(p: ShieldAppProps) {
     const u = new URL(to, location.href)
     if (u.origin !== location.origin || !(u.pathname + '/').startsWith(base + '/')) { location.assign(u.href); return }
     history[replace ? 'replaceState' : 'pushState'](null, '', u.pathname + u.search)
-    setLoc({ segments: u.pathname.slice(base.length).split('/').filter(Boolean), query: Object.fromEntries(u.searchParams) })
+    setLoc({ segments: segmentsOf(u.pathname.slice(base.length)), query: Object.fromEntries(u.searchParams) })
     if (!replace) document.getElementById('tvs-main')?.scrollTo?.(0, 0)
   }, [base])
   useEffect(() => {
-    const pop = () => setLoc({ segments: location.pathname.slice(base.length).split('/').filter(Boolean), query: Object.fromEntries(new URLSearchParams(location.search)) })
+    const pop = () => setLoc({ segments: segmentsOf(location.pathname.slice(base.length)), query: Object.fromEntries(new URLSearchParams(location.search)) })
     addEventListener('popstate', pop)
     return () => removeEventListener('popstate', pop)
   }, [base])
