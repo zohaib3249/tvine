@@ -28,6 +28,7 @@ const STATIC: Record<string, string> = {
 const files = new Map<string, Buffer>()
 const file = (n: string) => files.get(n) ?? (files.set(n, readFileSync(new URL(n, STATIC_DIR))), files.get(n)!)
 const ASSET = /\.(js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|txt|xml|webmanifest)$/i
+const NEXT_INTERNAL = /^\/(_next\/|__nextjs)/
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const hdr = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
 const cookieOf = (req: IncomingMessage, name: string) => String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${name}=`))?.slice(name.length + 1)
@@ -193,7 +194,8 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       if (path === prefix || path.startsWith(`${prefix}/`)) return endpoints(req, res, path.slice(prefix.length + 1))
       if (rt.mode === 'off') return
       await maybeReload(s)
-      if ((req.method === 'GET' || req.method === 'HEAD') && ASSET.test(path) && !AGENT_SURFACE(path)) return   // static assets: fast path
+      // static assets + Next internals (/_next/*, dev /__nextjs_* overlay calls: hundreds per page load): fast path
+      if ((req.method === 'GET' || req.method === 'HEAD') && (ASSET.test(path) || NEXT_INTERNAL.test(path)) && !AGENT_SURFACE(path)) return
       const sig = await signals(req)
       const { decision, retryAfterMs } = await decide(sig, { settings: s, ray: req.tvine.id ?? randomBytes(8).toString('hex'), req, headers: req.headers })
       // never lock the owner out (review M2): the panel, the admin and their sign-in / panel APIs are never challenged;
