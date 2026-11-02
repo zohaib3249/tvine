@@ -2,23 +2,29 @@
 // Shared analytics pieces: number/time formatting, the URL-backed filter state (?f=country:CN;-decision:block,
 // ?range=24h or ?from=…&to=…), the filter bar, the range bar, top-N lists, the world map and the challenge funnel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Empty, Icon, PlainForm, Region, cx } from '../ui.js'
+import { Icon, PlainForm, Region, cx } from '../ui.js'
 import { useShield } from './ctx.js'
 import { BOT_CATEGORIES } from './fields.js'
 import { FILTER_FIELDS, type Filter, type FilterField, type Range, type TopRow } from './types.js'
-import { WORLD, WORLD_VIEWBOX } from './world.js'
+import { WORLD } from './world.js'
 
 // ---- formatting ----------------------------------------------------------------------------------------------------
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 export const num = (n: number | undefined | null) => (n === undefined || n === null || !Number.isFinite(n) ? '—' : Math.abs(n) < 1000 ? String(Math.round(n * 10) / 10) : compact.format(n))
 export const pct = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 1000) / 10}%` : '—')
-export const flag = (cc?: string) => (cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '🏳')
+// LOCAL = loopback / private addresses (no country): a house, never a flag
+export const flag = (cc?: string) => (cc === 'LOCAL' ? '🏠' : cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '🏳')
 let regions: Intl.DisplayNames | undefined
 export function countryName(cc?: string): string {
   if (!cc) return 'Unknown'
+  if (cc === 'LOCAL') return 'Local network'
   if (WORLD[cc]) return WORLD[cc]![0]
   try { regions ??= new Intl.DisplayNames(undefined, { type: 'region' }); return regions.of(cc) ?? cc } catch { return cc }
 }
+export const CONTINENTS: Record<string, string> = { AF: 'Africa', AN: 'Antarctica', AS: 'Asia', EU: 'Europe', NA: 'North America', OC: 'Oceania', SA: 'South America' }
+// countries too small for the 110m map
+const SMALL: Record<string, string> = { HK: 'AS', SG: 'AS', MO: 'AS', BH: 'AS', MV: 'AS', MT: 'EU', AD: 'EU', MC: 'EU', LI: 'EU', SM: 'EU', VA: 'EU', GI: 'EU', IM: 'EU', JE: 'EU', GG: 'EU', BM: 'NA', BB: 'NA', AG: 'NA', LC: 'NA', GD: 'NA', MU: 'AF', SC: 'AF', CV: 'AF', ST: 'AF', KM: 'AF', WS: 'OC', TO: 'OC', PF: 'OC', GU: 'OC' }
+export const continentOf = (cc: string): string | undefined => WORLD[cc]?.[3] ?? SMALL[cc]
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' })
 export function ago(ts: string, now = Date.now()): string {
   const s = Math.round((Date.parse(ts) - now) / 1000), a = Math.abs(s)
@@ -34,11 +40,11 @@ export const slug = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 
 // ---- filters in the URL ---------------------------------------------------------------------------------------------
 export const FIELD_LABEL: Record<FilterField, string> = {
   decision: 'Decision', country: 'Country', asn: 'ASN', botCategory: 'Bot category', botName: 'Bot', path: 'Path', method: 'Method', ip: 'IP',
-  ipNet: 'IP network', ruleId: 'Rule', uaFamily: 'User agent', status: 'Status', mode: 'Mode', tlsJa4: 'JA4', host: 'Host',
+  ipNet: 'IP network', ruleId: 'Rule', uaFamily: 'User agent', status: 'Status', mode: 'Mode', tlsJa4: 'JA4', host: 'Host', continent: 'Continent',
 }
 export const FIELD_CHOICES: Partial<Record<FilterField, string[]>> = {
   decision: ['pass', 'allow', 'log', 'challenge', 'block', 'rateLimit'], method: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  botCategory: BOT_CATEGORIES.map((c) => c.value).concat('browser', 'unknown'), mode: ['log', 'enforce'],
+  botCategory: BOT_CATEGORIES.map((c) => c.value).concat('browser', 'unknown'), mode: ['log', 'enforce'], continent: Object.keys(CONTINENTS),
 }
 // "country:CN;-decision:block" ⇄ [{country eq CN}, {decision neq block}] — values are URI-encoded, so ; and : are safe
 export function parseFilters(s?: string): Filter[] {
@@ -80,6 +86,7 @@ export type FilterState = ReturnType<typeof useFilters>
 
 export function valueLabel(f: Pick<Filter, 'field' | 'value'>): string {
   if (f.field === 'country') return `${flag(f.value)} ${f.value}`
+  if (f.field === 'continent') return CONTINENTS[f.value] ?? f.value
   if (f.field === 'asn') return `AS${f.value.replace(/^AS/i, '')}`
   if (f.field === 'botCategory') return BOT_CATEGORIES.find((c) => c.value === f.value)?.label ?? f.value
   return f.value
@@ -199,57 +206,6 @@ export function TopList({ id, title, field, rows, render, onFilter, onOpen }: {
               </li>
             ))}
           </ol>
-        )}
-    </Region>
-  )
-}
-
-// ---- world map ------------------------------------------------------------------------------------------------------
-export type GeoRow = { country: string; requests: number; mitigated: number }
-export function WorldMap({ geo, onPick }: { geo?: GeoRow[]; onPick(cc: string): void }) {
-  const [metric, setMetric] = useState<'requests' | 'mitigated'>('requests')
-  const [hi, setHi] = useState<{ cc: string; x: number; y: number } | null>(null)
-  const by = new Map((geo ?? []).map((g) => [g.country, g]))
-  const max = Math.max(1, ...(geo ?? []).map((g) => g[metric]))
-  const off = (geo ?? []).filter((g) => !WORLD[g.country]).sort((a, b) => b[metric] - a[metric])
-  const fill = (cc: string) => {
-    const v = by.get(cc)?.[metric] ?? 0
-    if (!v) return undefined
-    return `color-mix(in oklab, var(${metric === 'requests' ? '--tva-c1' : '--tva-c2'}) ${Math.round(18 + 82 * Math.sqrt(v / max))}%, var(--tva-sunken))`
-  }
-  const h = hi && by.get(hi.cc)
-  const top = [...(geo ?? [])].sort((a, b) => b[metric] - a[metric]).slice(0, 5)
-  return (
-    <Region id="shield:map" label="Traffic by country" state={{ metric, countries: geo?.length ?? 0, top: top.map((g) => `${g.country} ${g[metric]}`).join(', ') }} className="tva-card flex min-w-0 flex-col p-4">
-      <div className="mb-2 flex items-center gap-2">
-        <h3 className="flex-1 text-[13px] font-semibold">Traffic by country</h3>
-        <div className="tva-seg" role="group" aria-label="Map metric">
-          {(['requests', 'mitigated'] as const).map((m) => <button key={m} type="button" agentId={`map-${m}`} aria-pressed={metric === m} className="capitalize" onClick={() => setMetric(m)}>{m}</button>)}
-        </div>
-      </div>
-      {!geo ? <div className="tva-skel aspect-[1000/394] w-full" aria-busy="true" />
-        : geo.length === 0 ? <Empty title="No country data" icon="grid">No request in this view had a known country.</Empty>
-        : (
-          <div className="relative" onPointerLeave={() => setHi(null)}>
-            <svg viewBox={WORLD_VIEWBOX} className="tvs-map w-full" role="group" aria-label={`Map of ${metric} by country`} agentId="map"
-              onPointerMove={(e) => { const cc = (e.target as Element).getAttribute?.('data-cc'); const r = e.currentTarget.getBoundingClientRect(); setHi(cc ? { cc, x: e.clientX - r.left, y: e.clientY - r.top } : null) }}
-              onClick={(e) => { const cc = (e.target as Element).getAttribute?.('data-cc'); if (cc && by.has(cc)) onPick(cc) }}
-              onKeyDown={(e) => { const cc = (e.target as Element).getAttribute?.('data-cc'); if (cc && by.has(cc) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPick(cc) } }}>
-              {Object.entries(WORLD).map(([cc, [name, d]]) => {
-                const g = by.get(cc)
-                return <path key={cc} d={d} data-cc={cc} fill={fill(cc)} className={cx(g && 'has')} {...(g && { tabIndex: 0, role: 'button', agentId: `country-${cc}`, 'aria-label': `${name}: ${g[metric].toLocaleString()} ${metric}, filter for it` })} />
-              })}
-            </svg>
-            {hi && <div role="status" className="tva-tip" style={{ left: Math.max(0, hi.x - 70), top: hi.y + 14 }}>
-              <p className="font-semibold">{flag(hi.cc)} {countryName(hi.cc)}</p>
-              {h ? <><p><strong className="tabular-nums">{h.requests.toLocaleString()}</strong> <span className="text-muted">requests</span></p><p><strong className="tabular-nums">{h.mitigated.toLocaleString()}</strong> <span className="text-muted">mitigated ({pct(h.mitigated, h.requests)})</span></p><p className="text-[11px] text-muted">Click to filter</p></> : <p className="text-muted">No requests</p>}
-            </div>}
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-              <span className="flex items-center gap-1.5">0<span className="tvs-ramp" data-m={metric} />{num(max)}</span>
-              {top.map((g) => <button key={g.country} type="button" agentId={`map-top-${g.country}`} className="hover:text-fg" onClick={() => onPick(g.country)}>{flag(g.country)} {g.country} <strong className="tabular-nums text-fg">{num(g[metric])}</strong></button>)}
-            </div>
-            {off.length > 0 && <p className="mt-1 text-xs text-muted">Not on the map: {off.slice(0, 8).map((g) => <button key={g.country} type="button" agentId={`map-off-${g.country}`} className="mr-2 hover:text-fg" onClick={() => onPick(g.country)}>{flag(g.country)} {g.country} {num(g[metric])}</button>)}</p>}
-          </div>
         )}
     </Region>
   )

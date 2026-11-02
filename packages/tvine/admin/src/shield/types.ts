@@ -48,7 +48,8 @@ export type ListEntry = { id: string; kind: 'ip' | 'cidr' | 'country' | 'asn'; v
 export type BotInfo = { name: string; category: BotCategory; verified: boolean; via?: string; hits?: number }
 export type Bots = { stances: Partial<Record<BotCategory, Stance>>; catalog: BotInfo[] }
 export type EventRow = { ts: string; ray: string; ip?: string; country?: string; asn?: number; path: string; method?: string; bot?: string; score: number; decision: Decision['action'] | `would-${string}`; ruleId?: string
-  ua?: string; uaFamily?: string; botCategory?: BotCategory; asnOrg?: string; status?: number; reason?: string; level?: ChallengeLevel; host?: string; mode?: 'log' | 'enforce'; solveMs?: number }
+  ua?: string; uaFamily?: string; botCategory?: BotCategory; asnOrg?: string; status?: number; reason?: string; level?: ChallengeLevel; host?: string; mode?: 'log' | 'enforce'; solveMs?: number
+  local?: boolean; continent?: string }
 export type EventPage = { rows: EventRow[]; count: number; page: number; pages: number }
 // shield.event { ray }
 export type EventDetail = { event: EventRow; signals?: Signals; decision?: Decision; headers?: Record<string, string> }
@@ -63,11 +64,11 @@ export type FieldType = 'string' | 'number' | 'boolean' | 'ip' | 'country' | 'ca
 
 // ---- analytics (shield.analytics / shield.events / shield.ip / shield.rules.preview) --------------------------------
 export type Range = '1h' | '24h' | '7d' | '30d'
-export const FILTER_FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
+export const FILTER_FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host', 'continent'] as const
 export type FilterField = typeof FILTER_FIELDS[number]
 export type Filter = { field: FilterField; op: 'eq' | 'neq'; value: string }
 export type TopRow = { key: string; label?: string; count: number; mitigated: number }
-export type TopKey = 'countries' | 'asns' | 'paths' | 'ips' | 'bots' | 'botCategories' | 'rules' | 'methods' | 'uaFamilies' | 'statuses' | 'ja4' | 'hosts'
+export type TopKey = 'countries' | 'asns' | 'paths' | 'ips' | 'bots' | 'botCategories' | 'rules' | 'methods' | 'uaFamilies' | 'statuses' | 'ja4' | 'hosts' | 'continents'
 type Totals = { requests: number; served: number; mitigated: number; blocked: number; challenged: number; rateLimited: number; solved: number; failed: number; logged: number; avgScore: number }
 type CD = { groupBy?: 'hour' | 'day' | 'time'; series: { name: string; label: string }[]; points: { x: string; values: number[] }[] }
 export type Analytics = {
@@ -75,7 +76,7 @@ export type Analytics = {
   totals: Totals & { previous?: Partial<Totals> }
   series: CD; decisions: CD; histogram: number[]
   funnel: { issued: number; solved: number; failed: number; solveMsP50?: number; solveMsP95?: number }
-  geo: { country: string; requests: number; mitigated: number }[]
+  geo: { country: string; requests: number; mitigated: number; continent?: string }[]
   top: Partial<Record<TopKey, TopRow[]>>
 }
 export type IpProfile = {

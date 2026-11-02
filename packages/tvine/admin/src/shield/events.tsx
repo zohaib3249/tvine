@@ -21,7 +21,7 @@ export const COLS: Col[] = [
   { key: 'time', label: 'Time', cell: (r) => <span className="text-muted"><Ago ts={r.ts} /></span> },
   { key: 'ray', label: 'Ray', cell: (r) => <span className="font-mono text-xs text-accent">{r.ray}</span> },
   { key: 'ip', label: 'IP', cell: (r) => <span className="font-mono text-xs">{r.country && <span className="mr-1 font-sans">{flag(r.country)}</span>}{r.ip ?? '—'}</span> },
-  { key: 'country', label: 'Country', cell: (r) => (r.country ? <span title={countryName(r.country)}>{r.country}</span> : '—'), off: true },
+  { key: 'country', label: 'Country', cell: (r) => (r.local ? <span title="Local network (localhost / private address)">Local</span> : r.country ? <span title={countryName(r.country)}>{r.country}</span> : '—'), off: true },
   { key: 'asn', label: 'ASN', cell: (r) => (r.asn ? <span title={r.asnOrg}>AS{r.asn}{r.asnOrg && <span className="ml-1 text-muted">{r.asnOrg}</span>}</span> : '—') },
   { key: 'path', label: 'Request', cell: (r) => <span className="block max-w-[22rem] truncate font-mono text-xs" title={`${r.method ?? 'GET'} ${r.host ?? ''}${r.path}`}><span className="text-muted">{r.method ?? 'GET'}</span> {r.path}</span> },
   { key: 'host', label: 'Host', cell: (r) => r.host ?? '—', off: true },
