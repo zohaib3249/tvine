@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { CustomComponent } from './app.js'
 import { ChartCard, ChartSkeleton, ChartTable, DataTable, Stat, tableState, type StatTable, isChartData, statOf, type ChartData, type ChartType } from './charts.js'
-import { DEFAULT_RANGE, loadDashboard, loadWidgets, type DashboardData, type DashWidget, type Layout, type Range, type RouteData, type Size } from './data.js'
+import { DEFAULT_RANGE, RANGES, loadDashboard, loadWidgets, type DashboardData, type DashWidget, type Layout, type Range, type RouteData, type Size } from './data.js'
 export { DEFAULT_RANGE, loadDashboard, loadWidgets, type DashboardData, type DashWidget, type Layout, type Range, type Size }
 import { LivePill, useLive } from './live.js'
 import { href } from './routes.js'
@@ -12,7 +12,7 @@ import type { LogEntry } from './types.js'
 import { AppCard, WidgetData, changeText } from './pages.js'
 import { Empty, Icon, Region, Slotted, cx, slotClass, useAdmin } from './ui.js'
 
-const RANGES = ['1h', '24h', '7d', '30d', '90d'] as const
+
 const SIZES: Size[] = ['sm', 'md', 'lg', 'xl']
 
 function arrange(ws: DashWidget[], l: Layout | null) {
