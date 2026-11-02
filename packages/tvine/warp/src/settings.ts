@@ -365,5 +365,5 @@ export function rateOverlap(s: Settings): string | undefined {
   if (!shield || s.limits.rate.by === 'shield') return undefined
   const { limit, windowMs } = s.limits.rate
   return `two general rate limits are on: Shield's rate rules and settings.limits.rate (${limit} action calls per ${Math.round(windowMs / 1000)} s per ip + session); the lower one answers 429. ` +
-    `Set limits: { rate: { ...rate, by: 'shield' } } to let Shield's rules be the only general limit (actions' own rates, e.g. login, stay).`
+    `Set limits: { rate: { by: 'shield' } } in settings to let Shield's rules be the only general limit (actions' own rates, e.g. login, stay).`
 }
