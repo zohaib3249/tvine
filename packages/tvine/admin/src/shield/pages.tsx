@@ -1,7 +1,7 @@
 'use client'
 // Bots & AI, Lists, Events, Test a request, Settings, and the 403 page.
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Dialog, Drawer } from '../../../weft/dist/widgets/index.js'
+import { Dialog } from '../../../weft/dist/widgets/index.js'
 import type { Call } from '../data.js'
 import { useLiveData } from '../live.js'
 import type { User } from '../types.js'
@@ -10,9 +10,9 @@ import { ShieldMark, MODE_TEXT } from './app.js'
 import { ConditionBuilder } from './condition.js'
 import { useShield, write } from './ctx.js'
 import { BOT_CATEGORIES, CIDR_RE, IP_RE, describe, userFields } from './fields.js'
-import { DECISION_LABEL, DecisionBadge } from './overview.js'
+import { DECISION_LABEL } from './overview.js'
 import { actionText } from './rules.js'
-import type { BotCategory, Bots as BotsData, ChallengeLevel, EventDetail, EventPage, IpdbStatus, ListEntry, Mode, Rule, ShieldSettings, Signals, Stance, TestResult } from './types.js'
+import type { BotCategory, Bots as BotsData, ChallengeLevel, IpdbStatus, ListEntry, Mode, Rule, ShieldSettings, Signals, Stance, TestResult } from './types.js'
 
 const H = ({ title, sub, children }: { title: string; sub: ReactNode; children?: ReactNode }) => (
   <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -151,92 +151,7 @@ export function Lists() {
   )
 }
 
-// ---- Events ---------------------------------------------------------------------------------------------------------
-const DECISIONS = ['pass', 'allow', 'log', 'challenge', 'block', 'rateLimit', 'custom']
-export function Events() {
-  const { call, query, setQuery } = useShield()
-  const filters = Object.fromEntries(['decision', 'country', 'bot', 'path', 'scoreLt', 'rule'].filter((k) => query[k]).map((k) => [k, k === 'scoreLt' ? Number(query[k]) : query[k]]))
-  const page = Math.max(1, Number(query.page) || 1)
-  const ev = useLiveData<EventPage>(call, 'shield.events', { filters, page })
-  const rules = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
-  const ruleList = Array.isArray(rules.data) ? rules.data : rules.data?.rules ?? []
-  const set = (k: string, v: string) => setQuery({ ...query, [k]: v, page: '' })
-  const text = (k: string, ph: string, w = 'w-32') => (
-    <input key={k + (query[k] ?? '')} agentId={`filter-${k}`} aria-label={ph} placeholder={ph} defaultValue={query[k] ?? ''} className={cx('tva-input h-9', w)}
-      onBlur={(e) => e.target.value !== (query[k] ?? '') && set(k, e.target.value.trim())} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
-  )
-  const d = ev.data
-  return (
-    <Region id="shield:events" label="Events" state={{ count: d?.count ?? 0, page, filters: JSON.stringify(filters), ray: query.ray ?? null }}>
-      <H title="Events" sub="Every decision Shield made (sampled for passes). Click a row to see all signals." />
-      <div className="tva-card overflow-hidden">
-        <div className="flex flex-wrap items-center gap-2 border-b border-line p-3">
-          <PlainForm className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const v = new FormData(e.currentTarget).get('ray'); setQuery({ ...query, ray: String(v ?? '').trim() }) }}>
-            <input name="ray" agentId="ray" aria-label="Ray id" placeholder="Ray id…" defaultValue={query.ray ?? ''} key={query.ray ?? ''} className="tva-input h-9 w-44 font-mono" />
-            <button type="submit" agentId="find-ray" className="tva-btn h-9" aria-label="Find ray"><Icon name="search" size={14} /></button>
-          </PlainForm>
-          <select agentId="filter-decision" aria-label="Decision" className="tva-input h-9 w-36" value={query.decision ?? ''} onChange={(e) => set('decision', e.target.value)}>
-            <option value="">Any decision</option>{DECISIONS.map((x) => <option key={x} value={x}>{DECISION_LABEL[x] ?? x}</option>)}
-          </select>
-          {text('country', 'Country', 'w-24')}{text('bot', 'Bot')}{text('path', 'Path starts with', 'w-40')}{text('scoreLt', 'Score below', 'w-28')}
-          <select agentId="filter-rule" aria-label="Rule" className="tva-input h-9 w-40" value={query.rule ?? ''} onChange={(e) => set('rule', e.target.value)}>
-            <option value="">Any rule</option>{ruleList.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select>
-          {Object.keys(filters).length > 0 && <button type="button" agentId="clear" className="tva-btn tva-btn-ghost h-9" onClick={() => setQuery({})}>Clear</button>}
-          <div className="flex-1" />
-          {ev.loading && d && <span className="text-xs text-muted" role="status">Updating…</span>}
-        </div>
-        {ev.error && !d ? <div className="p-4"><ErrorBox error={ev.error} /></div> : !d ? <Skeleton rows={8} /> : d.rows.length === 0 ? <Empty title="No events match" icon="search">Try fewer filters or a different ray id.</Empty> : (
-          <div className={cx('overflow-x-auto transition-opacity', ev.loading && 'opacity-60')}>
-            <table className="w-full text-[13px]">
-              <thead><tr>{['Time', 'Decision', 'Request', 'Country', 'Bot', 'Score', 'Rule', 'Ray'].map((c) => <th key={c} className={cx('tva-th', c === 'Score' && 'text-right')}>{c}</th>)}</tr></thead>
-              <tbody>{d.rows.map((r) => (
-                <tr key={r.ray} className="tva-row cursor-pointer" data-selected={query.ray === r.ray || undefined} onClick={() => setQuery({ ...query, ray: r.ray })}>
-                  <td className="tva-td whitespace-nowrap text-muted">{new Date(r.ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
-                  <td className="tva-td"><DecisionBadge d={r.decision} /></td>
-                  <td className="tva-td max-w-[20rem] truncate font-mono text-xs">{r.method ?? 'GET'} {r.path}</td>
-                  <td className="tva-td">{r.country ?? '—'}</td><td className="tva-td">{r.bot ?? '—'}</td>
-                  <td className="tva-td text-right"><Score n={r.score} /></td>
-                  <td className="tva-td text-muted">{ruleList.find((x) => x.id === r.ruleId)?.name ?? r.ruleId ?? '—'}</td>
-                  <td className="tva-td"><button type="button" agentId={`open-${r.ray}`} className="font-mono text-xs text-accent hover:underline" onClick={(e) => { e.stopPropagation(); setQuery({ ...query, ray: r.ray }) }}>{r.ray}</button></td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        )}
-        {d && d.pages > 1 && (
-          <div className="flex items-center justify-end gap-2 border-t border-line p-3 text-sm">
-            <span className="text-muted">Page {d.page} of {d.pages} · {d.count.toLocaleString()} events</span>
-            <button type="button" agentId="prev" className="tva-btn h-8" disabled={page <= 1} onClick={() => setQuery({ ...query, page: String(page - 1) })}>Previous</button>
-            <button type="button" agentId="next" className="tva-btn h-8" disabled={page >= d.pages} onClick={() => setQuery({ ...query, page: String(page + 1) })}>Next</button>
-          </div>
-        )}
-      </div>
-      <Drawer name="event" label="Event detail" side="right" open={!!query.ray} onOpenChange={(o) => { if (!o) setQuery({ ...query, ray: '' }) }} slots={{ trigger: { className: 'hidden' }, content: { className: 'tvs-drawer' } }}>
-        {query.ray && <EventDrawer ray={query.ray} rules={ruleList} />}
-      </Drawer>
-    </Region>
-  )
-}
 export const Score = ({ n }: { n: number }) => <span className="tvs-score" data-t={n < 30 ? 'error' : n < 60 ? 'warn' : 'ok'}>{n}</span>
-function EventDrawer({ ray, rules }: { ray: string; rules: Rule[] }) {
-  const { call } = useShield()
-  const e = useLiveData<EventDetail>(call, 'shield.event', { ray })
-  if (e.error && !e.data) return <div className="p-1"><h2 className="mb-3 font-mono text-sm">{ray}</h2><ErrorBox error={e.error} /></div>
-  if (!e.data) return <Skeleton rows={10} />
-  const { event: r, signals, decision } = e.data
-  return (
-    <Region id="shield:event" label={`Event ${ray}`} state={{ ray, decision: r.decision, score: r.score }} className="flex flex-col gap-4">
-      <div><p className="text-xs text-muted">Ray</p><h2 className="font-mono text-sm break-all">{ray}</h2></div>
-      <div className="flex flex-wrap items-center gap-2"><DecisionBadge d={r.decision} /><Score n={r.score} /><span className="text-sm text-muted">{new Date(r.ts).toLocaleString()}</span></div>
-      <p className="font-mono text-xs break-all">{r.method ?? 'GET'} {r.path}</p>
-      {decision && <p className="text-sm">{decision.reason}{decision.ruleId && <> · rule <strong>{rules.find((x) => x.id === decision.ruleId)?.name ?? decision.ruleId}</strong></>}</p>}
-      {signals ? <SignalGrid s={signals} /> : <p className="text-sm text-muted">Signals were not kept for this event (sampling).</p>}
-      {e.data.headers && <div><h3 className="mb-1 text-xs font-semibold uppercase text-muted">Headers</h3><pre className="tva-pre">{Object.entries(e.data.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}</pre></div>}
-    </Region>
-  )
-}
-
 // every signal, grouped, as label/value pairs
 export function SignalGrid({ s }: { s: Signals }) {
   const yes = (b?: boolean) => (b ? 'yes' : 'no')

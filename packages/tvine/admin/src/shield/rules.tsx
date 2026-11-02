@@ -2,13 +2,16 @@
 // Rules: ordered (first terminal match wins), drag or keyboard reorder (Weft SortableList: Space grabs, arrows move),
 // enable toggles, hit counts; the editor = name + condition builder + action picker; reset to the built-in set.
 import { useEffect, useState } from 'react'
+import { Sparkline } from '../charts.js'
 import { Dialog, SortableList, Switch } from '../../../weft/dist/widgets/index.js'
 import { useLiveData } from '../live.js'
 import { Empty, ErrorBox, Icon, Region, Skeleton, cx } from '../ui.js'
 import { ConditionBuilder } from './condition.js'
 import { useShield, write } from './ctx.js'
 import { RULE_FIELDS, describe } from './fields.js'
-import type { Action, Rule } from './types.js'
+import { Ago, num } from './kit.js'
+import { DecisionBadge } from './overview.js'
+import type { Action, Cond, Condition, Rule, RulePreview } from './types.js'
 
 const listOf = (d: unknown): Rule[] | undefined => (Array.isArray(d) ? d : (d as { rules?: Rule[] } | undefined)?.rules)
 export const actionText = (a: Action): string =>
@@ -17,6 +20,21 @@ export const actionText = (a: Action): string =>
   : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window} per ${a.key}`
   : a.type === 'custom' ? `Custom: ${a.name}` : a.type === 'allow' ? 'Allow' : 'Log only'
 const tone = (a: Action) => (a.type === 'block' || a.type === 'rateLimit' ? 'error' : a.type === 'challenge' ? 'warn' : a.type === 'log' || a.type === 'custom' ? 'info' : 'ok')
+
+// a compact one-line expression: "country eq CN and score < 30 → Challenge (pow)"
+const SYM: Record<string, string> = { eq: 'eq', neq: 'ne', lt: '<', gt: '>', in: 'in', notIn: 'not in', contains: 'contains', startsWith: 'starts with', endsWith: 'ends with', regex: 'matches', cidr: 'in' }
+export function expr(c: Condition): string {
+  if ('not' in c) return `not (${expr(c.not)})`
+  if ('all' in c || 'any' in c) {
+    const k = 'all' in c ? c.all : c.any
+    if (!k.length) return 'every request'
+    return k.map((x) => ('all' in x || 'any' in x) && ('all' in x ? x.all : x.any).length > 1 ? `(${expr(x)})` : expr(x)).join('all' in c ? ' and ' : ' or ')
+  }
+  const l = c as Cond
+  const v = Array.isArray(l.value) ? `{${l.value.join(' ')}}` : typeof l.value === 'string' ? (/\s/.test(l.value) || l.value === '' ? JSON.stringify(l.value) : l.value) : String(l.value)
+  return `${l.field} ${SYM[l.op] ?? l.op} ${v}`
+}
+const actionShort = (a: Action) => (a.type === 'challenge' ? `Challenge (${a.level})` : a.type === 'block' ? `Block ${a.status ?? 403}` : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window}` : a.type === 'custom' ? `Custom ${a.name}` : a.type === 'allow' ? 'Allow' : 'Log')
 
 // move one id to a new index (SortableList onMove) — pure, tested
 export function moveId(ids: string[], id: string, to: number): string[] {
@@ -42,7 +60,7 @@ export function Rules() {
     if (!(await write(call, 'shield.rules.save', { rule: { ...rule, enabled } }, enabled ? `“${rule.name}” on` : `“${rule.name}” off`))) void r.reload()
   }
   return (
-    <Region id="shield:rules" label="Rules" state={{ count: rules?.length ?? 0, order: rules?.map((x) => x.name).join(' > ').slice(0, 300) ?? '' }}>
+    <Region id="shield:rules" label="Rules" state={{ count: rules?.length ?? 0, order: rules?.map((x) => `${x.name}${x.enabled ? '' : ' (off)'}: ${x.hits24h ?? 0}/24h`).join(' > ').slice(0, 400) ?? '' }}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1 basis-72">
           <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
@@ -62,10 +80,11 @@ export function Rules() {
                 <span className="tvs-order">{rule.order + 1}</span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{rule.name}</p>
-                  <p className="truncate text-xs text-muted" title={describe(rule.when)}>When {describe(rule.when)}</p>
+                  <p className="tvs-expr truncate" title={describe(rule.when)}>{expr(rule.when)} <span className="text-muted">→</span> <span data-t={tone(rule.then)}>{actionShort(rule.then)}</span></p>
                 </div>
-                <span className="tvs-decision hidden sm:inline-flex" data-t={tone(rule.then)}>{actionText(rule.then)}</span>
-                <span className="w-20 text-right text-xs tabular-nums text-muted" title="Matches so far">{(rule.hits ?? 0).toLocaleString()} hits</span>
+                <span className="tvs-decision hidden md:inline-flex" data-t={tone(rule.then)}>{actionText(rule.then)}</span>
+                <span className="hidden w-24 sm:block">{rule.spark && rule.spark.length > 1 && <Sparkline values={rule.spark} width={96} height={24} label={`${rule.name}, last 24h`} />}</span>
+                <span className="w-20 text-right text-xs tabular-nums" title={`${(rule.hits ?? 0).toLocaleString()} matches in total`}><strong className="text-fg">{num(rule.hits24h ?? 0)}</strong><span className="block text-muted">24h hits</span></span>
                 <span className="flex items-center gap-1" onKeyDown={(e) => e.stopPropagation()}>
                   <Switch name={`enabled-${rule.id}`} label={`Enable ${rule.name}`} checked={rule.enabled} onCheckedChange={(v) => void toggle(rule, v)} className="tvs-switch" slots={{ label: { className: 'sr-only' } }} />
                   <a href={`${base}/rules/${rule.id}/`} agentId={`edit-${rule.id}`} className="tva-btn tva-btn-ghost h-8 px-2" onClick={(e) => { e.preventDefault(); navigate(`${base}/rules/${encodeURIComponent(rule.id)}/`) }}>Edit</a>
@@ -89,8 +108,16 @@ export function Rules() {
 // empty until edited: the server refuses saving a challenge / block that matches every request
 const blank = (): Rule => ({ id: '', name: 'New rule', enabled: true, order: 0, when: { all: [{ field: 'path', op: 'startsWith', value: '' }] }, then: { type: 'challenge', level: 'auto' } })
 
+// /rules/new/?when=<json>&name=… (Events → "Create rule from this")
+function prefill(q: Record<string, string>): Rule {
+  const r = blank()
+  try { if (q.when) r.when = JSON.parse(q.when) as Condition } catch { /* keep the blank */ }
+  if (q.name) r.name = q.name.slice(0, 120)
+  return r
+}
+
 export function RuleEditor({ id }: { id: string }) {
-  const { call, base, navigate } = useShield()
+  const { call, base, navigate, query } = useShield()
   const r = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
   const custom = useLiveData<string[]>(call, 'shield.customRules', {})
   const [draft, setDraft] = useState<Rule>()
@@ -99,7 +126,7 @@ export function RuleEditor({ id }: { id: string }) {
   const isNew = id === 'new'
   useEffect(() => {
     if (draft) return
-    if (isNew) return setDraft(blank())
+    if (isNew) return setDraft(prefill(query))
     const found = listOf(r.data)?.find((x) => x.id === id)
     if (found) setDraft(structuredClone(found))
   }, [r.data])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -107,7 +134,7 @@ export function RuleEditor({ id }: { id: string }) {
   if (!draft) return r.data && !isNew ? <Empty title="Rule not found" icon="search">It may have been deleted.</Empty> : <div className="tva-card"><Skeleton rows={8} /></div>
   const save = async () => {
     setBusy(true)
-    const { id: _id, hits: _h, ...rest } = draft
+    const { id: _id, hits: _h, hits24h: _h24, spark: _s, ...rest } = draft
     const ok = await write(call, 'shield.rules.save', { rule: isNew ? rest : { ...rest, id: draft.id } }, 'Rule saved')
     setBusy(false)
     if (ok) back()
@@ -133,6 +160,7 @@ export function RuleEditor({ id }: { id: string }) {
             <p className="mb-3 text-sm text-muted">The request must match these conditions. Now: <em>{describe(draft.when)}</em>.</p>
             <ConditionBuilder value={draft.when} fields={RULE_FIELDS} onChange={(when) => setDraft({ ...draft, when })} />
           </section>
+          <Preview when={draft.when} />
         </div>
         <section className="tva-card h-fit p-4 xl:sticky xl:top-4">
           <h2 className="mb-3 font-semibold">Then</h2>
@@ -227,5 +255,52 @@ export function ActionPicker({ value, onChange, custom }: { value: Action; onCha
         </label>
       ) : <p className="rounded-md bg-sunken p-3 text-sm text-muted">No custom rules registered. Add one in app code: <code className="tva-kbd">shield.registerRule('name', fn)</code>.</p>)}
     </div>
+  )
+}
+
+// live match preview: what this condition would have matched over the last 24h (debounced)
+export const PREVIEW_DEBOUNCE_MS = 400
+function Preview({ when }: { when: Condition }) {
+  const { call, base, navigate } = useShield()
+  const [res, setRes] = useState<{ data?: RulePreview; error?: string; busy: boolean }>({ busy: true })
+  const key = JSON.stringify(when)
+  useEffect(() => {
+    let live = true
+    setRes((r) => ({ ...r, busy: true }))
+    const t = setTimeout(async () => {
+      const r = await call('shield.rules.preview', { when, sinceHours: 24 })
+      if (live) setRes(r.ok ? { data: r.data as RulePreview, busy: false } : { error: r.message, busy: false })
+    }, PREVIEW_DEBOUNCE_MS)
+    return () => { live = false; clearTimeout(t) }
+  }, [key])   // eslint-disable-line react-hooks/exhaustive-deps
+  const d = res.data
+  return (
+    <Region id="rule:preview" label="Match preview" state={{ matched: d?.matched ?? null, scanned: d?.scanned ?? null, busy: res.busy }} className="tva-card overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 p-4">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-semibold">Match preview</h2>
+          <p className="text-sm text-muted" role="status">
+            {res.error ? <span className="text-danger">{res.error}</span>
+              : !d ? 'Checking the last 24 hours…'
+              : <>Would have matched <strong className="text-fg tabular-nums">{d.matched.toLocaleString()}</strong> of <span className="tabular-nums">{d.scanned.toLocaleString()}</span> stored requests in the last 24h{d.scanned ? ` (${Math.round((d.matched / d.scanned) * 1000) / 10}%)` : ''}.</>}
+          </p>
+        </div>
+        {res.busy && d && <span className="text-xs text-muted">Updating…</span>}
+      </div>
+      {d && d.scanned > 0 && <div className="tvs-bar mx-4 mb-3 w-auto"><span style={{ width: `${Math.min(100, (d.matched / d.scanned) * 100)}%`, background: 'var(--tva-brand)' }} /></div>}
+      {d && d.sample.length > 0 && (
+        <div className={cx('overflow-x-auto border-t border-line transition-opacity', res.busy && 'opacity-60')}>
+          <table className="w-full text-[13px]">
+            <thead><tr><th className="tva-th">Time</th><th className="tva-th">IP</th><th className="tva-th">Request</th><th className="tva-th">Now</th></tr></thead>
+            <tbody>{d.sample.slice(0, 8).map((r) => (
+              <tr key={r.ray} className="tva-row cursor-pointer" onClick={() => navigate(`${base}/events/?ray=${encodeURIComponent(r.ray)}`)}>
+                <td className="tva-td whitespace-nowrap text-muted"><Ago ts={r.ts} /></td><td className="tva-td font-mono text-xs">{r.ip ?? '—'}</td>
+                <td className="tva-td max-w-[18rem] truncate font-mono text-xs">{r.method ?? 'GET'} {r.path}</td><td className="tva-td"><DecisionBadge d={r.decision} /></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </Region>
   )
 }

@@ -85,3 +85,61 @@
   .tvs-part[data-t="error"] > :last-child { color: var(--tva-danger); }
   .tvs-part[data-t="ok"] > :last-child { color: var(--tva-good-ink); }
 }
+
+/* ---- analytics (Cloudflare-style security dashboard) ---------------------------------------------------------------- */
+.tvs { --tvs-pass: #2a78d6; --tvs-allow: #1baf7a; --tvs-log: #8b95a5; --tvs-challenge: #eda100; --tvs-block: #e34948; --tvs-rate: #6250d6; }
+.tvs .tvs-dec { --tva-c1: var(--tvs-pass); --tva-c2: var(--tvs-allow); --tva-c3: var(--tvs-log); --tva-c4: var(--tvs-challenge); --tva-c5: var(--tvs-block); --tva-c6: var(--tvs-rate); }
+.tvs .tvs-traffic { --tva-c1: #2a78d6; --tva-c2: #f38020; }
+.tvs .tvs-hist { --tva-c1: #6250d6; }
+
+@layer components {
+  .tvs-nav-h { padding: 0 .75rem .25rem; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tva-muted); }
+  .tvs-mode { gap: .45rem; }
+  .tvs-mode[data-mode="enforce"] { background: color-mix(in oklab, var(--tva-good) 12%, transparent); border-color: color-mix(in oklab, var(--tva-good) 35%, transparent); color: var(--tva-good-ink); }
+  .tvs-mode[data-mode="log"] { background: color-mix(in oklab, var(--tva-warning) 16%, transparent); border-color: color-mix(in oklab, var(--tva-warning) 40%, transparent); color: var(--tva-warn); }
+  .tvs-mode[data-mode="off"] { background: color-mix(in oklab, var(--tva-critical) 12%, transparent); border-color: color-mix(in oklab, var(--tva-critical) 35%, transparent); color: var(--tva-danger); }
+
+  .tvs-sticky { position: sticky; top: 0; z-index: 6; margin: -1.25rem -1rem 1rem; padding: .85rem 1rem .75rem; border-bottom: 1px solid var(--tva-line);
+    background: color-mix(in oklab, var(--tva-bg) 86%, transparent); backdrop-filter: blur(10px); }
+  @media (min-width: 640px) { .tvs-sticky { margin-inline: -1.5rem; padding-inline: 1.5rem; } }
+  @media (min-width: 1024px) { .tvs-sticky { margin-inline: -2rem; padding-inline: 2rem; } }
+
+  .tvs-chip { display: inline-flex; align-items: center; gap: .35rem; height: 1.75rem; padding: 0 .25rem 0 .6rem; border-radius: 999px; font-size: 12px;
+    border: 1px solid color-mix(in oklab, var(--tva-c1) 35%, var(--tva-line)); background: color-mix(in oklab, var(--tva-c1) 9%, var(--tva-surface)); }
+  .tvs-chip[data-neg] { border-color: color-mix(in oklab, var(--tva-critical) 35%, var(--tva-line)); background: color-mix(in oklab, var(--tva-critical) 8%, var(--tva-surface)); }
+  .tvs-chip > button { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border-radius: 999px; color: var(--tva-muted); }
+  .tvs-chip > button:hover { background: var(--tva-sunken); color: var(--tva-fg); }
+  .tvs-pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 16rem; padding: .75rem; border: 1px solid var(--tva-line); border-radius: var(--tva-radius);
+    background: var(--tva-surface); box-shadow: 0 12px 32px -8px rgb(0 0 0 / .25); }
+  .tvs-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; border-radius: var(--tva-radius); font-size: 13px;
+    background: color-mix(in oklab, var(--tva-warning) 14%, transparent); color: var(--tva-warn); border: 1px solid color-mix(in oklab, var(--tva-warning) 35%, transparent); }
+
+  /* top-N rows: a proportional bar behind the row, its mitigated part darker; hover/focus shows filter buttons */
+  .tvs-top { position: relative; display: flex; align-items: center; gap: .5rem; height: 2rem; margin: 0 .5rem; padding: 0 .5rem; border-radius: 6px; font-size: 13px; }
+  .tvs-top:hover { background: var(--tva-sunken); }
+  .tvs-top-bar { position: absolute; left: 0; top: 3px; bottom: 3px; border-radius: 5px; overflow: hidden; background: color-mix(in oklab, var(--tva-c1) 13%, transparent); pointer-events: none; }
+  .tvs-top-bar > span { display: block; height: 100%; background: color-mix(in oklab, #f38020 26%, transparent); }
+  .tvs-top-act { position: relative; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+  .tvs-top:hover .tvs-top-act, .tvs-top:focus-within .tvs-top-act { opacity: 1; }
+  @media (hover: none) { .tvs-top-act { opacity: 1; } }
+  .tvs-top-act button { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 5px; background: var(--tva-surface); border: 1px solid var(--tva-line); color: var(--tva-muted); }
+  .tvs-top-act button:hover { color: var(--tva-accent); border-color: var(--tva-accent); }
+
+  .tvs-map path { stroke: var(--tva-surface); stroke-width: .5; }
+  .tvs-map path:not([fill]) { fill: color-mix(in oklab, var(--tva-line) 70%, var(--tva-sunken)); }
+  .tvs-map path.has { cursor: pointer; }
+  .tvs-map path.has:hover, .tvs-map path.has:focus-visible { stroke: var(--tva-fg); stroke-width: 1; outline: none; }
+  .tvs-ramp { display: inline-block; width: 5rem; height: .5rem; border-radius: 999px; background: linear-gradient(90deg, color-mix(in oklab, var(--tva-c1) 18%, var(--tva-sunken)), var(--tva-c1)); }
+  .tvs-ramp[data-m="mitigated"] { background: linear-gradient(90deg, color-mix(in oklab, var(--tva-c2) 18%, var(--tva-sunken)), var(--tva-c2)); }
+
+  .tvs-funnel { display: flex; align-items: center; gap: .6rem; }
+  .tvs-funnel-bar { flex: 1; height: .65rem; border-radius: 999px; background: var(--tva-sunken); overflow: hidden; }
+  .tvs-funnel-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--tva-c1); transition: width .4s; }
+  .tvs-funnel[data-t="ok"] .tvs-funnel-bar > span { background: var(--tva-good); }
+  .tvs-funnel[data-t="warn"] .tvs-funnel-bar > span { background: var(--tva-warning); }
+  .tvs-funnel[data-t="error"] .tvs-funnel-bar > span { background: var(--tva-critical); }
+
+  .tvs-table .tva-td { padding-top: .4rem; padding-bottom: .4rem; }
+  .tvs-expr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--tva-fg); opacity: .85; }
+  .tvs-expr [data-t="error"] { color: var(--tva-danger); } .tvs-expr [data-t="warn"] { color: var(--tva-warn); } .tvs-expr [data-t="ok"] { color: var(--tva-good-ink); }
+}

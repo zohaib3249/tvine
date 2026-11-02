@@ -168,6 +168,7 @@ body.tva-page { margin: 0; }
   .tva-cross { stroke: var(--tva-muted); stroke-width: 1; opacity: .6; }
   .tva-dot { stroke: var(--tva-surface); stroke-width: 2; }
   .tva-band { fill: var(--tva-sunken); }
+  .tva-brush { fill: color-mix(in oklab, var(--tva-brand) 14%, transparent); stroke: var(--tva-brand); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
   .tva-bars path { transition: opacity .15s; transform-box: fill-box; transform-origin: bottom; animation: tva-grow .5s cubic-bezier(.2,.7,.2,1) both; }
   .tva-bars.is-hi path { opacity: .82; }
   .tva-slice { transition: transform .15s ease-out, opacity .15s; transform-origin: center; transform-box: view-box; outline: none; }

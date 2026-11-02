@@ -2,7 +2,7 @@
 // The Shield panel (tvine.shield): its own app at settings.shield.panel.path (default /shield), built from the admin's
 // sources (theme, charts, live hook, login, widgets). Gate: not signed in → the panel login; signed in but the panel
 // access condition says no → a 403 page; else the pages. Every shield.* action re-checks access on the server.
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api as browserApi } from '../../../weft/dist/api/client.js'
 import { Drawer, Menu, Toaster } from '../../../weft/dist/widgets/index.js'
 import { caller, type Call } from '../data.js'
@@ -13,14 +13,16 @@ import { retryable } from '../data.js'
 import { Ctx, useShield, type Query, type ShieldCtx } from './ctx.js'
 import { Overview } from './overview.js'
 import { RuleEditor, Rules } from './rules.js'
-import { Bots, Denied, Events, Lists, Settings, TestRequest } from './pages.js'
+import { Bots, Denied, Lists, Settings, TestRequest } from './pages.js'
+import { Events, IpProfile } from './events.js'
 import type { ShieldSettings } from './types.js'
 
 export type ShieldAppProps = { base?: string; segments: string[]; query?: Query; api?: unknown }
 export const PAGES = [
-  { page: '', title: 'Overview', icon: 'gauge' }, { page: 'rules', title: 'Rules', icon: 'sliders' }, { page: 'bots', title: 'Bots & AI', icon: 'bot' },
-  { page: 'lists', title: 'Lists', icon: 'logs' }, { page: 'events', title: 'Events', icon: 'table' }, { page: 'test', title: 'Test a request', icon: 'play' },
-  { page: 'settings', title: 'Settings', icon: 'shield' },
+  { page: '', title: 'Analytics', icon: 'chart', section: 'Monitor' }, { page: 'events', title: 'Events', icon: 'table', section: 'Monitor' },
+  { page: 'rules', title: 'Rules', icon: 'sliders', section: 'Protect' }, { page: 'bots', title: 'Bots & AI', icon: 'bot', section: 'Protect' },
+  { page: 'lists', title: 'Lists', icon: 'logs', section: 'Protect' },
+  { page: 'test', title: 'Test a request', icon: 'play', section: 'Tools' }, { page: 'settings', title: 'Settings', icon: 'shield', section: 'Tools' },
 ] as const
 
 export const ShieldMark = ({ size = 32 }: { size?: number }) => (
@@ -110,6 +112,7 @@ function View({ page, sub }: { page: string; sub?: string }) {
     case 'bots': return <Bots />
     case 'lists': return <Lists />
     case 'events': return <Events />
+    case 'ip': return sub ? <IpProfile ip={decodeURIComponent(sub)} /> : <Events />
     case 'test': return <TestRequest />
     case 'settings': return <Settings />
     default: return <div className="tva-card p-8 text-center text-muted">This Shield page does not exist.</div>
@@ -120,7 +123,7 @@ function Brand() {
   const { base, navigate } = useShield()
   return (
     <a href={`${base}/`} agentId="home" onClick={(e) => { e.preventDefault(); navigate(`${base}/`) }} className="flex h-14 items-center gap-2.5 border-b border-line px-4">
-      <ShieldMark /><span className="flex flex-col leading-tight"><span className="font-semibold">Shield</span><span className="text-[11px] text-muted">Bot protection</span></span>
+      <ShieldMark /><span className="flex flex-col leading-tight"><span className="font-semibold">Shield</span><span className="text-[11px] text-muted">Security · bot protection</span></span>
     </a>
   )
 }
@@ -129,11 +132,15 @@ function Nav({ id, page, onPick }: { id: string; page: string; onPick?(): void }
   const { base, navigate } = useShield()
   return (
     <Region id={id} as="nav" label="Shield navigation" aria-label="Shield" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-3">
-      {PAGES.map((x) => {
+      {PAGES.map((x, i) => {
         const to = `${base}/${x.page ? `${x.page}/` : ''}`
+        const on = page === x.page || (x.page === 'events' && page === 'ip')
         return (
-          <a key={x.page} href={to} agentId={x.page || 'overview'} aria-current={page === x.page ? 'page' : undefined} className="tva-nav-link"
-            onClick={(e) => { e.preventDefault(); onPick?.(); navigate(to) }}><Icon name={x.icon} /><span className="truncate">{x.title}</span></a>
+          <Fragment key={x.page}>
+            {PAGES[i - 1]?.section !== x.section && <p className={cx('tvs-nav-h', i > 0 && 'mt-3')}>{x.section}</p>}
+            <a href={to} agentId={x.page || 'analytics'} aria-current={on ? 'page' : undefined} className="tva-nav-link"
+              onClick={(e) => { e.preventDefault(); onPick?.(); navigate(to) }}><Icon name={x.icon} /><span className="truncate">{x.title}</span></a>
+          </Fragment>
         )
       })}
       <div className="flex-1" />
@@ -142,7 +149,7 @@ function Nav({ id, page, onPick }: { id: string; page: string; onPick?(): void }
   )
 }
 
-export const MODE_TEXT = { off: 'Off', log: 'Log only', enforce: 'Enforcing' } as const
+export const MODE_TEXT = { off: 'Off', log: 'Log', enforce: 'Enforce' } as const
 function Topbar({ page, onTheme, theme }: { page: string; onTheme(): void; theme: string }) {
   const { user, call, settings, base, navigate } = useShield()
   const [menu, setMenu] = useState(false)
@@ -154,9 +161,9 @@ function Topbar({ page, onTheme, theme }: { page: string; onTheme(): void; theme
         <div className="flex h-full flex-col"><Brand /><Nav id="shield:menu" page={page} onPick={() => setMenu(false)} /></div>
       </Drawer>
       <span className="flex items-center gap-2 lg:hidden"><ShieldMark size={26} /><span className="font-semibold">Shield</span></span>
-      <span className="hidden truncate font-semibold lg:inline">{PAGES.find((x) => x.page === page)?.title}</span>
+      <span className="hidden truncate font-semibold lg:inline">{page === 'ip' ? 'IP profile' : PAGES.find((x) => x.page === page)?.title}</span>
       <div className="flex-1" />
-      <button type="button" agentId="mode" className="tvs-mode" data-mode={mode} title="Protection mode (Settings)" onClick={() => navigate(`${base}/settings/`)}>{MODE_TEXT[mode]}</button>
+      <button type="button" agentId="mode" className="tvs-mode" data-mode={mode} title={`Protection mode: ${MODE_TEXT[mode]} (change in Settings)`} onClick={() => navigate(`${base}/settings/`)}><span className="hidden text-muted sm:inline">Mode</span>{MODE_TEXT[mode]}</button>
       <button type="button" agentId="theme" aria-label="Toggle dark mode" onClick={onTheme} className="tva-btn tva-btn-ghost tva-btn-icon"><Icon name={theme === 'dark' ? 'sun' : 'moon'} /></button>
       <Menu name="user" label="Account"
         trigger={<span className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-accent">{user.username.slice(0, 1).toUpperCase()}</span><span className={cx('hidden max-w-32 truncate sm:inline')}>{user.username}</span></span>}
