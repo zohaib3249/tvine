@@ -51,9 +51,10 @@ function resample(v: [number, number][]): [number, number][] {
 
 function shapePath(kind: Kind, cx: number, cy: number): string {
   const r = rnd(26, 36), rot = rnd(0, 2 * Math.PI), c = Math.cos(rot), s = Math.sin(rot)
+  cx += rnd(-6, 6); cy += rnd(-6, 6)
   const pts = resample(vertices(kind)).map(([x, y]) => {
     const jx = x * r + rnd(-1.2, 1.2), jy = y * r + rnd(-1.2, 1.2)
-    return [cx + rnd(-6, 6) + jx * c - jy * s, cy + rnd(-6, 6) + jx * s + jy * c]
+    return [cx + jx * c - jy * s, cy + jx * s + jy * c]
   })
   return 'M' + pts.map((p) => `${f(p[0])} ${f(p[1])}`).join('L') + 'Z'
 }

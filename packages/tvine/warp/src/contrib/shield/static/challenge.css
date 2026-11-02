@@ -1,0 +1,70 @@
+:root {
+  --bg: #f5f6f8; --card: #fff; --fg: #15171a; --muted: #5b616b; --line: #d9dde3;
+  --accent: #2557d6; --accent-fg: #fff; --ok: #137a3a; --err: #b42318; --focus: #2557d6;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --card: #181b21; --fg: #e8eaee; --muted: #a2a9b4; --line: #2c313a;
+          --accent: #7aa2ff; --accent-fg: #0b1020; --ok: #5bd28a; --err: #ff8a80; --focus: #9bb8ff; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: grid; place-items: center; min-height: 100vh; padding: 16px;
+}
+.card {
+  width: 100%; max-width: 440px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 28px 24px 18px; box-shadow: 0 8px 30px rgb(0 0 0 / .06);
+}
+header { display: flex; gap: 12px; align-items: flex-start; }
+.logo { width: 32px; height: 32px; flex: none; fill: var(--accent); }
+h1 { font-size: 1.15rem; line-height: 1.35; margin: 2px 0 0; font-weight: 600; }
+#site { overflow-wrap: anywhere; }
+.status { color: var(--muted); margin: 18px 0 14px; min-height: 1.5em; }
+.status[data-state="ok"] { color: var(--ok); }
+.status[data-state="ok"]::before { content: "✓ "; }
+.status[data-state="error"] { color: var(--err); }
+.status[data-state="error"]::before { content: "⚠ "; }
+.step { margin: 6px 0 16px; }
+progress { width: 100%; height: 8px; appearance: none; border: 0; border-radius: 4px; background: var(--line); overflow: hidden; }
+progress::-webkit-progress-bar { background: var(--line); }
+progress::-webkit-progress-value { background: var(--accent); transition: width .2s; }
+progress::-moz-progress-bar { background: var(--accent); }
+.check {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 10px; font-weight: 500; user-select: none;
+}
+.check input { width: 24px; height: 24px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.prompt { font-weight: 600; margin: 0 0 10px; }
+.grid { position: relative; width: 100%; max-width: 316px; aspect-ratio: 1; margin: 0 auto; }
+.image, .image svg, .tiles { position: absolute; inset: 0; width: 100%; height: 100%; }
+.image svg { border-radius: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.3%; padding: 1.3%; }
+.tiles button {
+  background: transparent; border: 3px solid transparent; border-radius: 6px; cursor: pointer; padding: 0;
+  position: relative;
+}
+.tiles button[aria-pressed="true"] { border-color: var(--accent); background: rgb(37 87 214 / .18); }
+/* Not colour alone: a selected tile also gets a check badge. */
+.tiles button[aria-pressed="true"]::after {
+  content: "✓"; position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-fg); font-weight: 700; font-size: 14px; line-height: 22px;
+}
+.text { display: grid; gap: 8px; margin: 10px 0; }
+.text input, button { font: inherit; }
+.text input { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+.actions button:not(.link) {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer;
+}
+.actions .primary { background: var(--accent) !important; color: var(--accent-fg) !important; border-color: var(--accent) !important; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.help { border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: .92rem; }
+.help summary { cursor: pointer; color: var(--fg); }
+.help ul { padding-left: 1.2em; }
+footer { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 14px; font-size: .8rem; color: var(--muted); }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

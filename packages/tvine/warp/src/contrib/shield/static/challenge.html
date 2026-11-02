@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Checking your browser…</title>
+<link rel="stylesheet" href="{{prefix}}/challenge.css">
+<script nonce="{{nonce}}" src="{{prefix}}/sensor.js" defer></script>
+<script nonce="{{nonce}}" src="{{prefix}}/challenge.js" defer></script>
+</head>
+<body>
+<main id="shield" class="card" data-prefix="{{prefix}}" data-level="{{level}}" data-return="{{return}}">
+  <header>
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2 4 5v6c0 5 3.4 9.6 8 11 4.6-1.4 8-6 8-11V5l-8-3Z"/></svg>
+    <h1>Checking your browser before you reach <span id="site">this site</span></h1>
+  </header>
+
+  <p id="status" class="status" role="status" aria-live="polite">Starting a quick security check…</p>
+  <noscript><p class="status">This check needs JavaScript. Please enable it and reload the page.</p></noscript>
+
+  <section id="pow" class="step" hidden>
+    <progress id="pow-progress" max="100" value="0" aria-label="Security check progress">0%</progress>
+  </section>
+
+  <section id="checkbox" class="step" hidden>
+    <label class="check">
+      <input type="checkbox" id="human">
+      <span>I am human</span>
+    </label>
+  </section>
+
+  <section id="captcha" class="step" hidden>
+    <p id="captcha-prompt" class="prompt"></p>
+    <div id="captcha-grid" class="grid">
+      <div id="captcha-image" class="image"></div>
+      <div id="captcha-tiles" class="tiles" role="group" aria-labelledby="captcha-prompt"></div>
+    </div>
+    <form id="captcha-text" class="text" hidden>
+      <label for="captcha-answer" id="captcha-question"></label>
+      <input id="captcha-answer" inputmode="numeric" autocomplete="off" required>
+    </form>
+    <div class="actions">
+      <button type="button" id="captcha-submit" class="primary">Verify</button>
+      <button type="button" id="captcha-new">New puzzle</button>
+      <button type="button" id="captcha-mode" class="link">Use a text question instead</button>
+    </div>
+  </section>
+
+  <details class="help">
+    <summary>Having trouble?</summary>
+    <p>This page checks that you are a person and not an automated program. It usually finishes on its own in a few seconds.</p>
+    <ul>
+      <li>Make sure JavaScript and cookies are enabled for this site.</li>
+      <li>If an image puzzle appears and you cannot see it, choose “Use a text question instead”.</li>
+      <li>Still stuck? <button type="button" id="retry" class="link">Start the check again</button>.</li>
+    </ul>
+  </details>
+
+  <footer><span>Protected by Tvine Shield</span><span id="ray"></span></footer>
+</main>
+</body>
+</html>
