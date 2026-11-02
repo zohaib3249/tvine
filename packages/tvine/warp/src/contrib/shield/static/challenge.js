@@ -140,17 +140,18 @@
     status('Please confirm you are human by ticking the box.')
   }
 
-  // ── captcha: server SVG + tile buttons, or a text question ──────────────────────────────────────
+  // ── captcha: server PNG + tile buttons, or a math puzzle PNG ──────────────────────────────────────
   var textMode = false
   function runCaptcha(cap) {
     show('captcha')
     if (!cap) return onError(new Error('missing puzzle'))
     $('captcha-prompt').textContent = cap.prompt + '. Then choose Verify.'
-    $('captcha-question').textContent = cap.question || ''
     $('captcha-answer').value = ''
-    var img = $('captcha-image'); img.textContent = ''
-    var doc = new DOMParser().parseFromString(cap.svg || '', 'image/svg+xml'), svg = doc.documentElement
-    if (svg && svg.nodeName === 'svg' && !svg.querySelector('script,foreignObject')) img.appendChild(document.importNode(svg, true))
+    var png = function (s) { return typeof s === 'string' && s.indexOf('data:image/png;base64,') === 0 ? s : '' }
+    var box = $('captcha-image'); box.textContent = ''
+    var img = document.createElement('img'); img.alt = 'Image puzzle: 3 by 3 grid of shapes'; img.src = png(cap.image)
+    box.appendChild(img)
+    $('captcha-math').src = png(cap.mathImage)
     var tiles = $('captcha-tiles'); tiles.textContent = ''
     for (var i = 0; i < 9; i++) {
       var b = document.createElement('button')
@@ -167,7 +168,7 @@
   function setMode(text) {
     textMode = text
     $('captcha-grid').hidden = text; $('captcha-prompt').hidden = text; $('captcha-text').hidden = !text
-    $('captcha-mode').textContent = text ? 'Use the image puzzle instead' : 'Use a text question instead'
+    $('captcha-mode').textContent = text ? 'Use the image puzzle instead' : 'Try a math puzzle instead'
     if (text) $('captcha-answer').focus()
   }
   function submitCaptcha(e) {

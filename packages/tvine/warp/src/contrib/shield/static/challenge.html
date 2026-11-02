@@ -38,13 +38,14 @@
       <div id="captcha-tiles" class="tiles" role="group" aria-labelledby="captcha-prompt"></div>
     </div>
     <form id="captcha-text" class="text" hidden>
-      <label for="captcha-answer" id="captcha-question"></label>
+      <img id="captcha-math" alt="Math puzzle image">
+      <label for="captcha-answer">Type the answer to the sum in the picture</label>
       <input id="captcha-answer" inputmode="numeric" autocomplete="off" required>
     </form>
     <div class="actions">
       <button type="button" id="captcha-submit" class="primary">Verify</button>
       <button type="button" id="captcha-new">New puzzle</button>
-      <button type="button" id="captcha-mode" class="link">Use a text question instead</button>
+      <button type="button" id="captcha-mode" class="link">Try a math puzzle instead</button>
     </div>
   </section>
 
@@ -53,7 +54,7 @@
     <p>This page checks that you are a person and not an automated program. It usually finishes on its own in a few seconds.</p>
     <ul>
       <li>Make sure JavaScript and cookies are enabled for this site.</li>
-      <li>If an image puzzle appears and you cannot see it, choose “Use a text question instead”.</li>
+      <li>If you cannot make out the shapes, choose “Try a math puzzle instead” and type the answer to the sum; “New puzzle” draws a fresh one.</li>
       <li>Still stuck? <button type="button" id="retry" class="link">Start the check again</button>.</li>
     </ul>
   </details>

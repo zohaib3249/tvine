@@ -148,7 +148,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       try { captcha = level === 'captcha' ? await makeCaptcha() : undefined } catch { return json(res, 503, { ok: false, error: 'try_again' }) }   // store down: fail closed
       const d = difficultyFor(sig.score) + (level === 'captcha' ? 2 : 0)   // every level costs the PoW; the captcha level more
       const { nonce } = issueNonce({ d, l: level, ipNet: sig.ipNet, r: ret.p, ...(captcha && { c: captcha.id }) })
-      return json(res, 200, { nonce, difficulty: d, level, ray: req.tvine.id, ...(captcha && { captcha: { id: captcha.id, svg: captcha.svg, prompt: captcha.prompt, question: captcha.question } }) })
+      return json(res, 200, { nonce, difficulty: d, level, ray: req.tvine.id, ...(captcha && { captcha: { id: captcha.id, image: captcha.image, prompt: captcha.prompt, mathImage: captcha.mathImage } }) })
     }
     // verify
     const sig0 = await signals(req, { count: false })
