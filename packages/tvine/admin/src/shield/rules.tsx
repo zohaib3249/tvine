@@ -19,7 +19,7 @@ export const actionText = (a: Action): string =>
   a.type === 'challenge' ? `Challenge (${a.level}${a.ttl ? `, pass lasts ${a.ttl}` : ''})`
   : a.type === 'block' ? `Block ${a.status ?? 403}`
   : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window} per ${a.key}`
-  : a.type === 'custom' ? `Custom: ${a.name}` : a.type === 'code' ? 'Run code' : a.type === 'allow' ? 'Allow' : 'Log only'
+  : a.type === 'custom' ? `Custom: ${a.name}` : a.type === 'code' ? 'Code' : a.type === 'allow' ? 'Allow' : 'Log only'
 export const tone = (a: Action) => (a.type === 'block' || a.type === 'rateLimit' ? 'error' : a.type === 'challenge' ? 'warn' : a.type === 'log' || a.type === 'custom' || a.type === 'code' ? 'info' : 'ok')
 
 // a compact one-line expression: "country eq CN and score < 30 → Challenge (pow)"
@@ -130,6 +130,7 @@ export function RuleEditor({ id }: { id: string }) {
   const { call, base, navigate, query } = useShield()
   const r = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
   const custom = useLiveData<string[]>(call, 'shield.customRules', {})
+  const [full, setFull] = useState(false)   // the code editor as a full-screen dialog (opens when Code is picked)
   const [draft, setDraft] = useState<Rule>()
   const [busy, setBusy] = useState(false)
   const [del, setDel] = useState(false)
@@ -177,7 +178,7 @@ export function RuleEditor({ id }: { id: string }) {
         </div>
         <section className="tva-card h-fit p-4 xl:sticky xl:top-4">
           <h2 className="mb-3 font-semibold">Then</h2>
-          <ActionPicker value={draft.then} onChange={(then) => { setCodeErrors(0); setDraft({ ...draft, then }) }} custom={custom.data ?? []} />
+          <ActionPicker value={draft.then} onChange={(then) => { setCodeErrors(0); setDraft({ ...draft, then }) }} custom={custom.data ?? []} onOpenEditor={() => setFull(true)} />
           <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
             <button type="button" agentId="save" className="tva-btn tva-btn-primary" disabled={busy || !draft.name.trim() || !!blocked} aria-describedby={blocked ? 'save-why' : undefined} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rule'}</button>
             <button type="button" agentId="cancel" className="tva-btn" onClick={back}>Cancel</button>
@@ -186,7 +187,7 @@ export function RuleEditor({ id }: { id: string }) {
           </div>
           {blocked && <p id="save-why" className="mt-2 text-[13px] text-danger" role="status">{blocked}</p>}
         </section>
-        {code && <div className="min-w-0 xl:col-span-2 xl:row-start-2"><CodePanel value={code} onChange={(then) => setDraft({ ...draft, then })} onErrors={setCodeErrors} ray={query.ray} /></div>}
+        {code && <div className="min-w-0 xl:col-span-2 xl:row-start-2"><CodePanel value={code} onChange={(then) => setDraft({ ...draft, then })} onErrors={setCodeErrors} ray={query.ray} full={full} onFull={setFull} /></div>}
       </div>
       <Dialog name="delete-rule" label="Delete rule" open={del} onOpenChange={setDel} slots={{ trigger: { className: 'hidden' } }}>
         <h2 className="text-lg font-semibold">Delete “{draft.name}”?</h2>
@@ -206,8 +207,7 @@ const ACTIONS: { type: Action['type']; label: string; help: string }[] = [
   { type: 'challenge', label: 'Challenge', help: 'Ask the browser to prove it is human. Real people pass once and keep a pass for a while. Agents on /mcp and the API get a JSON 403 instead.' },
   { type: 'block', label: 'Block', help: 'Refuse with an error page (JSON on agent paths).' },
   { type: 'rateLimit', label: 'Rate limit', help: 'Allow up to N requests per time window, then answer 429.' },
-  { type: 'custom', label: 'Custom', help: 'Run a rule your app registered in code with shield.registerRule(name, fn).' },
-  { type: 'code', label: 'Run code', help: 'Write JavaScript below that looks at the request and returns an action. Shield runs it in a sandbox. If it throws or runs too long, the rule is skipped: a broken rule never blocks traffic.' },
+  { type: 'code', label: 'Code', help: 'Write JavaScript that looks at the request and returns an action. It opens in the editor, is checked as you type and runs in a sandbox. A broken rule is skipped: it never blocks traffic.' },
 ]
 export function defaultAction(type: Action['type'], custom: string[] = []): Action {
   switch (type) {
@@ -219,15 +219,15 @@ export function defaultAction(type: Action['type'], custom: string[] = []): Acti
     default: return { type }
   }
 }
-export function ActionPicker({ value, onChange, custom }: { value: Action; onChange(a: Action): void; custom: string[] }) {
+export function ActionPicker({ value, onChange, custom, onOpenEditor }: { value: Action; onChange(a: Action): void; custom: string[]; onOpenEditor?(): void }) {
   const cls = 'tva-input h-9'
   const lab = 'flex flex-col gap-1.5 text-[13px] font-medium'
   return (
     <div className="flex flex-col gap-3">
       <div role="radiogroup" aria-label="Action" className="grid grid-cols-3 gap-1.5">
         {ACTIONS.map((a) => (
-          <button key={a.type} type="button" role="radio" agentId={`action-${a.type}`} aria-checked={value.type === a.type} className={cx('tvs-action', a.type === 'code' && 'col-span-3 inline-flex items-center justify-center gap-1.5')} data-t={tone(defaultAction(a.type))}
-            onClick={() => value.type !== a.type && onChange(defaultAction(a.type, custom))}>{a.type === 'code' && <Icon name="code" size={14} />}{a.label}</button>
+          <button key={a.type} type="button" role="radio" agentId={`action-${a.type}`} aria-checked={value.type === a.type || (a.type === 'code' && value.type === 'custom')} className={cx('tvs-action', a.type === 'code' && 'inline-flex items-center justify-center gap-1.5')} data-t={tone(defaultAction(a.type))}
+            onClick={() => { if (a.type === 'code' && value.type !== 'code') { onChange(defaultAction('code')); onOpenEditor?.() } else if (value.type !== a.type) onChange(defaultAction(a.type, custom)) }}>{a.type === 'code' && <Icon name="code" size={14} />}{a.label}</button>
         ))}
       </div>
       <p className="text-sm text-muted">{ACTIONS.find((a) => a.type === value.type)?.help}</p>
@@ -266,12 +266,15 @@ export function ActionPicker({ value, onChange, custom }: { value: Action; onCha
           </label>
         </div>
       )}
-      {value.type === 'custom' && (custom.length ? (
-        <label className={lab}>Rule
-          <select agentId="custom" className={cls} value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })}>{custom.map((n) => <option key={n}>{n}</option>)}</select>
+      {value.type === 'code' && <button type="button" agentId="open-editor" className="tva-btn tva-btn-primary h-9 w-full" onClick={() => onOpenEditor?.()}><Icon name="code" size={14} />Open code editor</button>}
+      {value.type === 'custom' && <button type="button" agentId="write-code" className="tva-btn h-9 w-full" onClick={() => { onChange(defaultAction('code')); onOpenEditor?.() }}><Icon name="code" size={14} />Write code here instead</button>}
+      {(value.type === 'code' || value.type === 'custom') && custom.length > 0 && (
+        <label className={lab}>Or run a rule from your app code
+          <select agentId="custom" className={cls} value={value.type === 'custom' ? value.name : ''} onChange={(e) => onChange(e.target.value ? { type: 'custom', name: e.target.value } : defaultAction('code'))}>
+            <option value="">— write code here —</option>{custom.map((n) => <option key={n}>{n}</option>)}
+          </select>
         </label>
-      ) : <CustomEmpty onCode={() => onChange(defaultAction('code'))} />)}
-      {value.type === 'code' && <p className="rounded-md bg-sunken p-3 text-[13px] text-muted"><Icon name="code" size={13} className="mr-1 inline" />Edit and test the code in the editor below.</p>}
+      )}
     </div>
   )
 }
@@ -320,30 +323,6 @@ function Preview({ when, then }: { when: Condition; then?: Action }) {
           </table>
         </div>
       )}
-    </Region>
-  )
-}
-
-// "Custom (app code)" with nothing registered: how to register one, or write the rule here instead
-export const REGISTER_SAMPLE = `import { shield } from 'tvinejs/contrib/shield/index'
-
-// req: the raw request · signals: ip, country, bot, score, rate…
-shield.registerRule('trusted-country', (req, signals) => {
-  if (signals.country === 'IS' && signals.score > 50) return { type: 'allow' }
-  return undefined   // no decision: the next rule runs
-})`
-function CustomEmpty({ onCode }: { onCode(): void }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => { try { await navigator.clipboard.writeText(REGISTER_SAMPLE); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* no clipboard: the text stays selectable */ } }
-  return (
-    <Region id="rule:custom-empty" label="No app rules" state={{ registered: 0 }} className="rounded-lg border border-line bg-sunken p-3 text-[13px]">
-      <p className="font-semibold">No app rules yet</p>
-      <p className="mt-1 text-muted">An app rule is a function in your server code. Register it at startup and it shows up here.</p>
-      <div className="tvs-sample mt-2">
-        <pre className="tva-pre !bg-surface text-[11.5px]">{REGISTER_SAMPLE}</pre>
-        <button type="button" agentId="copy-sample" className="tva-btn h-7 px-2 text-xs" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button>
-      </div>
-      <button type="button" agentId="write-here" className="tva-btn tva-btn-primary mt-3 h-8 w-full text-xs" onClick={onCode}><Icon name="code" size={13} />Write it here instead</button>
     </Region>
   )
 }

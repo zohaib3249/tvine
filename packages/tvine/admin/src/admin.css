@@ -206,7 +206,7 @@ body.tva-page { margin: 0; }
   .tva-dash[data-editing] > * { outline: 1px dashed var(--tva-line); outline-offset: 3px; }
   .tva-dash > [data-dragging] { opacity: .4; }
   .tva-dash > [data-over] { outline: 2px solid var(--tva-brand) !important; }
-  .tva-page-enter { animation: tva-page .22s ease-out both; }
+  .tva-page-enter { animation: tva-page .22s ease-out backwards;   /* not 'both': a kept transform traps position:fixed children (the code editor dialog) */ }
   @keyframes tva-page { from { opacity: 0; transform: translateY(4px); } }
   .tva-seg { display: inline-flex; padding: 2px; border: 1px solid var(--tva-line); border-radius: var(--tva-radius); background: var(--tva-surface); }
   .tva-seg button { height: 1.85rem; padding: 0 .65rem; border-radius: calc(var(--tva-radius) - 2px); font-size: 13px; font-weight: 500; color: var(--tva-muted); }

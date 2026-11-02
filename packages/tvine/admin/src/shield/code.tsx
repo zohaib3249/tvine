@@ -182,13 +182,15 @@ const SAMPLE: Sample = { ip: '203.0.113.7', path: '/checkout', method: 'POST', u
 type RunState = { busy?: boolean; res?: CodeRun; fail?: string }
 const runText = (r: RunState) => (r.fail ? `failed: ${r.fail}` : !r.res ? '' : r.res.ok ? (r.res.result ? actionText(r.res.result) : 'no decision') : `error ${r.res.error?.kind ?? ''}: ${r.res.error?.message ?? ''}`)
 
-export function CodePanel({ value, onChange, onErrors, ray: ray0 }: { value: { type: 'code'; source: string }; onChange(a: Action): void; onErrors(n: number): void; ray?: string }) {
+export function CodePanel({ value, onChange, onErrors, ray: ray0, full: full0, onFull }: { value: { type: 'code'; source: string }; onChange(a: Action): void; onErrors(n: number): void; ray?: string; full?: boolean; onFull?(f: boolean): void }) {
   const { call } = useShield()
   const [tpl, setTpl] = useState<CodeTemplate>()
   const [problems, setProblems] = useState<CodeProblem[]>([])
   const [checkFail, setCheckFail] = useState<string>()
-  const [refOpen, setRefOpen] = useState(false)
-  const [full, setFull] = useState(false)
+  const [refOpen, setRefOpen] = useState(true)
+  const [fullOwn, setFullOwn] = useState(false)
+  const full = full0 ?? fullOwn, setFull = onFull ?? setFullOwn
+  useEffect(() => { if (full) view.current?.focus() }, [full])
   const [tab, setTab] = useState<'sample' | 'event'>(ray0 ? 'event' : 'sample')
   const [sample, setSample] = useState(SAMPLE)
   const [ray, setRay] = useState(ray0 ?? '')
@@ -230,7 +232,8 @@ export function CodePanel({ value, onChange, onErrors, ray: ray0 }: { value: { t
   const lab = 'flex flex-col gap-1 text-[12px] font-medium'
   const res = run.res
   return (
-    <Region id="rule:code" label="Rule code" state={{ source: source.slice(0, 2000), errors: problems.length, lastRun: runText(run) || null, loading: !tpl }} className={cx('tva-card tvs-code', full && 'is-full')}>
+    <Region id="rule:code" label="Rule code" state={{ source: source.slice(0, 2000), errors: problems.length, lastRun: runText(run) || null, loading: !tpl }} className={cx('tva-card tvs-code', full && 'is-full')} role={full ? 'dialog' : undefined} aria-modal={full || undefined} aria-label={full ? 'Code editor' : undefined}
+      onKeyDown={(e: React.KeyboardEvent) => { if (full && e.key === 'Escape' && !(e.target as HTMLElement).closest('.cm-editor')) setFull(false) }}>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
         <Icon name="code" />
         <div className="min-w-0 flex-1">
@@ -239,6 +242,7 @@ export function CodePanel({ value, onChange, onErrors, ray: ray0 }: { value: { t
         </div>
         <button type="button" agentId="code-reference" className="tva-btn h-8 text-xs" aria-expanded={refOpen} onClick={() => setRefOpen(!refOpen)}><Icon name="file" size={13} />Reference</button>
         <button type="button" agentId="code-fullscreen" className="tva-btn tva-btn-icon h-8 w-8" aria-pressed={full} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} onClick={() => setFull(!full)}><Icon name="resize" size={14} /></button>
+        {full && <button type="button" agentId="code-done" className="tva-btn tva-btn-primary h-8 text-xs" onClick={() => setFull(false)}>Done</button>}
       </div>
       <div className={cx('tvs-code-body', refOpen && 'has-ref')}>
         <div className="min-w-0">
