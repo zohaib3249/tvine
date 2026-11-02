@@ -63,7 +63,7 @@ type Opts = Record<string, unknown>
 type Factory = (o: Opts, b: BuildCtx) => HttpMiddleware
 
 const PREFIX = 'tvine.middleware.'
-const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
+export const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
 const prefixed = (paths: unknown, p: string) => Array.isArray(paths) && paths.some((x) => typeof x === 'string' && (p === x || p.startsWith(x.endsWith('/') ? x : `${x}/`)))
 const send = (res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {
   if (res.headersSent) { res.destroy(); return }
@@ -97,7 +97,8 @@ export function devHosts(s: Settings): string[] {
   return [...DEV_HOSTS, ...lanIps(), h, `${h}.local`, ...(s.dev?.allowedHosts ?? []), ...env.list('TVINE_DEV_ALLOWED_HOSTS', [])]
 }
 
-function blockList(list: unknown, name: string): BlockList {
+// the one shared CIDR helper (IpFilter, Maintenance, tvine.shield lists + the `cidr` condition op)
+export function blockList(list: unknown, name: string): BlockList {
   const b = new BlockList()
   for (const e of (list as string[] | undefined) ?? []) {
     const [addr, bits, extra] = String(e).split('/')
@@ -110,7 +111,7 @@ function blockList(list: unknown, name: string): BlockList {
   }
   return b
 }
-const ipIn = (b: BlockList, ip: string) => { const v = isIP(ip); return !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4') }
+export const ipIn = (b: BlockList, ip: string) => { const v = isIP(ip); return !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4') }
 
 // ---- the catalog --------------------------------------------------------------------------------------------
 export const CATALOG: Record<string, Factory> = {
