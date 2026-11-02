@@ -61,6 +61,6 @@ export async function pruneEvents(days = conf()?.events.retentionDays ?? 30, now
   }
 }
 
-export const ipdbUpdate = defineTask('ipdb.update', async () => updateIpdb(), { schedule: { cron: '0 4 3 * *' } })
-export const rangesUpdate = defineTask('ranges.update', async () => updateRanges(), { schedule: { cron: '30 4 * * *' } })
-export const eventsPrune = defineTask('events.prune', async () => ({ deleted: await pruneEvents() }), { schedule: { cron: '0 3 * * *' } })
+export const ipdbUpdate = defineTask('ipdb_update', async () => updateIpdb(), { schedule: { cron: '0 4 3 * *' } })
+export const rangesUpdate = defineTask('ranges_update', async () => updateRanges(), { schedule: { cron: '30 4 * * *' } })
+export const eventsPrune = defineTask('events_prune', async () => ({ deleted: await pruneEvents() }), { schedule: { cron: '0 3 * * *' } })
