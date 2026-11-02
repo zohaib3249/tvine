@@ -14,6 +14,7 @@ export interface McpSource {
   clientInfo?: { name?: string }
   isAgent?: boolean
   via?: 'mcp' | 'human'                      // 'human': the <Form> server-action path
+  verified?: { directory: string; keyid: string }   // Web Bot Auth, checked by tvine.middleware.Shield
 }
 
 function readonlyHeaders(h: Record<string, string | string[] | undefined>): ReadonlyHeaders {
@@ -103,6 +104,10 @@ export function requestId(h: ReadonlyHeaders): string {
   return tid && !/^0+$/.test(tid) ? tid : nanoid()
 }
 
+type VerifiedAgent = { directory: string; keyid: string }
+// request.agent.verified: only what tvine.middleware.Shield's Web Bot Auth check put on the raw request (never a header)
+const verifiedOf = (v: VerifiedAgent | undefined) => (v ? { verified: { directory: v.directory, keyid: v.keyid } } : {})
+
 export async function buildRequest(src: HttpSource | McpSource, settings: Settings): Promise<Request> {
   const isHttp = 'req' in src
   const rawUrl = isHttp ? (src.req.url ?? '/') : src.url
@@ -121,9 +126,9 @@ export async function buildRequest(src: HttpSource | McpSource, settings: Settin
     id: requestId(headers),
     ...(headers.get('x-tvine-locale') && { locale: headers.get('x-tvine-locale')! }),
     agent: isHttp
-      ? { is: src.isAgent, via: src.isAgent ? 'http' : 'human', client: headers.get('user-agent') ?? undefined }
+      ? { is: src.isAgent, via: src.isAgent ? 'http' : 'human', client: headers.get('user-agent') ?? undefined, ...verifiedOf((src.req as { tvine?: { verifiedAgent?: VerifiedAgent } }).tvine?.verifiedAgent) }
       : src.via === 'human' ? { is: false, via: 'human', client: headers.get('user-agent') ?? undefined }
-      : { is: src.isAgent ?? true, via: 'mcp', client: src.clientInfo?.name },
+      : { is: src.isAgent ?? true, via: 'mcp', client: src.clientInfo?.name, ...verifiedOf(src.verified) },
     files: [],
     user: ANONYMOUS,
     ...(isHttp ? { raw: src.req } : {}),

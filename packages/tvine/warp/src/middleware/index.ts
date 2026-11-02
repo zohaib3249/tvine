@@ -30,6 +30,8 @@ export interface RequestState {
   compression: CompressionSettings | false   // GZip turns it on
   onHeaders(fn: () => void): void    // run right before the status line + headers go out
   log: Logger                        // tvine.request, bound to the request id
+  verifiedAgent?: { directory: string; keyid: string }   // Shield: a valid Web Bot Auth signature (request.agent.verified)
+  shield?: unknown                   // Shield: this request's Signals + Decision (contrib/shield)
 }
 export type MwRequest = IncomingMessage & { tvine: RequestState }
 type Maybe<T> = T | Promise<T>

@@ -72,6 +72,12 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
   frontend: { boundary: 'error' },
   audit: { enabled: false, actions: 'writes', retentionDays: 90, redact: [] },
+  shield: {
+    mode: 'log', prefix: '/tvine/shield', clearance: { ttl: '30m' }, ipdb: { source: 'dbip-lite', dir: './data/shield', update: 'monthly' },
+    aiDefaults: { agents: 'allow', crawlers: 'challenge', search: 'allow' },
+    panel: { path: '/shield', access: { all: [{ field: 'isSuperuser', op: 'eq', value: true }] } },
+    sensor: 'challenge', events: { sample: 0.01, retentionDays: 30, storeIp: false },
+  },
   security: {
     headers: {
       enabled: true,
@@ -113,6 +119,7 @@ const corsPolicy = z.object({
 const fn = <T>() => z.custom<T>((v) => typeof v === 'function', { message: 'must be a function' })
 const posInt = z.number().int().min(0)
 const backend = z.enum(['memory', 'redis'])
+const shieldStance = z.enum(['allow', 'challenge', 'block'])
 const alias = z.string().regex(/^[A-Za-z_][\w-]*$/, 'a connection alias is a plain name (letters, digits, _ -)')
 // never echo the url in a validation error: it may carry a password
 const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redis url must start with redis:// or rediss://')
@@ -172,6 +179,16 @@ const schema: z.ZodType<Settings> = z.object({
   agent: z.object({ shape: z.enum(['v1', 'v2']), budget: posInt, rowsL1: posInt, inTab: z.enum(['on', 'off']) }),
   frontend: z.object({ boundary: z.enum(['error', 'warn']) }),
   audit: z.object({ enabled: z.boolean(), actions: z.enum(['writes', 'all']), retentionDays: z.number().int().positive(), redact: z.array(z.string()) }),
+  shield: z.object({
+    mode: z.enum(['off', 'log', 'enforce']), prefix: z.string().regex(/^\/[\w\-/]*[\w-]$/, 'a path starting with / (no trailing /)'),
+    clearance: z.object({ ttl: z.string().regex(/^\d+[smhd]$/, "a duration like '30m'") }).strict(),
+    ipdb: z.object({ source: z.literal('dbip-lite'), dir: z.string().min(1), update: z.enum(['monthly', 'off']) }).strict(),
+    tlsHeader: z.string().regex(/^[a-z0-9-]+$/, 'a lowercase header name').optional(),
+    aiDefaults: z.object({ agents: shieldStance, crawlers: shieldStance, search: shieldStance }).strict(),
+    panel: z.object({ path: z.string().regex(/^\/[\w\-/]*[\w-]$/, 'a path starting with / (no trailing /)'), access: z.record(z.string(), z.unknown()) }).strict(),   // a Condition: checked in full by tvine.shield ready()
+    sensor: z.enum(['challenge', 'all-pages']),
+    events: z.object({ sample: z.number().min(0).max(1), retentionDays: z.number().int().positive(), storeIp: z.boolean() }).strict(),
+  }).strict(),
   security: z.object({
     headers: z.object({
       enabled: z.boolean(),
@@ -236,7 +253,8 @@ const schema: z.ZodType<Settings> = z.object({
     breachCheck: z.boolean().optional(),
     notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
-}).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] }) as z.ZodType<Settings>
+}).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] })
+  .refine((s) => !(s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield') || s.installedApps.includes('tvine.shield'), { message: "tvine.middleware.Shield needs 'tvine.shield' in settings.installedApps (its rules, lists and events tables)", path: ['shield'] }) as z.ZodType<Settings>
 
 // admin.allowIps entries must parse at boot (a typo must not silently lock everyone out, or let everyone in)
 function validCidr(e: string): boolean {

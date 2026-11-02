@@ -283,6 +283,9 @@ export interface Settings {
   // tvine.audit (BACKLOG #1): one row per audited command, written in the command's transaction. actions: 'writes' =
   // every non-readOnly action, 'all' = reads too; redact: extra param names blanked (secret-looking names always are)
   audit: { enabled: boolean; actions: 'writes' | 'all'; retentionDays: number; redact: string[] }
+  // tvine.shield (docs/design/contrib/shield.md): bot protection. mode 'log' records what would happen, 'enforce' acts.
+  // ttl strings: '30s' | '30m' | '24h' | '7d'. panel.access: a shield Condition on the user row (default superuser only)
+  shield: ShieldSettings
   security: { headers: SecurityHeaders }
   cors: CorsSettings                // default closed: no routes
   compression: CompressionSettings
@@ -362,3 +365,16 @@ export interface PasswordHasher {
 }
 // Returns the problems (empty = ok). user: the attributes similarity checks look at.
 export type PasswordValidator = (password: string, user?: Record<string, unknown>) => string[]
+
+export type ShieldStance = 'allow' | 'challenge' | 'block'
+export interface ShieldSettings {
+  mode: 'off' | 'log' | 'enforce'
+  prefix: string                                   // challenge / start / verify / static scripts
+  clearance: { ttl: string }
+  ipdb: { source: 'dbip-lite'; dir: string; update: 'monthly' | 'off' }
+  tlsHeader?: string                               // e.g. 'cf-ja4', 'x-ja3': read only through trusted hops (trustProxy >= 1)
+  aiDefaults: { agents: ShieldStance; crawlers: ShieldStance; search: ShieldStance }
+  panel: { path: string; access: unknown }         // access: contrib/shield/types Condition
+  sensor: 'challenge' | 'all-pages'
+  events: { sample: number; retentionDays: number; storeIp: boolean }   // sample: 0..1 of pass rows kept (non-pass always)
+}
