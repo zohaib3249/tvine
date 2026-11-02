@@ -17,7 +17,7 @@ export const CODE_TEMPLATE = `// Runs for each request this rule's conditions ma
 //   { type: 'block', status?: 403 | 404 | 429 | 451, message?: string }
 //   { type: 'challenge', level?: 'auto' | 'pow' | 'checkbox' | 'captcha' }
 //   { type: 'rateLimit', limit: number, window: '10s' | '1m' | '1h', key?: 'ip' | 'asn' | 'path' }
-export default function rule(req) {
+function (req) {
   if (req.path.startsWith('/admin') && req.country !== 'PK') return { type: 'challenge', level: 'auto' }
 }
 `
@@ -113,7 +113,8 @@ let modP, sources = new Map(), boxes = new Map()
 const HEAP_MAX = workerData.heapMb * 1048576
 const load = () => (modP ??= newQuickJSWASMModuleFromVariant(newVariant(base.default ?? base, { wasmMemory: new WebAssembly.Memory({ initial: 256, maximum: HEAP_MAX / 65536 }) })))
 const heapOf = (mod) => { try { return mod.module.HEAPU8.buffer.byteLength } catch { return 0 } }
-const lineCol = (e) => { const m = /rule\.js:(\d+)(?::(\d+))?/.exec(String(e.stack || '')); return m ? { line: +m[1], column: +(m[2] || 1) } : typeof e.lineNumber === 'number' ? { line: e.lineNumber, column: 1 } : {} }
+const WRAP = 'export default ('
+const lineCol = (e) => { const m = /rule\.js:(\d+)(?::(\d+))?/.exec(String(e.stack || '')); const fix = (l, c) => ({ line: l, column: l === 1 ? Math.max(1, c - WRAP.length) : c }); return m ? fix(+m[1], +(m[2] || 1)) : typeof e.lineNumber === 'number' ? { line: e.lineNumber, column: 1 } : {} }
 function errorOf(ctx, h, kind, why) {
   let e
   try { const d = ctx.dump(h); e = d && typeof d === 'object' ? d : { message: String(d) } } catch { e = { message: 'unreadable error' } } finally { h.dispose() }
@@ -142,14 +143,16 @@ function build(mod, source, timeoutMs) {
   }
   ctx.setProp(ctx.global, 'console', con); con.dispose()
   ctx.unwrapResult(ctx.evalCode(PRELUDE, 'prelude.js', { type: 'global' })).dispose()
-  const r = ctx.evalCode(source, 'rule.js', { type: 'module' })
+  // the source is ONE function: function (req) { … } / function rule(req) { … } / (req) => …. Wrapped on its first line
+  // so line numbers stay the user's (lineCol moves line-1 columns back by WRAP.length)
+  const r = ctx.evalCode(WRAP + source.replace(/[;\s]*$/, '') + '\n)', 'rule.js', { type: 'module' })
   if (r.error) return fail(errorOf(ctx, r.error, 'compile', box.why))
   let ns = r.value
   const st = ctx.getPromiseState(ns)
   if (st.type !== 'fulfilled') { ns.dispose(); return st.type === 'rejected' ? fail(errorOf(ctx, st.error, 'compile')) : fail({ kind: 'compile', message: 'top-level await is not supported', line: 1, column: 1 }) }
   if (!st.notAPromise) { ns.dispose(); ns = st.value }
   const fn = ctx.getProp(ns, 'default'); ns.dispose()
-  if (ctx.typeof(fn) !== 'function') { fn.dispose(); return fail({ kind: 'compile', message: 'the module must export default function rule(req) { … }', line: 1, column: 1 }) }
+  if (ctx.typeof(fn) !== 'function') { fn.dispose(); return fail({ kind: 'compile', message: 'the code must be one function: function (req) { … }', line: 1, column: 1 }) }
   const mk = ctx.getProp(ctx.global, '__runner')
   const run = ctx.callFunction(mk, ctx.undefined, fn)
   mk.dispose(); fn.dispose()
@@ -254,13 +257,18 @@ export const sourceHash = (source: string) => createHash('sha256').update(source
 
 const timeoutOf = (settings: Settings | undefined) => Math.min(50, Math.max(1, Number(settings?.shield?.code?.timeoutMs) || 5))
 const round = (n: number) => Math.round(n * 1000) / 1000
+// an error past the end (a missing '}' is only noticed at the wrapper's ')') points at the code's last line
+const inSource = <E extends { line?: number; message: string }>(e: E, source: string): E => {
+  const n = source.replace(/[;\s]*$/, '').split('\n').length
+  return e.line && e.line > n ? { ...e, line: n, message: 'the function is not closed: a } or ) is missing at the end' } : e
+}
 // one call, no stats (shield.code.run, shield.rules.preview, the rule path below); never throws
 export async function runCode(source: string, input: unknown, o: { settings?: Settings; logs?: boolean } = {}): Promise<CodeResult> {
   const t0 = performance.now()
   const r = await send('run', source, timeoutOf(o.settings), { input: JSON.stringify(input), logs: !!o.logs })
   const ms = round(r.ms ?? performance.now() - t0), logs = r.logs ?? []
   if (r.restarted) return { skipped: 'restarted', ms, logs }
-  if (r.error) return { error: r.error, ms, logs }
+  if (r.error) return { error: inSource(r.error, source), ms, logs }
   if (r.out === undefined) return { ms, logs }
   const bad = (message: string): CodeResult => ({ error: { kind: 'invalid', message }, ms, logs })
   if (typeof r.out !== 'string') return bad('the rule must return an action object or nothing')
@@ -271,11 +279,12 @@ export async function runCode(source: string, input: unknown, o: { settings?: Se
   if (!p.success) return bad(`invalid action ${JSON.stringify(v).slice(0, 120)}: ${p.error.issues.map((i) => `${i.path.join('.') || 'type'} ${i.message}`).join('; ')}`.slice(0, 500))
   return { action: p.data as Action, ms, logs }
 }
-// syntax + "export default a function" (the module's top level runs once, bounded; the function body does not)
+// syntax + "one function" check (the function body does not run)
 export async function checkCode(source: string): Promise<{ ok: boolean; errors: { line: number; column: number; message: string }[] }> {
   if (typeof source !== 'string' || source.length > CODE_MAX) return { ok: false, errors: [{ line: 1, column: 1, message: `the code is over ${CODE_MAX} characters` }] }
   const r = await send('check', source, 50)
-  return r.error ? { ok: false, errors: [{ line: r.error.line ?? 1, column: r.error.column ?? 1, message: r.error.message }] } : { ok: true, errors: [] }
+  const e = r.error && inSource(r.error, source)
+  return e ? { ok: false, errors: [{ line: e.line ?? 1, column: e.column ?? 1, message: e.message }] } : { ok: true, errors: [] }
 }
 // the rules changed: drop sandboxes no rule uses any more
 export function pruneCode(sources: string[]): void {

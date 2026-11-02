@@ -130,7 +130,8 @@ export function RuleEditor({ id }: { id: string }) {
   const { call, base, navigate, query } = useShield()
   const r = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
   const custom = useLiveData<string[]>(call, 'shield.customRules', {})
-  const [full, setFull] = useState(false)   // the code editor as a full-screen dialog (opens when Code is picked)
+  // the code editor: a full-screen window, opened by picking Code (or a link with ?action=code, e.g. from the Events drawer)
+  const [full, setFull] = useState(() => query.action === 'code')
   const [draft, setDraft] = useState<Rule>()
   const [busy, setBusy] = useState(false)
   const [del, setDel] = useState(false)
@@ -178,7 +179,7 @@ export function RuleEditor({ id }: { id: string }) {
         </div>
         <section className="tva-card h-fit p-4 xl:sticky xl:top-4">
           <h2 className="mb-3 font-semibold">Then</h2>
-          <ActionPicker value={draft.then} onChange={(then) => { setCodeErrors(0); setDraft({ ...draft, then }) }} custom={custom.data ?? []} onOpenEditor={() => setFull(true)} />
+          <ActionPicker value={draft.then} onChange={(then) => { setCodeErrors(0); setDraft({ ...draft, then }) }} custom={custom.data ?? []} onOpenEditor={() => setFull(true)} codeErrors={codeErrors} />
           <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
             <button type="button" agentId="save" className="tva-btn tva-btn-primary" disabled={busy || !draft.name.trim() || !!blocked} aria-describedby={blocked ? 'save-why' : undefined} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rule'}</button>
             <button type="button" agentId="cancel" className="tva-btn" onClick={back}>Cancel</button>
@@ -187,7 +188,8 @@ export function RuleEditor({ id }: { id: string }) {
           </div>
           {blocked && <p id="save-why" className="mt-2 text-[13px] text-danger" role="status">{blocked}</p>}
         </section>
-        {code && <div className="min-w-0 xl:col-span-2 xl:row-start-2"><CodePanel value={code} onChange={(then) => setDraft({ ...draft, then })} onErrors={setCodeErrors} ray={query.ray} full={full} onFull={setFull} /></div>}
+        {/* the editor lives only in its full-screen window: closed, the Then box shows a preview + Open */}
+        {code && full && <CodePanel value={code} onChange={(then) => setDraft({ ...draft, then })} onErrors={setCodeErrors} ray={query.ray} full onFull={setFull} />}
       </div>
       <Dialog name="delete-rule" label="Delete rule" open={del} onOpenChange={setDel} slots={{ trigger: { className: 'hidden' } }}>
         <h2 className="text-lg font-semibold">Delete “{draft.name}”?</h2>
@@ -219,7 +221,7 @@ export function defaultAction(type: Action['type'], custom: string[] = []): Acti
     default: return { type }
   }
 }
-export function ActionPicker({ value, onChange, custom, onOpenEditor }: { value: Action; onChange(a: Action): void; custom: string[]; onOpenEditor?(): void }) {
+export function ActionPicker({ value, onChange, custom, onOpenEditor, codeErrors = 0 }: { value: Action; onChange(a: Action): void; custom: string[]; onOpenEditor?(): void; codeErrors?: number }) {
   const cls = 'tva-input h-9'
   const lab = 'flex flex-col gap-1.5 text-[13px] font-medium'
   return (
@@ -266,7 +268,13 @@ export function ActionPicker({ value, onChange, custom, onOpenEditor }: { value:
           </label>
         </div>
       )}
-      {value.type === 'code' && <button type="button" agentId="open-editor" className="tva-btn tva-btn-primary h-9 w-full" onClick={() => onOpenEditor?.()}><Icon name="code" size={14} />Open code editor</button>}
+      {value.type === 'code' && (
+        <div className="flex flex-col gap-2">
+          {value.source.trim() && <pre className="tvs-code-peek" aria-label="Code preview">{value.source.split('\n').filter((l) => !l.trimStart().startsWith('//')).slice(0, 6).join('\n')}</pre>}
+          {codeErrors > 0 && <p className="text-[13px] text-danger" role="status">{codeErrors} code {codeErrors === 1 ? 'problem' : 'problems'}: open the editor to fix.</p>}
+          <button type="button" agentId="open-editor" className="tva-btn tva-btn-primary h-9 w-full" onClick={() => onOpenEditor?.()}><Icon name="code" size={14} />Open code editor</button>
+        </div>
+      )}
       {value.type === 'custom' && <button type="button" agentId="write-code" className="tva-btn h-9 w-full" onClick={() => { onChange(defaultAction('code')); onOpenEditor?.() }}><Icon name="code" size={14} />Write code here instead</button>}
       {(value.type === 'code' || value.type === 'custom') && custom.length > 0 && (
         <label className={lab}>Or run a rule from your app code

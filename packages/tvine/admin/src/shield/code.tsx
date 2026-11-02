@@ -22,7 +22,7 @@ export const FALLBACK: CodeTemplate = {
   template: `// Runs for every request that matches "When".
 // Return an action to decide, or nothing to pass the request to the next rule.
 // If this code throws or runs too long, the rule is skipped: traffic is never blocked by a broken rule.
-export default function rule(req) {
+function (req) {
   if (req.path.startsWith('/checkout') && req.score < 20) {
     return { type: 'challenge', level: 'pow' }
   }
