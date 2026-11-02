@@ -6,7 +6,7 @@
   var root = document.getElementById('shield')
   var P = root.getAttribute('data-prefix') || '', R = root.getAttribute('data-return') || ''
   var firstLevel = root.getAttribute('data-level') || 'auto'
-  var MAX_RETRIES = 3, retries = 0, ch = null, worker = null, busy = false
+  var MAX_RETRIES = 3, retries = 0, ch = null, worker = null, busy = false, bg = null, bgWorker = null
   var $ = function (id) { return document.getElementById(id) }
 
   $('site').textContent = location.hostname || 'this site'
@@ -42,6 +42,7 @@
     return post('/start', { r: R, level: level || 'auto' }).then(function (c) {
       if (!c || !c.nonce) throw new Error((c && (c.error || c.reason)) || 'bad challenge')
       ch = c
+      bg = c.level === 'pow' ? null : backgroundPow(c)   // every level costs the PoW; checkbox / captcha solve it meanwhile
       if (c.ray) $('ray').textContent = 'Ray ' + c.ray
       if (c.level === 'checkbox') return runCheckbox()
       if (c.level === 'captcha') return runCaptcha(c.captcha)
@@ -53,8 +54,9 @@
     if (busy) return
     busy = true
     status('Verifying…')
-    return window.tvineSensor.report().then(function (sensor) {
-      var body = { nonce: ch.nonce, sensor: sensor, r: R }
+    return Promise.all([window.tvineSensor.report(), bg || Promise.resolve(null)]).then(function (got) {
+      var body = { nonce: ch.nonce, sensor: got[0], r: R }
+      if (got[1] !== null) body.pow = { counter: got[1] }
       for (var k in payload) body[k] = payload[k]
       return post('/verify', body)
     }).then(function (res) {
@@ -106,6 +108,21 @@
     }
     worker.onerror = function () { onError(new Error('worker failed')) }
     worker.postMessage({ nonce: c.nonce, difficulty: d })
+  }
+
+  // the PoW behind the checkbox / captcha levels: resolves with the counter
+  function backgroundPow(c) {
+    if (bgWorker) bgWorker.terminate()
+    return new Promise(function (resolve, reject) {
+      var w = bgWorker = new Worker(P + '/pow-worker.js')
+      w.onmessage = function (e) {
+        var m = e.data || {}
+        if (typeof m.counter === 'number') { w.terminate(); bgWorker = null; resolve(m.counter) }
+        else if (m.error) reject(new Error(m.error))
+      }
+      w.onerror = function () { reject(new Error('worker failed')) }
+      w.postMessage({ nonce: c.nonce, difficulty: Math.max(0, c.difficulty | 0) })
+    })
   }
 
   // ── checkbox: trusted click + timing ────────────────────────────────────────────────────────────

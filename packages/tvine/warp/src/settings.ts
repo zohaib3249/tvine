@@ -77,7 +77,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     aiDefaults: { agents: 'allow', crawlers: 'challenge', search: 'allow' },
     panel: { path: '/shield', access: { all: [{ field: 'isSuperuser', op: 'eq', value: true }] } },
     sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true, logAll: false, hardCapPerMinute: 20_000 },
-    stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' },
+    stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' }, webBotAuth: { directories: [] },
   },
   security: {
     headers: {
@@ -191,6 +191,7 @@ const schema: z.ZodType<Settings> = z.object({
     events: z.object({ samplePass: z.number().min(0).max(1), maxPerMinute: z.number().int().min(0).max(1_000_000), retentionDays: z.number().int().positive(), storeIp: z.boolean(), logAll: z.boolean(), hardCapPerMinute: z.number().int().min(0).max(10_000_000) }).strict(),
     stats: z.object({ bucket: z.enum(['1m', '5m', '15m', '1h', '1d']), retentionDays: z.number().int().positive() }).strict(),
     cleanup: z.object({ enabled: z.boolean(), schedule: z.string().regex(/^\S+( \S+){4}$/, 'a 5-field cron') }).strict(),
+    webBotAuth: z.object({ directories: z.array(z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d+)?$/, 'an https origin, e.g. https://chatgpt.com')) }).strict(),
   }).strict(),
   security: z.object({
     headers: z.object({

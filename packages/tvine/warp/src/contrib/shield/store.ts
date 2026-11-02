@@ -1,9 +1,8 @@
 // tvine.shield persistence: rules / lists / config rows ⇄ the in-memory snapshot (engine.state), hot reload, rule hits.
-import { cache } from '../../cache/index.js'
 import { F } from '../../data/expressions.js'
 import type { Settings } from '../../core/types.js'
-import { conditionProblem } from './conditions.js'
-import { LEVELS, VERSION_KEY, bumpVersion, customRules, defaultRules, setLists, setRules, state, type Runtime } from './engine.js'
+import { conditionProblem, evaluate } from './conditions.js'
+import { LEVELS, ruleContext, customRules, defaultRules, setLists, setRules, state, type Runtime } from './engine.js'
 import { ShieldConfig, ShieldList, ShieldRule } from './models.js'
 import type { Action, ChallengeLevel, Condition, Rule } from './types.js'
 
@@ -18,7 +17,7 @@ export async function loadAll(settings: Settings): Promise<void> {
   setLists(await ShieldList.objects.all() as never)   // scope: ok
   configRow = await ShieldConfig.objects.order('id').first() as Record<string, unknown> | undefined   // scope: ok
   state.runtime = runtimeFrom(settings, configRow)
-  state.version = Number(await cache.get(VERSION_KEY, 0)) || state.version
+  state.version = Number(configRow?.version ?? 0)
   state.checkedAt = Date.now()
 }
 export function runtimeFrom(settings: Settings, c: Record<string, unknown> | undefined): Runtime {
@@ -34,16 +33,23 @@ export async function seedDefaults(settings: Settings): Promise<void> {
   const ai = runtimeFrom(settings, configRow).aiDefaults
   for (const r of defaultRules(ai)) await ShieldRule.create({ rid: r.id, order: r.order, name: r.name, enabled: r.enabled, when: r.when, then: r.then } as never)
 }
-// every 2 s at most: did another server (or this one) bump the rules version? reload then
+// every 3 s at most (per process, never per request): did a save on any server, or the CLI, bump ShieldConfig.version?
 export async function maybeReload(settings: Settings): Promise<void> {
-  if (Date.now() - state.checkedAt < 2000) return
+  if (Date.now() - state.checkedAt < 3000) return
   state.checkedAt = Date.now()
   try {
-    const v = Number(await cache.get(VERSION_KEY, 0)) || 0
-    if (v && v !== state.version) { await loadAll(settings); state.version = v }
-  } catch { /* cache down: keep serving the snapshot we have */ }
+    const row = await ShieldConfig.objects.order('id').first() as { version?: number } | undefined   // scope: ok (one small row / 3 s)
+    if (Number(row?.version ?? 0) !== state.version) await loadAll(settings)
+  } catch { /* db down: keep serving the snapshot we have */ }
 }
-export async function changed(settings: Settings): Promise<void> { await loadAll(settings); await bumpVersion() }
+// after any write: bump the version (other servers reload within 3 s) and reload here now
+export async function changed(settings: Settings): Promise<void> {
+  const row = await ShieldConfig.objects.order('id').first() as { id: number; version?: number } | undefined   // scope: ok
+  const version = Math.max(Date.now(), Number(row?.version ?? 0) + 1)
+  if (row) await ShieldConfig.update(row.id, { version } as never)
+  else await ShieldConfig.create({ version } as never)
+  await loadAll(settings)
+}
 
 export async function saveConfig(patch: Record<string, unknown>): Promise<void> {
   const row = await ShieldConfig.objects.order('id').first() as { id: number } | undefined   // scope: ok
@@ -51,6 +57,7 @@ export async function saveConfig(patch: Record<string, unknown>): Promise<void> 
   else await ShieldConfig.create(patch as never)
 }
 
+const PROBE = (path: string) => ({ ip: '192.0.2.1', ipNet: '192.0.2.0/24', tor: false, ua: '', bot: { category: 'unknown' as const, verified: false, spoofed: false }, headerScore: 0, path, method: 'GET', host: 'x', rate: { ip: 0, asn: 0, path: 0 }, score: 50 })
 // rule saves are validated here (the panel's condition builder is not trusted)
 export function ruleProblem(r: Partial<Rule>): string | undefined {
   if (typeof r.name !== 'string' || !r.name.trim() || r.name.length > 200) return 'name: 1..200 characters'
@@ -58,6 +65,9 @@ export function ruleProblem(r: Partial<Rule>): string | undefined {
   if (c) return `when: ${c}`
   const a = r.then as Action | undefined
   if (!a || typeof a !== 'object') return 'then: an action'
+  // a challenge / block that matches any request (an empty condition, path startsWith "/") is refused (review M2)
+  if ((a.type === 'challenge' || a.type === 'block') && ['/', '/x/y', '/tvine/api/a.b'].every((path) => evaluate(r.when as Condition, ruleContext(PROBE(path)))))
+    return 'when: this condition matches every request; narrow it (a path, a bot category, a score…)'
   switch (a.type) {
     case 'allow': case 'log': return undefined
     case 'challenge': return ['auto', ...LEVELS].includes(a.level) ? (a.ttl === undefined || /^\d+[smhd]$/.test(a.ttl) ? undefined : "then.ttl: a duration like '24h'") : 'then.level: auto | pow | checkbox | captcha'
@@ -75,4 +85,21 @@ export async function flushHits(): Promise<void> {
   const all = [...hits]
   hits.clear()
   for (const [rid, n] of all) await ShieldRule.objects.filter({ rid }).update({ hits: F('hits').add(n) } as never).catch(() => undefined)
+}
+
+// `tvine shield mode off|log|enforce` / `tvine shield rules disable <id>|--all`: straight to the DB + a version bump, so a
+// locked-out owner gets back in without the panel (running servers reload within 3 s)
+export async function shieldCommand(settings: Settings, args: string[], o: { all?: boolean }): Promise<string> {
+  const [what, a, b] = args
+  if (what === 'mode' && (a === 'off' || a === 'log' || a === 'enforce') && b === undefined) {
+    await saveConfig({ mode: a }); await changed(settings)
+    return `shield mode: ${a}`
+  }
+  if (what === 'rules' && a === 'disable' && (o.all ? b === undefined : !!b)) {
+    const n = await (o.all ? ShieldRule.objects.filter({}) : ShieldRule.objects.filter({ rid: b })).update({ enabled: false })
+    if (!n) throw new Error(`no rule ${b}`)
+    await changed(settings)
+    return `disabled ${n} rule(s)`
+  }
+  throw new Error('usage: tvine shield mode off|log|enforce | tvine shield rules disable <id>|--all')
 }

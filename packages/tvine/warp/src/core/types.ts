@@ -382,4 +382,6 @@ export interface ShieldSettings {
   events: { samplePass: number; maxPerMinute: number; retentionDays: number; storeIp: boolean; logAll: boolean; hardCapPerMinute: number }
   stats: { bucket: '1m' | '5m' | '15m' | '1h' | '1d'; retentionDays: number }   // chart bucket + how long shield rollups are kept
   cleanup: { enabled: boolean; schedule: string }  // the events / rollups prune task (cron)
+  // Web Bot Auth: the Signature-Agent key directories (https origins) trusted to sign; empty = the feature is off
+  webBotAuth: { directories: string[] }
 }

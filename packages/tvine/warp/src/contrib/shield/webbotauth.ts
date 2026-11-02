@@ -109,10 +109,14 @@ function agentOrigin(v: string | undefined, label: string): string | undefined {
   try { const u = new URL(s ?? ''); return u.protocol === 'https:' ? u.origin : undefined } catch { return undefined }
 }
 
-const MAX_SKEW_S = 60, MAX_LIFE_S = 86_400
-// verified { directory, keyid } or undefined. Checks: signature-agent covered (when sent), tag web-bot-auth, created /
-// expires in range, alg ed25519, key in the agent's directory, the signature itself.
-export async function verifyWebBotAuth(r: SigRequest, o: { now?: number; fetcher?: Fetcher } = {}): Promise<{ directory: string; keyid: string } | undefined> {
+const MAX_SKEW_S = 60, MAX_LIFE_S = 300
+const REQUIRED = ['@authority', '@path', '@method', 'signature-agent']
+// verified { directory, keyid } or undefined. Checks (review C2): the Signature-Agent origin is in the allowlist
+// (settings.shield.webBotAuth.directories; empty = off, nothing is fetched), @authority @path @method signature-agent all
+// covered, tag web-bot-auth, created / expires within 5 min, alg ed25519, the key in that directory, the signature, and
+// not seen before (replay: keyid + created + signature, claimed once for its lifetime).
+export async function verifyWebBotAuth(r: SigRequest, o: { now?: number; fetcher?: Fetcher; directories?: readonly string[]; replay?: (key: string, ttlMs: number) => Promise<boolean> } = {}): Promise<{ directory: string; keyid: string } | undefined> {
+  if (!o.directories?.length) return undefined
   const input = r.header('signature-input'), sigH = r.header('signature')
   if (!input || !sigH) return undefined
   const sigs = parseSignature(sigH)
@@ -122,14 +126,16 @@ export async function verifyWebBotAuth(r: SigRequest, o: { now?: number; fetcher
     if (tag !== 'web-bot-auth' || typeof keyid !== 'string' || (alg !== undefined && alg !== 'ed25519')) continue
     if (typeof created !== 'number' || created > now + MAX_SKEW_S) continue
     if (typeof expires !== 'number' || expires < now || expires - created > MAX_LIFE_S) continue
-    if (!sp.components.includes('@authority')) continue
+    if (!REQUIRED.every((c) => sp.components.includes(c))) continue
     const origin = agentOrigin(r.header('signature-agent'), label)
-    if (!origin || !sp.components.includes('signature-agent')) continue
+    if (!origin || !o.directories.includes(origin)) continue
     const sig = sigs.get(label)
     const base = signatureBase(r, sp)
     if (!sig || base === undefined) continue
     const key = (await directory(origin, o.fetcher ?? defaultFetch)).keys.get(keyid)
-    if (key && verifyEd25519(base, sig, key)) return { directory: origin, keyid }
+    if (!key || !verifyEd25519(base, sig, key)) continue
+    if (o.replay && !(await o.replay(`wba:${keyid}:${created}:${sig.toString('base64').slice(0, 44)}`, (expires - now + MAX_SKEW_S) * 1000))) continue
+    return { directory: origin, keyid }
   }
   return undefined
 }

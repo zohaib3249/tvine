@@ -1,13 +1,16 @@
 // tvine.shield engine: the rules snapshot (hot reload), the default rule set, custom rules, decide() with its trace,
 // the clearance cookie, the signed single-use challenge nonce + PoW check.
 import { createHash, randomBytes } from 'node:crypto'
-import { cache } from '../../cache/index.js'
 import type { Settings, ShieldStance } from '../../core/types.js'
 import { limiterFor } from '../../backends/index.js'
 import type { Limiter } from '../../security/ratelimit.js'
 import { BadSignature, SignatureExpired, dumps, loads } from '../../security/signing.js'
 import { AGENT_SURFACE, blockList, ipIn } from '../../middleware/index.js'
 import { evaluate } from './conditions.js'
+import { decrypt, encrypt } from '../../security/encryption.js'
+import { claims } from './claims.js'
+import { securityEvent } from '../../core/audit.js'
+import { loadedSettings } from '../../security/signing.js'
 import { sha } from './signals.js'
 import type { Action, BotCategory, ChallengeLevel, Condition, Decision, Rule, Signals } from './types.js'
 
@@ -41,7 +44,6 @@ export function defaultRules(ai: Settings['shield']['aiDefaults']): Rule[] {
   return [
     { id: 'default:spoofed', name: 'Block spoofed bots (claims a verified bot, fails verification)', enabled: true, order: 10, when: { field: 'bot.spoofed', op: 'eq', value: true }, then: { type: 'block', status: 403, message: 'spoofed bot' } },
     botRule('search', ai.search, 20),
-    { id: 'default:verified', name: 'Allow verified agents (Web Bot Auth, Tvine tokens)', enabled: true, order: 30, when: { field: 'bot.via', op: 'in', value: ['web-bot-auth', 'token'] }, then: { type: 'allow' } },
     botRule('ai-agent', ai.agents, 40),
     botRule('scanner', 'block', 50),
     botRule('ai-crawler', ai.crawlers, 60),
@@ -98,12 +100,20 @@ export function ruleContext(s: Signals, headers: Record<string, string | string[
   return ctx
 }
 
-const limiters = new Map<string, Limiter>()
-function limiter(settings: Settings, limit: number, windowMs: number): Limiter {
+export const limiters = new Map<string, Limiter>()
+export function limiter(settings: Settings, limit: number, windowMs: number): Limiter {
   const k = `${limit}/${windowMs}`
   let l = limiters.get(k)
   if (!l) limiters.set(k, (l = limiterFor(settings, { limit: Math.max(1, limit), windowMs: Math.max(1000, windowMs) })))
   return l
+}
+
+// a limiter backend error (redis down) fails OPEN for rate limits: logged on tvine.security, never a 500 (review M5)
+export async function safeCheck(l: Limiter, sid: string, settings: Settings): Promise<{ ok: true } | { ok: false; retryAfterMs: number }> {
+  try { return await l.check({ sid }) } catch (e) {
+    securityEvent('shield_limiter_error', { key: sid.split(':')[0], error: String(e).slice(0, 200) }, { settings, audit: false })
+    return { ok: true }
+  }
 }
 
 export interface Trace { ruleId: string; matched: boolean; ms: number; action?: Action['type'] }
@@ -140,7 +150,7 @@ export async function decide(s: Signals, o: DecideOpts): Promise<{ decision: Dec
     if (action.type === 'rateLimit') {
       if (o.dryRun) continue
       const key = action.key === 'ip' ? s.ipNet.endsWith('/64') ? s.ipNet : s.ip : action.key === 'asn' ? String(s.asn ?? s.ip) : action.key === 'path' ? s.path : `${s.ip}|${s.path}`
-      const got = await limiter(o.settings, action.limit, dur(action.window, 60_000)).check({ sid: `shield-${action.key}:${key}` })
+      const got = await safeCheck(limiter(o.settings, action.limit, dur(action.window, 60_000)), `shield-${action.key}:${key}`, o.settings)
       if (got.ok) continue
       return done('rateLimit', `rate limit ${action.limit}/${action.window} per ${action.key}`, { ruleId: r.id, status: 429 }, { action, rule: r, retryAfterMs: got.retryAfterMs })
     }
@@ -167,11 +177,12 @@ export const cookieName = (secure: boolean) => (secure ? '__Host-tvine_shield' :
 export const uaHash = (ua: string) => sha(ua)
 export const fpHash = (r?: { canvas?: string; webgl?: string; audio?: string }) => (r ? sha(`${r.canvas ?? ''}|${r.webgl ?? ''}|${r.audio ?? ''}`) : '')
 export interface ClearancePayload { n: string; u: string; f: string; s: number; l: ChallengeLevel; e: number }
-export const issueClearance = (p: ClearancePayload) => dumps(p, { salt: CLEARANCE_SALT })
+// AES-256-GCM (authenticated) under a key derived from settings.secret: tamper-proof AND the score / level are not readable
+export const issueClearance = (p: ClearancePayload) => encrypt(JSON.stringify(p), CLEARANCE_SALT)
 export function checkClearance(token: string | undefined, ipNet: string, ua: string, now = Date.now()): Signals['clearance'] {
   if (!token) return undefined
   let p: ClearancePayload
-  try { p = loads<ClearancePayload>(token, { salt: CLEARANCE_SALT }) } catch { return { valid: false, level: 'pow', score: 1, reason: 'bad-signature' } }
+  try { p = JSON.parse(decrypt(token, CLEARANCE_SALT)) as ClearancePayload } catch { return { valid: false, level: 'pow', score: 1, reason: 'bad-signature' } }
   const level = LEVELS.includes(p.l) ? p.l : 'pow'
   if (typeof p.e !== 'number' || p.e < now) return { valid: false, level, score: p.s, reason: 'expired' }
   if (p.n !== ipNet || p.u !== uaHash(ua)) return { valid: false, level, score: p.s, reason: 'mismatch' }
@@ -196,8 +207,8 @@ export function readNonce(nonce: unknown, ipNet: string, now = Date.now()): Nonc
     return p.exp >= now && p.ipNet === ipNet && LEVELS.includes(p.l) ? p : undefined
   } catch (e) { if (e instanceof BadSignature || e instanceof SignatureExpired) return undefined; throw e }
 }
-// single use on every server (the default cache: memory, or redis with settings.caches)
-export const claimNonce = async (id: string) => cache.add(`shield:nonce:${id}`, 1, 600)
+// single use on every server (claims.ts: never evicted; throws on a backend error = the caller fails closed)
+export const claimNonce = async (id: string) => claims.claim(loadedSettings() as Settings | undefined, `nonce:${id}`, 600_000)
 export function leadingZeroBits(buf: Buffer): number {
   let n = 0
   for (const b of buf) { if (b === 0) { n += 8; continue } n += Math.clz32(b) - 24; break }
@@ -206,6 +217,5 @@ export function leadingZeroBits(buf: Buffer): number {
 export const powOk = (nonce: string, counter: unknown, d: number) =>
   (typeof counter === 'number' || typeof counter === 'string') && String(counter).length <= 20 && leadingZeroBits(createHash('sha256').update(`${nonce}:${counter}`).digest()) >= d
 
-// ---- multi-server hot reload: a version number in the shared cache --------------------------------------------------------
+// ---- hot reload: ShieldConfig.version (the DB row) is the version; every server polls it every 3 s (store.ts) ----------
 export const VERSION_KEY = 'shield:rules'
-export async function bumpVersion(): Promise<number> { state.version = Date.now(); await cache.set(VERSION_KEY, state.version, null); return state.version }

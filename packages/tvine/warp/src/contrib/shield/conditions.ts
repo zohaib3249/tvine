@@ -7,7 +7,6 @@ import type { Cond, Condition, Op } from './types.js'
 export const OPS: readonly Op[] = ['eq', 'neq', 'in', 'notIn', 'contains', 'startsWith', 'endsWith', 'regex', 'gt', 'lt', 'cidr']
 const MAX_DEPTH = 16
 export const MAX_REGEX = 200      // pattern length cap
-const MAX_SUBJECT = 2048          // a regex never scans more than this many chars
 
 // field lookup: the flat key first ('asn.kind', 'header.x-foo' as the rules context spells them), then a dotted path
 export function fieldOf(ctx: Record<string, unknown>, field: string): unknown {
@@ -20,21 +19,43 @@ export function fieldOf(ctx: Record<string, unknown>, field: string): unknown {
   return v
 }
 
-// safe regex: length-capped, no nested quantifiers / backrefs (the classic catastrophic shapes), cached
+// safe regex: a parsed SUBSET, so no pattern can backtrack catastrophically (review M1). Refused: a quantifier on a
+// group (nested / quantified alternation: `(a+)+`, `(a|a)*`), backreferences, lookarounds, named groups, more than
+// 2 unbounded quantifiers; pattern ≤ 200 chars; the subject is cut to 256 chars. What is left is at worst
+// ~n^3 steps on 256 chars (measured ≤ 40 ms for the worst shape, a*a*b$). Compiled once, cached.
+export const MAX_REGEX_SUBJECT = 256
+export function regexSubsetProblem(src: string): string | undefined {
+  if (src.length > MAX_REGEX) return `at most ${MAX_REGEX} chars`
+  let unbounded = 0, inClass = false
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]!
+    if (c === '\\') {
+      const n = src[i + 1] ?? ''
+      if (!inClass && /[1-9k]/.test(n)) return 'no backreferences'
+      i++
+      continue
+    }
+    if (inClass) { if (c === ']') inClass = false; continue }
+    if (c === '[') { inClass = true; continue }
+    if (c === '(' && src[i + 1] === '?' && src[i + 2] !== ':') return 'no lookarounds or named groups (only (?:…))'
+    if (c === ')' && /[*+?{]/.test(src[i + 1] ?? '')) return 'no quantifier on a group: write the alternatives out'
+    if (c === '*' || c === '+' || (c === '{' && /^\{\d+,(\d*)\}/.test(src.slice(i)) && !(Number(/^\{\d+,(\d*)\}/.exec(src.slice(i))![1] || 1e9) <= 16))) unbounded++
+  }
+  if (inClass) return 'unclosed ['
+  if (unbounded > 2) return 'at most 2 unbounded quantifiers (* + {n,} {n,m>16})'
+  try { new RegExp(src) } catch (e) { return (e as Error).message }
+  return undefined
+}
 const reCache = new Map<string, RegExp | null>()
 export function safeRegex(src: unknown): RegExp | null {
   if (typeof src !== 'string') return null
   if (reCache.has(src)) return reCache.get(src)!
-  let re: RegExp | null = null
-  // ponytail: heuristic ReDoS guard (nested quantifier, backreference); a real linear engine (re2) if rules come from untrusted users
-  if (src.length <= MAX_REGEX && !/\([^)]*[+*}][^)]*\)\s*[+*{?]/.test(src) && !/\\\d/.test(src)) {
-    try { re = new RegExp(src, 'i') } catch { re = null }
-  }
+  const re = regexSubsetProblem(src) ? null : new RegExp(src, 'i')
   if (reCache.size > 500) reCache.clear()
   reCache.set(src, re)
   return re
 }
-export const regexProblem = (src: unknown): string | undefined => (safeRegex(src) ? undefined : `unsafe or invalid regex (max ${MAX_REGEX} chars, no nested quantifiers or backreferences)`)
+export const regexProblem = (src: unknown): string | undefined => { const p = typeof src === 'string' ? regexSubsetProblem(src) : 'a string'; return p && `unsafe or invalid regex: ${p}` }
 
 const cidrCache = new Map<string, BlockList | null>()
 function cidrList(v: unknown): BlockList | null {
@@ -64,7 +85,7 @@ function test(c: Cond, ctx: Record<string, unknown>): boolean {
     case 'contains': return Array.isArray(v) ? v.some((x) => looseEq(x, want)) : v !== undefined && v !== null && str(v).includes(str(want))
     case 'startsWith': return v !== undefined && v !== null && str(v).startsWith(str(want))
     case 'endsWith': return v !== undefined && v !== null && str(v).endsWith(str(want))
-    case 'regex': { const re = safeRegex(want); return !!re && v !== undefined && v !== null && re.test(String(v).slice(0, MAX_SUBJECT)) }
+    case 'regex': { const re = safeRegex(want); return !!re && v !== undefined && v !== null && re.test(String(v).slice(0, MAX_REGEX_SUBJECT)) }
     case 'gt': return typeof v === 'number' && Number.isFinite(Number(want)) && v > Number(want)
     case 'lt': return typeof v === 'number' && Number.isFinite(Number(want)) && v < Number(want)
     case 'cidr': { const b = cidrList(want); return !!b && typeof v === 'string' && ipIn(b, v) }

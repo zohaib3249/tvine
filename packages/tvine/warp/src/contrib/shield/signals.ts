@@ -53,25 +53,65 @@ export interface Resolver { reverse(ip: string): Promise<string[]>; lookup(host:
 export const resolver: { r: Resolver } = {
   r: { reverse: (ip) => dns.reverse(ip), lookup: async (host) => (await dns.lookup(host, { all: true })).map((a) => a.address) },
 }
+// LRU (delete + re-insert on hit, oldest out past 20k), positive 24 h / negative 1 h; the negative key of an IPv6 is its
+// /64 (one client rotating addresses can't fill it). Single-flight per key; at most 16 lookups at once, a lookup that
+// can't start within 1.5 s is "unknown": unverified but NOT spoofed (review M3).
 const rdnsCache = new Map<string, { at: number; ok: boolean }>()
-export const clearRdns = () => rdnsCache.clear()
+const inflight = new Map<string, Promise<boolean | undefined>>()
+let running = 0
+const waiting: (() => void)[] = []
+export const RDNS = { max: 16, queueMs: 1500, cap: 20_000 }
+export const clearRdns = () => { rdnsCache.clear(); inflight.clear() }
 const timeout = <T>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('dns timeout')), ms).unref())])
-export async function verifyRdns(ip: string, suffixes: string[]): Promise<boolean> {
-  const key = `${ip}|${suffixes.join(',')}`
-  const hit = rdnsCache.get(key)
-  if (hit && Date.now() - hit.at < (hit.ok ? 86_400_000 : 3_600_000)) return hit.ok
-  let ok = false
-  try {
-    const names = await timeout(resolver.r.reverse(ip), 1500)
-    for (const n of names.slice(0, 5)) {
-      const host = n.toLowerCase().replace(/\.$/, '')
-      if (!suffixes.some((s) => host === s || host.endsWith(`.${s}`))) continue
-      if ((await timeout(resolver.r.lookup(host), 1500)).includes(ip)) { ok = true; break }
-    }
-  } catch { ok = false }
-  if (rdnsCache.size > 20_000) rdnsCache.clear()
-  rdnsCache.set(key, { at: Date.now(), ok })
-  return ok
+function cached(k: string, ttl: number): { ok: boolean } | undefined {
+  const e = rdnsCache.get(k)
+  if (!e) return undefined
+  if (Date.now() - e.at >= ttl) { rdnsCache.delete(k); return undefined }
+  rdnsCache.delete(k); rdnsCache.set(k, e)
+  return e
+}
+function remember(k: string, ok: boolean): void {
+  rdnsCache.set(k, { at: Date.now(), ok })
+  while (rdnsCache.size > RDNS.cap) rdnsCache.delete(rdnsCache.keys().next().value!)
+}
+async function slot(): Promise<boolean> {
+  if (running < RDNS.max) { running++; return true }
+  return new Promise((res) => {
+    const go = () => { clearTimeout(t); running++; res(true) }
+    const t = setTimeout(() => { const i = waiting.indexOf(go); if (i >= 0) waiting.splice(i, 1); res(false) }, RDNS.queueMs)
+    waiting.push(go)
+  })
+}
+const release = () => { running--; waiting.shift()?.() }
+// true verified, false definitely not (spoofed), undefined unknown (busy / timeout: never treated as spoofed)
+export async function verifyRdns(ip: string, suffixes: string[]): Promise<boolean | undefined> {
+  const tag = suffixes.join(','), pos = `+${ip}|${tag}`, neg = `-${ipKey(ip)}|${tag}`
+  if (cached(pos, 86_400_000)) return true
+  if (cached(neg, 3_600_000)) return false
+  let p = inflight.get(pos)
+  if (!p) {
+    p = (async () => {
+      let got = false
+      try {
+        got = await slot()
+        if (!got) return undefined
+        const names = await timeout(resolver.r.reverse(ip), 1500)
+        for (const n of names.slice(0, 5)) {
+          const host = n.toLowerCase().replace(/\.$/, '')
+          if (!suffixes.some((s) => host === s || host.endsWith(`.${s}`))) continue
+          if ((await timeout(resolver.r.lookup(host), 1500)).includes(ip)) { remember(pos, true); return true }
+        }
+        remember(neg, false)
+        return false
+      } catch (e) {
+        if ((e as Error).message === 'dns timeout') return undefined
+        remember(neg, false)   // NXDOMAIN / no PTR: a definite "not that bot"
+        return false
+      } finally { if (got) release(); inflight.delete(pos) }
+    })()
+    inflight.set(pos, p)
+  }
+  return p
 }
 
 // ---- L1 rate: requests in the last 60 s per key (sliding two-window estimate), this process --------------------------
@@ -108,7 +148,7 @@ export async function collectSignals(i: SignalInput): Promise<Signals> {
   let via: Signals['bot']['via']
   if (i.verifiedAgent) { verified = true; via = 'web-bot-auth'; if (!entry || category === 'browser' || category === 'unknown') { category = 'ai-agent'; name ??= new URL(i.verifiedAgent.directory).host } }
   else if (i.token) { verified = true; via = 'token'; if (category !== 'browser') { category = 'ai-agent'; name ??= 'Tvine token' } }
-  else if (entry?.rdns) { verified = await verifyRdns(i.ip, entry.rdns); via = verified ? 'rdns' : undefined; spoofed = !verified }
+  else if (entry?.rdns) { const v = await verifyRdns(i.ip, entry.rdns); verified = v === true; via = verified ? 'rdns' : undefined; spoofed = v === false }
   else if (entry?.ranges && inRanges(entry.ranges, i.ip)) { verified = true; via = 'ip-range' }
   // ranges not loaded for that source: unverifiable, so neither verified nor spoofed
   else if (entry?.ranges && hasRanges(entry.ranges)) spoofed = true

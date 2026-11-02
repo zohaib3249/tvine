@@ -77,6 +77,7 @@ Jobs
   tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
   audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
+  shield mode off|log|enforce | shield rules disable <id>|--all   tvine.shield escape hatch (running servers pick it up within 3 s)
 
 Tools
   inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (dev only)
@@ -109,6 +110,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
   tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
   audit: { options: { days: str }, args: [1, 1] },
+  shield: { options: { all: bool }, args: [2, 3] },
   encryption: { options: {}, args: [1, 1] },
   privacy: { options: { output: str, yes: bool }, args: [2, 2] },
 }
@@ -323,6 +325,15 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         connections.configure(settings)
         const { pruneAudit } = await import('./contrib/audit/prune.js')
         try { io.out(`deleted ${await pruneAudit(days)} audit row(s) older than ${days} day(s)`) } finally { await connections.closeAll() }
+        return undefined
+      }
+      case 'shield': {
+        const settings = await loadSettings()
+        if (!settings.installedApps.includes('tvine.shield')) throw new Usage("tvine.shield is not installed: add 'tvine.shield' to settings.installedApps")
+        const { connections } = await import('./data/db.js')
+        connections.configure(settings)
+        const { shieldCommand } = await import('./contrib/shield/store.js')
+        try { io.out(await shieldCommand(settings, args, { all: !!o.all })) } catch (e) { throw new Usage((e as Error).message) } finally { await connections.closeAll() }
         return undefined
       }
       case 'encryption': {

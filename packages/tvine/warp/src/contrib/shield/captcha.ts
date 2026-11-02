@@ -3,10 +3,14 @@
 // Every shape (and every decoy) is the same kind of SVG node: a <path> resampled to the same number of
 // jittered points, rotated, scaled and colour-jittered, so the source carries no class/id/element hint.
 // A text question is issued alongside for screen-reader users (`question`); either answer passes.
-// Answers are kept only as HMACs (key derived from settings.secret), in the shared cache (settings.caches: memory, or
-// redis across servers), single-use (any check claims the id once, cache.add), 2-minute expiry.
+// Answers are kept only as HMACs (key derived from settings.secret) in the shield claim store (claims.ts: no eviction;
+// redis across servers), read-and-deleted on the first check (single-use), 2-minute expiry.
+// The text question is not arithmetic: a word task with varied phrasing (large answer space). It is still scriptable by
+// design (accessibility); what makes a scripted solve cost is the PoW the captcha level also requires + attempt limits.
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
-import { cache } from '../../cache/index.js'
+import { claims } from './claims.js'
+import { loadedSettings } from '../../security/signing.js'
+import type { Settings } from '../../core/types.js'
 import { secretKeys } from '../../security/signing.js'
 
 export interface Captcha { id: string; svg: string; prompt: string; question: string; answerHash: string }
@@ -73,7 +77,18 @@ function shuffle<T>(a: T[]): T[] {
   return a
 }
 
-const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+const WORDS = ['harbor', 'velvet', 'lantern', 'meadow', 'pickle', 'cobalt', 'falcon', 'tundra', 'walnut', 'orchid', 'quartz', 'saddle', 'thimble',
+  'garnet', 'beacon', 'canyon', 'dolphin', 'ember', 'fjord', 'glacier', 'hammock', 'iguana', 'juniper', 'kettle', 'lagoon', 'marble', 'nutmeg', 'oyster',
+  'pebble', 'quiver', 'raisin', 'sapphire', 'tangerine', 'umbrella', 'vortex', 'wombat', 'yonder', 'zephyr', 'biscuit', 'compass', 'drizzle', 'figment']
+const ORD = ['first', 'second', 'third', 'fourth', 'fifth']
+// a word task: [question, answer]
+function wordTask(): [string, string] {
+  const w = WORDS[randomInt(WORDS.length)]!, k = randomInt(4)
+  if (k === 0) return [`Type the word "${w}" backwards.`, [...w].reverse().join('')]
+  if (k === 1) { const i = randomInt(3), j = 3 + randomInt(2); return [`Type the ${ORD[i]} and the ${ORD[j]} letters of "${w}".`, `${w[i]}${w[j]}`] }
+  if (k === 2) return [`How many letters are in the word "${w}"? Answer with a number.`, String(w.length)]
+  return [`Type "${w}" without its vowels.`, w.replace(/[aeiou]/g, '')]
+}
 
 export async function makeCaptcha(): Promise<Captcha> {
   const id = randomBytes(16).toString('base64url')
@@ -98,19 +113,18 @@ export async function makeCaptcha(): Promise<Captcha> {
   for (let k = 0; k < 6; k++) nodes.push(`<path d="${scribble(0, rnd(20, SIZE - 20), SIZE)}" fill="none" stroke="${hsl(rnd(0, 360), 35, 50)}" stroke-opacity="0.3" stroke-width="1"/>`)
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}" role="img" aria-label="Image puzzle: 3 by 3 grid of shapes">${nodes.join('')}</svg>`
 
-  const a = 1 + randomInt(9), b = 1 + randomInt(9), plus = Math.random() < 0.5 || a <= b
-  const question = `What is ${WORDS[a]} ${plus ? 'plus' : 'minus'} ${WORDS[b]}? Answer with a number.`
+  const [question, textAnswer] = wordTask()
   const grid = mac(id, `grid:${answer}`)
-  await cache.set(`shield:captcha:${id}`, { grid: grid.toString('hex'), text: mac(id, `text:${plus ? a + b : a - b}`).toString('hex') }, TTL_MS / 1000)
+  await claims.set(loadedSettings() as Settings | undefined, `captcha:${id}`, JSON.stringify({ grid: grid.toString('hex'), text: mac(id, `text:${textAnswer}`).toString('hex') }), TTL_MS)
   return { id, svg, prompt: `Select all the ${PLURAL[target]}`, question, answerHash: grid.toString('hex') }
 }
 
 /** `answer` is `grid:<tile indices, comma separated>` or `text:<number>`. Single-use: always consumes `id`. */
 export async function checkCaptcha(id: string, answer: string): Promise<boolean> {
   if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id)) return false
-  const p = await cache.get<{ grid: string; text: string }>(`shield:captcha:${id}`)
-  if (!p || !(await cache.add(`shield:captcha-used:${id}`, 1, TTL_MS / 1000))) return false   // claim once (every server)
-  await cache.delete(`shield:captcha:${id}`)
+  const raw = await claims.take(loadedSettings() as Settings | undefined, `captcha:${id}`)   // read + delete: single-use everywhere
+  if (!raw) return false
+  const p = JSON.parse(raw) as { grid: string; text: string }
   if (typeof answer !== 'string' || answer.length > 64) return false
   const m = /^(grid|text):(.*)$/.exec(answer.trim().toLowerCase())
   if (!m) return false

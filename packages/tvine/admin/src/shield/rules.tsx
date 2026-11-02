@@ -86,7 +86,8 @@ export function Rules() {
   )
 }
 
-const blank = (): Rule => ({ id: '', name: 'New rule', enabled: true, order: 0, when: { all: [{ field: 'path', op: 'startsWith', value: '/' }] }, then: { type: 'challenge', level: 'auto' } })
+// empty until edited: the server refuses saving a challenge / block that matches every request
+const blank = (): Rule => ({ id: '', name: 'New rule', enabled: true, order: 0, when: { all: [{ field: 'path', op: 'startsWith', value: '' }] }, then: { type: 'challenge', level: 'auto' } })
 
 export function RuleEditor({ id }: { id: string }) {
   const { call, base, navigate } = useShield()
