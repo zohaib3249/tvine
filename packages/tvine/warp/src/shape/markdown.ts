@@ -32,11 +32,12 @@ const TAG = /<([a-zA-Z][\w:-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^
 const ATTR = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g
 
 // Tolerant HTML → tree (SSR output is well-formed; this only needs to survive the odd stray tag).
+const MAX_TAG = 256 * 1024
 function parse(html: string): El {
   const root: El = { t: '#root', a: {}, c: [] }
   const stack: El[] = [root]
   const low = lowerAscii(html)
-  let i = 0
+  let i = 0, gt = -1
   while (i < html.length) {
     const top = stack[stack.length - 1]!
     const lt = html.indexOf('<', i)
@@ -52,10 +53,15 @@ function parse(html: string): El {
       i = e < 0 ? html.length : e + 1
       continue
     }
-    TAG.lastIndex = lt
-    const m = TAG.exec(html)
+    // the tag regex only ever sees up to the next '>' (found once, reused): a '<' with no '>' after it is text, so a
+    // page of unclosed '<script ' stays linear. ponytail: a raw '>' inside a quoted attribute ends the tag early
+    // (React escapes it as &gt;, so rendered pages never have one)
+    if (gt < lt) gt = html.indexOf('>', lt)
+    if (gt < 0) { top.c.push(html.slice(lt)); break }
+    TAG.lastIndex = 0
+    const m = gt - lt > MAX_TAG ? null : TAG.exec(html.slice(lt, gt + 1))   // a >256 KB "tag" is hostile input: text
     if (!m) { top.c.push('<'); i = lt + 1; continue }
-    i = TAG.lastIndex
+    i = lt + TAG.lastIndex
     const t = lowerAscii(m[1]!), a: Record<string, string> = {}
     for (const x of m[2]!.matchAll(ATTR)) a[lowerAscii(x[1]!)] = decode(x[2] ?? x[3] ?? x[4] ?? '')
     const sib = SIBLINGS[t]
