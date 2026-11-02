@@ -2,7 +2,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api as browserApi } from '../../weft/dist/api/client.js'
 import { Dialog, Drawer, Menu, Toaster, toast } from '../../weft/dist/widgets/index.js'
-import { caller, keyOf, loadRoute, loadSite, retryable, type Call, type RouteData } from './data.js'
+import { caller, keyOf, latest, loadRoute, loadSite, retryable, type Call, type RouteData } from './data.js'
 import { href, parse, type Query, type Route } from './routes.js'
 import type { ModelMeta, Site, User } from './types.js'
 import { AdminCtx, useTheme, cap, Empty, ErrorBox, Icon, Region, Skeleton, Slotted, custom, cx, getConfig, slotClass, useAdmin, type Ctx } from './ui.js'
@@ -18,6 +18,7 @@ export type AdminAppProps = {
   api?: unknown   // tests / custom transports; default = the browser api.* client
 }
 
+const main = () => document.getElementById('tva-main')
 const modelOf = (site: Site, key: string) => site.apps.flatMap((a) => a.models).find((m) => m.key === key)
 
 export function AdminApp(p: AdminAppProps) {
@@ -47,23 +48,27 @@ export function AdminApp(p: AdminAppProps) {
   if (data?.meta) urls.current.set(data.meta.key, data.meta.urls)
   const route = useMemo(() => parse(loc.segments, { pages: site?.pages, urls: (m) => urls.current.get(m) }), [loc, site, data?.meta])
   const dirty = useRef(false)
+  const restore = useRef<number | null>(null)
   const [guard, setGuard] = useState<string | null>(null)
 
   // ---- navigation: client-side, history API (Next's App Router keeps usePathname in sync with pushState) --------------
   const go = useCallback((to: string, replace = false) => {
     const u = new URL(to, location.href)
     if (u.origin !== location.origin || !(u.pathname + '/').startsWith(base + '/')) { location.assign(u.href); return }
+    const samePage = u.pathname === location.pathname   // a filter/search/sort/page: only the query changes
+    // remember this entry's scroll (the page scrolls inside <main>, not the window) so back/forward restores it
+    history.replaceState({ ...history.state, tvaScroll: main()?.scrollTop ?? 0 }, '')
     history[replace ? 'replaceState' : 'pushState'](null, '', u.pathname + u.search)
     const segments = u.pathname.slice(base.length).split('/').filter(Boolean)
     setLoc({ segments, query: Object.fromEntries(u.searchParams) })
-    if (!replace) document.querySelector('.tva main')?.scrollTo?.(0, 0)
+    if (!replace && !samePage) main()?.scrollTo?.(0, 0)
   }, [base])
   const navigate = useCallback((to: string, o?: { replace?: boolean }) => {
     if (dirty.current) { setGuard(to); return }
     go(to, o?.replace)
   }, [go])
   useEffect(() => {
-    const pop = () => setLoc({ segments: location.pathname.slice(base.length).split('/').filter(Boolean), query: Object.fromEntries(new URLSearchParams(location.search)) })
+    const pop = () => { restore.current = history.state?.tvaScroll ?? null; setLoc({ segments: location.pathname.slice(base.length).split('/').filter(Boolean), query: Object.fromEntries(new URLSearchParams(location.search)) }) }
     const unload = (e: BeforeUnloadEvent) => { if (dirty.current) e.preventDefault() }
     addEventListener('popstate', pop); addEventListener('beforeunload', unload)
     return () => { removeEventListener('popstate', pop); removeEventListener('beforeunload', unload) }
@@ -71,20 +76,28 @@ export function AdminApp(p: AdminAppProps) {
 
   // ---- data: reuse the server's first paint, else load through api.* --------------------------------------------------
   const key = keyOf(route, loc.query) + ':' + tick
+  const ticket = useRef(latest()).current
   useEffect(() => {
     if (!site) return
     if (data && data.key === keyOf(route, loc.query) && tick === 0 && data === p.initial) return
-    let live = true
+    const isLatest = ticket()   // fast clicks: only the newest request's answer is shown
     void (async () => {
       if (route.name === 'notFound' && loc.segments.length >= 3) {   // maybe a getUrls view: learn the model's urls first
         const m = await call('admin.meta', { model: `${loc.segments[0]}.${loc.segments[1]}` })
-        if (m.ok && live) { urls.current.set((m.data as ModelMeta).key, (m.data as ModelMeta).urls); setLoc((l) => ({ ...l })); return }
+        if (m.ok && isLatest()) { urls.current.set((m.data as ModelMeta).key, (m.data as ModelMeta).urls); setLoc((l) => ({ ...l })); return }
       }
       const d = await loadRoute(call, site, route, loc.query)
-      if (live) setData(d)
+      if (isLatest()) setData(d)
     })()
-    return () => { live = false }
   }, [key, site])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // back/forward: put the scroll back once that entry's data is on screen
+  const fresh = data?.key === keyOf(route, loc.query)
+  useEffect(() => {
+    if (fresh && restore.current !== null) { main()?.scrollTo?.(0, restore.current); restore.current = null }
+  }, [data, fresh])
+  // same page, new query: keep the current rows on screen (dimmed) until the new ones land — no remount, no skeleton
+  const stale = !fresh && !!data?.key.startsWith(JSON.stringify([route]).slice(0, -1) + ',')
 
   const prefs = useMemo(() => {
     const store = getConfig().prefs
@@ -131,7 +144,7 @@ export function AdminApp(p: AdminAppProps) {
             <main id="tva-main" className={cx('min-h-0 flex-1 overflow-auto', slotClass('main'))}>
               <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
                 <Crumbs meta={data?.meta} obj={data?.obj?.display} />
-                <div key={JSON.stringify(route)} className="tva-page-enter"><View route={route} data={data?.key === keyOf(route, loc.query) ? data : undefined} /></div>
+                <div key={JSON.stringify(route)} className="tva-page-enter"><View route={route} data={fresh || stale ? data : undefined} pending={stale} /></div>
               </div>
             </main>
           </div>
@@ -282,7 +295,7 @@ export function lazyComponent<P>(load: () => Promise<{ default: React.ComponentT
   return lazyCache.get(k)! as unknown as React.ComponentType<P>
 }
 
-function View({ route, data }: { route: Route; data?: RouteData }) {
+function View({ route, data, pending }: { route: Route; data?: RouteData; pending?: boolean }) {
   const { site } = useAdmin()
   if (route.name === 'page') {
     const pg = site.pages?.find((x) => x.path === route.path)!
@@ -295,7 +308,7 @@ function View({ route, data }: { route: Route; data?: RouteData }) {
   if (!data) return <div className="tva-card"><Skeleton rows={8} /></div>
   if (!data.meta) return data.error ? <ErrorBox error={data.error} /> : <Skeleton />
   switch (route.name) {
-    case 'changelist': return <Changelist meta={data.meta} list={data.list} error={data.error} />
+    case 'changelist': return <Changelist meta={data.meta} list={data.list} error={data.error} pending={pending} />
     case 'add': case 'change': return data.error && !data.obj && route.name === 'change' ? <ErrorBox error={data.error} /> : <ChangeForm key={JSON.stringify(route)} meta={data.meta} obj={data.obj} />
     case 'delete': return <DeleteView meta={data.meta} obj={data.obj} preview={data.preview} error={data.error} pk={route.pk} />
     case 'history': return <HistoryView meta={data.meta} obj={data.obj} rows={data.history} pk={route.pk} />

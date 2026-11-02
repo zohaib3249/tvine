@@ -34,6 +34,9 @@ export type RouteData = {
   dashboard?: DashboardData   // admin.dashboard
   error?: { code: string; message: string; reason?: string }
 }
+// Out-of-order guard: each request takes a ticket; only the newest ticket is still current when its answer lands,
+// so a slow older response never overwrites a newer one (fast filter clicks).
+export const latest = () => { let n = 0; return () => { const id = ++n; return () => id === n } }
 export const keyOf = (r: Route, q: Query) => JSON.stringify([r, r.name === 'changelist' ? q : {}])
 
 export async function loadSite(call: Call): Promise<{ site?: Site; user?: User | null; error?: RouteData['error'] }> {
