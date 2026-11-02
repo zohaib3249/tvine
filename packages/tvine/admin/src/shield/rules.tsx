@@ -44,7 +44,7 @@ export function Rules() {
   return (
     <Region id="shield:rules" label="Rules" state={{ count: rules?.length ?? 0, order: rules?.map((x) => x.name).join(' > ').slice(0, 300) ?? '' }}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-72">
           <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
           <p className="text-sm text-muted">Checked top to bottom on every request. The first rule that matches decides. Drag to reorder, or focus a rule and press Space, then the arrow keys.</p>
         </div>

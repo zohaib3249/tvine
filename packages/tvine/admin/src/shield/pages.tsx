@@ -16,7 +16,7 @@ import type { BotCategory, Bots as BotsData, ChallengeLevel, EventDetail, EventP
 
 const H = ({ title, sub, children }: { title: string; sub: ReactNode; children?: ReactNode }) => (
   <div className="mb-5 flex flex-wrap items-center gap-3">
-    <div className="min-w-0 flex-1"><h1 className="text-2xl font-semibold tracking-tight">{title}</h1><p className="text-sm text-muted">{sub}</p></div>
+    <div className="min-w-0 flex-1 basis-72"><h1 className="text-2xl font-semibold tracking-tight">{title}</h1><p className="text-sm text-muted">{sub}</p></div>
     {children}
   </div>
 )

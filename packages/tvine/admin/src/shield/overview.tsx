@@ -35,7 +35,7 @@ export function Overview() {
   return (
     <Region id="shield:overview" label="Shield overview" state={{ range, requests: t?.requests ?? null, blocked: t?.blocked ?? null, loading: o.loading }}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-72">
           <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
           <p className="text-sm text-muted">What Shield saw and did with your traffic.</p>
         </div>
@@ -59,15 +59,19 @@ export function Overview() {
         <div className="tva-card mt-4"><Empty title="No traffic yet" icon="shield">Shield has not seen requests in this range. Try a longer range, or send one with <strong>Test a request</strong>.</Empty></div>
       ) : (
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <ChartCard id="traffic" title="Traffic by decision" type="stacked" data={series} loading={o.loading} height={240} className="lg:col-span-2" />
+          <ChartCard id="traffic" title="Traffic by decision" type="stacked" data={series} loading={o.loading} height={240} className="tvs-decisions lg:col-span-2" />
           <ChartCard id="scores" title="Score histogram" subtitle="1 = surely a bot · 99 = surely a human" type="bar" data={hist} loading={o.loading} height={240} />
+        </div>
+      )}
+      {!empty && (
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Top id="ips" title="Top blocked IPs" col="IP" rows={d?.top.ips} mono />
           <Top id="asns" title="Top blocked networks (ASN)" col="ASN" rows={d?.top.asns} />
           <Top id="countries" title="Top blocked countries" col="Country" rows={d?.top.countries} />
           <Top id="bots" title="Top bots" col="Bot" rows={d?.top.bots} />
-          <Feed />
         </div>
       )}
+      {!empty && <div className="mt-4"><Feed /></div>}
     </Region>
   )
 }
@@ -92,7 +96,7 @@ function Feed() {
   const f = useLiveData<EventPage>(call, 'shield.events', { filters: {}, page: 1, pageSize: 12 }, LIVE)
   const rows = f.data?.rows.slice(0, 12)
   return (
-    <Region id="shield:feed" label="Live feed" state={{ count: rows?.length ?? 0, latest: rows?.[0]?.ray ?? null }} className="tva-card flex min-w-0 flex-col overflow-hidden lg:col-span-3">
+    <Region id="shield:feed" label="Live feed" state={{ count: rows?.length ?? 0, latest: rows?.[0]?.ray ?? null }} className="tva-card flex min-w-0 flex-col overflow-hidden">
       <div className="flex items-center gap-2 px-4 pt-4 pb-2">
         <h3 className="flex-1 text-[13px] font-semibold text-muted">Live feed</h3>
         <LivePill state={f.live} />
