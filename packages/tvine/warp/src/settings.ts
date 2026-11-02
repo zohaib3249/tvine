@@ -50,7 +50,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   limits: {
     bodyBytes: 65_536,
     handlerMs: 10_000,
-    rate: { limit: 60, windowMs: 60_000 },
+    rate: { limit: 60, windowMs: 60_000, by: 'framework' },
     sseConnPerIp: 20,
     backend: 'memory',
     redis: 'default',
@@ -143,7 +143,8 @@ const schema: z.ZodType<Settings> = z.object({
   limits: z.object({
     bodyBytes: posInt,
     handlerMs: z.number().positive(),
-    rate: z.object({ limit: posInt, windowMs: z.number().positive() }),
+    // by 'shield': a request tvine.shield rate-checked in enforce mode skips this general bucket (actions' own rates stay)
+    rate: z.object({ limit: posInt, windowMs: z.number().positive(), by: z.enum(['framework', 'shield']).default('framework') }),
     sseConnPerIp: posInt,
     backend, redis: alias,
   }),
@@ -258,7 +259,8 @@ const schema: z.ZodType<Settings> = z.object({
     notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
 }).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] })
-  .refine((s) => !(s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield') || s.installedApps.includes('tvine.shield'), { message: "tvine.middleware.Shield needs 'tvine.shield' in settings.installedApps (its rules, lists and events tables)", path: ['shield'] }) as z.ZodType<Settings>
+  .refine((s) => !(s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield') || s.installedApps.includes('tvine.shield'), { message: "tvine.middleware.Shield needs 'tvine.shield' in settings.installedApps (its rules, lists and events tables)", path: ['shield'] })
+  .refine((s) => s.limits.rate.by !== 'shield' || (s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield'), { message: "limits.rate.by 'shield' needs 'tvine.middleware.Shield' in settings.middleware", path: ['limits', 'rate', 'by'] }) as z.ZodType<Settings>
 
 // admin.allowIps entries must parse at boot (a typo must not silently lock everyone out, or let everyone in)
 function validCidr(e: string): boolean {
@@ -354,4 +356,14 @@ export function checkBackends(s: Settings): void {
       throw new Error(`${u.key} is 'redis' but settings.redis.${u.alias} is not configured (set settings.redis.${u.alias}.url${u.alias === 'default' ? ' or REDIS_URL' : ''})`)
     }
   }
+}
+
+// Two general rate limits at once: tvine.middleware.Shield's rate rules (every request) AND settings.limits.rate (every
+// action call, per ip + session). The lower one answers 429 first. Shown by `tvine check`, at boot and in the panel.
+export function rateOverlap(s: Settings): string | undefined {
+  const shield = (s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield')
+  if (!shield || s.limits.rate.by === 'shield') return undefined
+  const { limit, windowMs } = s.limits.rate
+  return `two general rate limits are on: Shield's rate rules and settings.limits.rate (${limit} action calls per ${Math.round(windowMs / 1000)} s per ip + session); the lower one answers 429. ` +
+    `Set limits: { rate: { ...rate, by: 'shield' } } to let Shield's rules be the only general limit (actions' own rates, e.g. login, stay).`
 }

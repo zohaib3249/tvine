@@ -108,6 +108,10 @@ type VerifiedAgent = { directory: string; keyid: string }
 // request.agent.verified: only what tvine.middleware.Shield's Web Bot Auth check put on the raw request (never a header)
 const verifiedOf = (v: VerifiedAgent | undefined) => (v ? { verified: { directory: v.directory, keyid: v.keyid } } : {})
 
+// raw HTTP requests a rate rule already counted upstream (tvine.shield, enforce mode): with limits.rate.by = 'shield'
+// dispatch skips the general bucket for them. Never set from anything the client sends.
+export const rateChecked = new WeakSet<object>()
+
 export async function buildRequest(src: HttpSource | McpSource, settings: Settings): Promise<Request> {
   const isHttp = 'req' in src
   const rawUrl = isHttp ? (src.req.url ?? '/') : src.url

@@ -253,7 +253,7 @@ export interface Settings {
   limits: {
     bodyBytes: number
     handlerMs: number
-    rate: { limit: number; windowMs: number }
+    rate: { limit: number; windowMs: number; by: 'framework' | 'shield' }
     sseConnPerIp: number
     backend: Backend; redis: string                               // rate limits, idempotency, login throttle, tab agent marks
   }

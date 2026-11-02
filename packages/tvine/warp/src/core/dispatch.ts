@@ -5,7 +5,7 @@ import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { audited, auditRow, securityEvent, viaOf, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
-import { forwardedHost } from './request.js'
+import { forwardedHost, rateChecked } from './request.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -301,6 +301,10 @@ function redirectUrl(e: unknown): string | undefined {
 // ---- pipeline ------------------------------------------------------------------------------
 type Ran = { sid: Sid | undefined; events: Event[] }   // sid: the session the command resolved to (for hooks)
 
+// limits.rate.by = 'shield': tvine.shield already rate-checked this HTTP request in enforce mode, so its rules are the
+// general limit (an action's own rate still holds). Anything Shield did not count (socket, log mode, no rate rule) stays.
+const shieldOwns = (settings: Settings, request: Request) => settings.limits.rate.by === 'shield' && !!request.raw && rateChecked.has(request.raw)
+
 async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold): Promise<Ran> {
   const { settings, sessions } = server
   const peeked = async () => (await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }))?.sid
@@ -317,7 +321,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   // a remote agent's command forwarded through a tab (agentCmd channel, while the tab hub has one running for this
   // session) is not charged to the human's ip/session bucket: TabHub's own per-tab limit already counted it
   const forwarded = cmd.agentCmd?.via === 'channel' && !!server.tabs && await (async () => { const s = await peeked(); return !!s && (await server.tabs!.forcedAgent(s)) === true })()
-  const rl = renderRead.has(request) || forwarded ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  const rl = renderRead.has(request) || forwarded || shieldOwns(settings, request) ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
   if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
   const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
@@ -429,7 +433,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   // ponytail: an own rate equal to settings.limits.rate counts as the default on renders.
   const r = def?.rules?.rate, dflt = settings.limits.rate
   const own = !!r && (r.limit !== dflt.limit || r.windowMs !== dflt.windowMs)
-  if (r && (own || !renderRead.has(request))) {
+  if (r && (own || (!renderRead.has(request) && !shieldOwns(settings, request)))) {
     const rl = await server.limiter.check({ sid: renderRead.has(request) ? `ip:${ipKey(request.ip)}` : sid, action: def!.id }, r)
     if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
   }

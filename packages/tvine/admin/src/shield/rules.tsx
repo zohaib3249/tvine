@@ -44,7 +44,7 @@ export function moveId(ids: string[], id: string, to: number): string[] {
 }
 
 export function Rules() {
-  const { call, base, navigate } = useShield()
+  const { call, base, navigate, settings } = useShield()
   const r = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
   const [rules, setRules] = useState<Rule[]>()
   const [reset, setReset] = useState(false)
@@ -69,6 +69,12 @@ export function Rules() {
         <button type="button" agentId="reset" className="tva-btn" onClick={() => setReset(true)}><Icon name="refresh" size={14} />Reset to defaults</button>
         <a href={`${base}/rules/new/`} agentId="new" className="tva-btn tva-btn-primary" onClick={(e) => { e.preventDefault(); navigate(`${base}/rules/new/`) }}><Icon name="plus" size={14} />New rule</a>
       </div>
+      {settings?.rateOverlap && (
+        <Region id="shield:rate-overlap" label="Two rate limits" state={{ warning: settings.rateOverlap }} className="tvs-warn mb-4 rounded-lg border p-3 text-sm" role="alert">
+          <p className="font-semibold">Two rate limits are on</p>
+          <p className="mt-1 text-muted">{settings.rateOverlap}</p>
+        </Region>
+      )}
       {r.error && !rules && <ErrorBox error={r.error} />}
       {!rules ? <div className="tva-card"><Skeleton rows={6} /></div>
         : rules.length === 0 ? <div className="tva-card"><Empty title="No rules" icon="sliders">Every request passes (still scored and logged). Add a rule, or reset to the built-in set.</Empty></div>

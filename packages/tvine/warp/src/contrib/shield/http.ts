@@ -3,7 +3,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { buildRequest } from '../../core/request.js'
+import { buildRequest, rateChecked } from '../../core/request.js'
 import type { BuildCtx, HttpMiddleware, MwRequest } from '../../middleware/index.js'
 import { AGENT_SURFACE } from '../../middleware/index.js'
 import { checkCaptcha, makeCaptcha } from './captcha.js'
@@ -199,7 +199,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       // static assets + Next internals (/_next/*, dev /__nextjs_* overlay calls: hundreds per page load): fast path
       if ((req.method === 'GET' || req.method === 'HEAD') && (ASSET.test(path) || NEXT_INTERNAL.test(path)) && !AGENT_SURFACE(path)) return
       const sig = await signals(req)
-      const { decision, retryAfterMs } = await decide(sig, { settings: s, ray: req.tvine.id ?? randomBytes(8).toString('hex'), req, headers: req.headers })
+      const { decision, retryAfterMs, trace } = await decide(sig, { settings: s, ray: req.tvine.id ?? randomBytes(8).toString('hex'), req, headers: req.headers })
       // never lock the owner out (review M2): the panel, the admin and their sign-in / panel APIs are never challenged;
       // a block there still applies, except on the panel for a signed-in superuser
       if (decision.action === 'challenge' && exempt(path)) Object.assign(decision, { action: 'pass', reason: `exempt from challenges (${decision.reason})` })
@@ -207,6 +207,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       // the panel / admin poll their APIs: a signed-in staff user is never rate-limited there (the framework's own
       // settings.limits.rate still applies to every action)
       if (decision.action === 'rateLimit' && exempt(path) && b.userOf) { const u = await b.userOf(req).catch(() => undefined); if (u?.isStaff === true || u?.isSuperuser === true) Object.assign(decision, { action: 'pass', reason: `staff on the panel / admin (${decision.reason})` }) }
+      if (decision.mode === 'enforce' && trace.some((t) => t.matched && t.action === 'rateLimit')) rateChecked.add(req)   // limits.rate.by = 'shield'
       req.tvine.shield = { signals: sig, decision }
       record(s, sig, decision, req)
       const enforce = decision.mode === 'enforce'

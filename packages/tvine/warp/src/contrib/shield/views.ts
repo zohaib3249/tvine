@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
+import { rateOverlap } from '../../settings.js'
 import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, Permission, Settings, TvineUser } from '../../core/types.js'
 import { staffGuard } from '../admin/hardening.js'
@@ -444,7 +445,7 @@ async function userFields(): Promise<{ name: string; type: string }[]> {
 export const settingsGet = defineAction('shield.settings.get', z.object({}), async (_p, ctx) => {
   const rt = runtimeOf(ctx.settings)
   return { mode: rt.mode, clearanceTtl: rt.clearanceTtl, levels: rt.levels, access: rt.access, userFields: await userFields(), aiDefaults: rt.aiDefaults, prefix: ctx.settings.shield.prefix, panelPath: ctx.settings.shield.panel.path,
-    events: rt.events, stats: rt.stats, cleanup: rt.cleanup, dropped: counters.dropped }
+    events: rt.events, stats: rt.stats, cleanup: rt.cleanup, dropped: counters.dropped, ...(rateOverlap(ctx.settings) && { rateOverlap: rateOverlap(ctx.settings) }) }
 }, read)
 export const settingsSave = defineAction('shield.settings.save', z.object({
   mode: z.enum(['off', 'log', 'enforce']).optional(), clearanceTtl: z.string().regex(/^\d+[smhd]$/).optional(),

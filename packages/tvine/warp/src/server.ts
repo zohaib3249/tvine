@@ -24,7 +24,7 @@ import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
-import { checkBackends, checkHosts, defineSettings, merge, type SettingsInput } from './settings.js'
+import { checkBackends, checkHosts, defineSettings, merge, rateOverlap, type SettingsInput } from './settings.js'
 import { configureLogging, getLogger, loggingConfig } from './log.js'
 import { env, isProduction, loadDotenv } from './env.js'
 import { buildMiddleware, devHosts, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
@@ -236,6 +236,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (cache.settle) ctx.settle = () => cache.settle!()
   if (cache.close) ctx.onClose(() => cache.close!())
   ctx.health.set('backends', () => backendHealth(settings))
+  { const overlap = rateOverlap(settings); if (overlap) ctx.log('warn', overlap) }
   // a shared channel layer must be subscribed before the first event it should deliver
   if ('ready' in ctx.channels) await (ctx.channels as { ready: Promise<void> }).ready
   const nonce = randomBytes(16).toString('hex')

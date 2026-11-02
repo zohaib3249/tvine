@@ -57,7 +57,7 @@ export type UserField = { name: string; label?: string; type: FieldType; choices
 export type StatsBucket = '1m' | '5m' | '15m' | '1h' | '1d'
 export type EventsConf = { logAll: boolean; samplePass: number; maxPerMinute: number; hardCapPerMinute: number; retentionDays: number; storeIp: boolean }
 export type ShieldSettings = { mode: Mode; clearanceTtl: string; levels: ChallengeLevel[]; access: Condition; userFields?: UserField[]
-  events?: EventsConf; stats?: { bucket: StatsBucket; retentionDays: number }; cleanup?: { enabled: boolean; schedule?: string }; dropped?: number }
+  events?: EventsConf; stats?: { bucket: StatsBucket; retentionDays: number }; cleanup?: { enabled: boolean; schedule?: string }; dropped?: number; rateOverlap?: string }
 export type IpdbStatus = { source: string; updatedAt?: string; ok: boolean; rows?: number; next?: string; message?: string }
 export type FieldType = 'string' | 'number' | 'boolean' | 'ip' | 'country' | 'category' | 'kind' | 'list'
 
