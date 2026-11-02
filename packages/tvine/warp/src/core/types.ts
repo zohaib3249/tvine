@@ -385,4 +385,6 @@ export interface ShieldSettings {
   cleanup: { enabled: boolean; schedule: string }  // the events / rollups prune task (cron)
   // Web Bot Auth: the Signature-Agent key directories (https origins) trusted to sign; empty = the feature is off
   webBotAuth: { directories: string[] }
+  // code rules (contrib/shield/code.ts): enabled false = code rules are skipped and can't be saved; timeoutMs per call (1..50)
+  code: { enabled: boolean; timeoutMs: number }
 }

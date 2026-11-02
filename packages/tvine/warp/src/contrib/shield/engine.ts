@@ -12,6 +12,7 @@ import { claims } from './claims.js'
 import { securityEvent } from '../../core/audit.js'
 import { loadedSettings } from '../../security/signing.js'
 import { sha } from './signals.js'
+import { codeInput, pruneCode, runCodeRule, type CodeResult } from './code.js'
 import type { Action, BotCategory, ChallengeLevel, Condition, Decision, Rule, Signals } from './types.js'
 
 // '30s' | '30m' | '24h' | '7d' → ms
@@ -69,7 +70,10 @@ export const state = {
   version: 0,
   checkedAt: 0,
 }
-export function setRules(rules: Rule[]): void { state.rules = [...rules].sort((a, b) => a.order - b.order) }
+export function setRules(rules: Rule[]): void {
+  state.rules = [...rules].sort((a, b) => a.order - b.order)
+  pruneCode(state.rules.flatMap((r) => (r.then.type === 'code' ? [r.then.source] : [])))
+}
 export function setLists(rows: ListRow[]): void {
   const ips = (l: 'allow' | 'deny') => { try { return blockList(rows.filter((r) => (r.kind === 'ip' || r.kind === 'cidr') && r.list === l).map((r) => r.value), 'shield list') } catch { return blockList([], '') } }
   state.lists = {
@@ -121,7 +125,7 @@ export async function safeCheck(l: Limiter, sid: string, settings: Settings): Pr
   }
 }
 
-export interface Trace { ruleId: string; matched: boolean; ms: number; action?: Action['type'] }
+export interface Trace { ruleId: string; matched: boolean; ms: number; action?: Action['type']; code?: { result: Action | null; error?: CodeResult['error']; skipped?: CodeResult['skipped'] } }
 export interface DecideOpts { settings: Settings; ray: string; req?: unknown; headers?: Record<string, string | string[] | undefined>; dryRun?: boolean; mode?: 'log' | 'enforce' }
 // first terminal match wins; 'log' and an un-exceeded 'rateLimit' are non-terminal; a valid clearance at or above the
 // asked level satisfies a challenge (never a block)
@@ -161,9 +165,15 @@ export async function decide(s: Signals, o: DecideOpts): Promise<{ decision: Dec
     if (action?.type === 'custom') {
       const fn = customRules.get(action.name)
       try { action = fn ? await fn(o.req, s) : undefined } catch { action = undefined }
-      if (action?.type === 'custom') action = undefined   // no recursion
+      if (action?.type === 'custom' || action?.type === 'code') action = undefined   // no recursion
     }
-    trace.push({ ruleId: r.id, matched, ms: Math.round((performance.now() - r0) * 1000) / 1000, ...(action && { action: action.type }) })
+    let code: Trace['code']
+    if (action?.type === 'code') {
+      const out = await runCodeRule(r.id, action.source, () => codeInput(s, o.headers, (o.req as { url?: string } | undefined)?.url), o.settings, !o.dryRun)
+      action = out.action
+      code = { result: out.action ?? null, ...(out.error && { error: out.error }), ...(out.skipped && { skipped: out.skipped }) }
+    }
+    trace.push({ ruleId: r.id, matched, ms: Math.round((performance.now() - r0) * 1000) / 1000, ...(action && { action: action.type }), ...(code && { code }) })
     if (!action) continue
     if (action.type === 'log') { logged ??= r; continue }
     if (action.type === 'rateLimit') {

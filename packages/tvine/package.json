@@ -168,10 +168,12 @@
     "test:redis": "./warp/scripts/test-redis.sh"
   },
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "better-sqlite3": "^13.0.3",
     "esbuild": "0.28.2",
     "nanoid": "^5",
+    "quickjs-emscripten-core": "0.32.0",
     "server-only": "^0.0.1",
     "zod": "^3.25.76"
   },
