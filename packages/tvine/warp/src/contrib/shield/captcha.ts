@@ -3,15 +3,16 @@
 // Every shape (and every decoy) is the same kind of SVG node: a <path> resampled to the same number of
 // jittered points, rotated, scaled and colour-jittered, so the source carries no class/id/element hint.
 // A text question is issued alongside for screen-reader users (`question`); either answer passes.
-// Answers are kept only as HMACs, single-use (any check consumes the id), 2-minute expiry.
+// Answers are kept only as HMACs (key derived from settings.secret), in the shared cache (settings.caches: memory, or
+// redis across servers), single-use (any check claims the id once, cache.add), 2-minute expiry.
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { cache } from '../../cache/index.js'
+import { secretKeys } from '../../security/signing.js'
 
 export interface Captcha { id: string; svg: string; prompt: string; question: string; answerHash: string }
 
 const TTL_MS = 2 * 60_000
-const MAX_PENDING = 10_000
-const KEY = randomBytes(32)                 // ponytail: per-process key + in-memory store; multi-server needs a shared cache
-const pending = new Map<string, { grid: Buffer; text: Buffer; exp: number }>()
+const key = () => createHmac('sha256', secretKeys()[0]!).update('tvine.shield.captcha').digest()
 
 type Kind = 'circle' | 'square' | 'triangle' | 'star'
 const KINDS: Kind[] = ['circle', 'square', 'triangle', 'star']
@@ -19,7 +20,7 @@ const PLURAL: Record<Kind, string> = { circle: 'circles', square: 'squares', tri
 const N = 36                                // points per outline, identical for every kind
 const TILE = 100, GAP = 4, SIZE = TILE * 3 + GAP * 4
 
-const mac = (id: string, answer: string) => createHmac('sha256', KEY).update(`${id}\n${answer}`).digest()
+const mac = (id: string, answer: string) => createHmac('sha256', key()).update(`${id}\n${answer}`).digest()
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
 const f = (n: number) => n.toFixed(1)
 
@@ -74,14 +75,7 @@ function shuffle<T>(a: T[]): T[] {
 
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
 
-function prune(now: number) {
-  for (const [id, p] of pending) if (p.exp <= now) pending.delete(id)
-  while (pending.size >= MAX_PENDING) pending.delete(pending.keys().next().value as string)
-}
-
-export function makeCaptcha(): Captcha {
-  const now = Date.now()
-  prune(now)
+export async function makeCaptcha(): Promise<Captcha> {
   const id = randomBytes(16).toString('base64url')
   const target = KINDS[randomInt(KINDS.length)]
   const others = KINDS.filter((k) => k !== target)
@@ -107,16 +101,17 @@ export function makeCaptcha(): Captcha {
   const a = 1 + randomInt(9), b = 1 + randomInt(9), plus = Math.random() < 0.5 || a <= b
   const question = `What is ${WORDS[a]} ${plus ? 'plus' : 'minus'} ${WORDS[b]}? Answer with a number.`
   const grid = mac(id, `grid:${answer}`)
-  pending.set(id, { grid, text: mac(id, `text:${plus ? a + b : a - b}`), exp: now + TTL_MS })
+  await cache.set(`shield:captcha:${id}`, { grid: grid.toString('hex'), text: mac(id, `text:${plus ? a + b : a - b}`).toString('hex') }, TTL_MS / 1000)
   return { id, svg, prompt: `Select all the ${PLURAL[target]}`, question, answerHash: grid.toString('hex') }
 }
 
 /** `answer` is `grid:<tile indices, comma separated>` or `text:<number>`. Single-use: always consumes `id`. */
-export function checkCaptcha(id: string, answer: string): boolean {
-  const p = typeof id === 'string' ? pending.get(id) : undefined
-  if (!p || typeof answer !== 'string' || answer.length > 64) return false
-  pending.delete(id)
-  if (p.exp <= Date.now()) return false
+export async function checkCaptcha(id: string, answer: string): Promise<boolean> {
+  if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id)) return false
+  const p = await cache.get<{ grid: string; text: string }>(`shield:captcha:${id}`)
+  if (!p || !(await cache.add(`shield:captcha-used:${id}`, 1, TTL_MS / 1000))) return false   // claim once (every server)
+  await cache.delete(`shield:captcha:${id}`)
+  if (typeof answer !== 'string' || answer.length > 64) return false
   const m = /^(grid|text):(.*)$/.exec(answer.trim().toLowerCase())
   if (!m) return false
   let norm: string
@@ -126,5 +121,5 @@ export function checkCaptcha(id: string, answer: string): boolean {
     norm = `grid:${idx.sort((x, y) => x - y).join(',')}`
   } else norm = `text:${m[2].trim()}`
   const got = mac(id, norm)
-  return timingSafeEqual(got, m[1] === 'grid' ? p.grid : p.text)
+  return timingSafeEqual(got, Buffer.from(m[1] === 'grid' ? p.grid : p.text, 'hex'))
 }

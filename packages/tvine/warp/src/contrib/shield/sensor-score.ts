@@ -15,7 +15,7 @@
 //   straight-path                20   20+ pointer moves with direction entropy < 0.5 bit (scripted line)
 //   too-fast                     20   checkbox/captcha level answered < 800 ms after the page loaded
 // The PoW level is invisible, so missing behaviour there is not penalised.
-import type { SensorReport } from './sensor-types.js'
+import type { SensorReport } from './types.js'
 
 export type { SensorReport }
 
