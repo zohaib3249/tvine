@@ -131,7 +131,30 @@ export async function loadIpdb(dir: string): Promise<{ country: number; asn: num
   ipdb.loadedAt = new Date().toISOString()
   return { country: ipdb.country.size, asn: ipdb.asn.size }
 }
-export function lookupIp(ip: string): { country?: string; asn?: number; asnOrg?: string } {
-  const country = ipdb.country.find(ip), asn = ipdb.asn.find(ip)
-  return { ...(country && { country }), ...(asn !== undefined && { asn, asnOrg: ipdb.orgs.get(asn) }) }
+export function lookupIp(ip: string): { country?: string; continent?: string; asn?: number; asnOrg?: string } {
+  const country = ipdb.country.find(ip), asn = ipdb.asn.find(ip), continent = country && continentOf(country)
+  return { ...(country && { country }), ...(continent && { continent }), ...(asn !== undefined && { asn, asnOrg: ipdb.orgs.get(asn) }) }
+}
+
+// ---- continents: ISO-3166 alpha-2 → continent code (GeoNames' assignment: CY / RU EU, TR / CAUCASUS AS) ----------------
+export const CONTINENTS: Record<string, string> = { AF: 'Africa', AN: 'Antarctica', AS: 'Asia', EU: 'Europe', NA: 'North America', OC: 'Oceania', SA: 'South America' }
+const BY_CONTINENT: Record<string, string> = {
+  AF: 'AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG EH ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RE RW SC SD SH SL SN SO SS ST SZ TD TG TN TZ UG YT ZA ZM ZW',
+  AN: 'AQ BV GS HM TF',
+  AS: 'AE AF AM AZ BD BH BN BT CC CN GE HK ID IL IN IO IQ IR JO JP KG KH KP KR KW KZ LA LB LK MM MN MO MV MY NP OM PH PK PS QA SA SG SY TH TJ TL TM TR TW UZ VN YE',
+  EU: 'AD AL AT AX BA BE BG BY CH CY CZ DE DK EE ES FI FO FR GB GG GI GR HR HU IE IM IS IT JE LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SJ SK SM UA VA XK',
+  NA: 'AG AI AW BB BL BM BQ BS BZ CA CR CU CW DM DO GD GL GP GT HN HT JM KN KY LC MF MQ MS MX NI PA PM PR SV SX TC TT US VC VG VI',
+  OC: 'AS AU CK CX FJ FM GU KI MH MP NC NF NR NU NZ PF PG PN PW SB TK TO TV UM VU WF WS',
+  SA: 'AR BO BR CL CO EC FK GF GY PE PY SR UY VE',
+}
+const CONTINENT_OF = new Map(Object.entries(BY_CONTINENT).flatMap(([c, list]) => list.split(' ').map((k) => [k, c] as const)))
+export const continentOf = (country: string): string | undefined => CONTINENT_OF.get(country.toUpperCase())
+
+// ---- local traffic: loopback / private / link-local / ULA / CGNAT never have a country --------------------------------
+const LOCAL = new BlockList()
+for (const [a, bits] of [['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['169.254.0.0', 16], ['100.64.0.0', 10]] as const) LOCAL.addSubnet(a, bits, 'ipv4')
+for (const [a, bits] of [['::1', 128], ['fc00::', 7], ['fe80::', 10]] as const) LOCAL.addSubnet(a, bits, 'ipv6')
+export function isLocal(ip: string): boolean {
+  const a = ip.replace(/^::ffff:(?=\d+\.)/i, ''), v = isIP(a)
+  return !!v && LOCAL.check(a, v === 6 ? 'ipv6' : 'ipv4')
 }

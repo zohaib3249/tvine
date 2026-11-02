@@ -9,7 +9,7 @@ import { DomainError } from '../../core/errors.js'
 import type { ActionCtx, Permission, Settings, TvineUser } from '../../core/types.js'
 import { staffGuard } from '../admin/hardening.js'
 import { conditionProblem, evaluate } from './conditions.js'
-import { asnKind, botCatalog, ipdb, isTor, lookupIp, rangesStatus } from './data.js'
+import { asnKind, botCatalog, CONTINENTS, continentOf, ipdb, isLocal, isTor, lookupIp, rangesStatus } from './data.js'
 import { botRule, botRuleId, customRules, decide, ruleContext, runtimeOf, state, LEVELS } from './engine.js'
 import { ShieldConfig, ShieldEvent, ShieldList, ShieldRule } from './models.js'
 import { collectSignals, ipNetOf, scoreParts } from './signals.js'
@@ -99,7 +99,7 @@ async function topNotable(since: number, col: 'ipNet' | 'botName') {
 const H = 3_600_000, D = 24 * H, CAP = 50_000
 const SPAN = { '1h': H, '24h': D, '7d': 7 * D, '30d': 30 * D } as const
 const STEP = { minute: 60_000, hour: H, day: D } as const
-const FIELDS = ['decision', 'country', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
+const FIELDS = ['decision', 'country', 'continent', 'asn', 'botCategory', 'botName', 'path', 'method', 'ip', 'ipNet', 'ruleId', 'uaFamily', 'status', 'mode', 'tlsJa4', 'host'] as const
 const filterIn = z.object({ field: z.enum(FIELDS), op: z.enum(['eq', 'neq']), value: z.string().max(500) })
 const filtersIn = z.array(filterIn).max(20).default([])
 type Filter = z.infer<typeof filterIn>
@@ -113,7 +113,8 @@ function applyFilters(qs: QS, filters: Filter[]): QS {
     const num = (x: string) => { const n = Number(x); if (!Number.isInteger(n)) throw bad(`filters: ${f.field} takes a number`, 'filters'); return n }
     switch (f.field) {
       case 'path': w = { path__startswith: v }; break
-      case 'country': w = { country: v.toUpperCase() }; break
+      case 'country': w = v.toUpperCase() === 'LOCAL' ? { local: true } : { country: v.toUpperCase() }; break   // LOCAL: the top.countries 'Local network' entry
+      case 'continent': w = { continent: v.toUpperCase() }; break
       case 'method': w = { method: v.toUpperCase() }; break
       case 'asn': w = { asn: num(v.replace(/^AS/i, '')) }; break
       case 'status': w = { status: num(v) }; break
@@ -133,8 +134,8 @@ function windowOf(p: { range: keyof typeof SPAN; from?: string; to?: string }) {
   const span = +to - +from
   return { from, to, span, custom, step: (span <= 3 * H ? 'minute' : span <= 3 * D ? 'hour' : 'day') as keyof typeof STEP }
 }
-type Row = { ts: Date; ip?: string | null; ipNet: string; country?: string | null; asn?: number | null; asnOrg?: string | null; botName?: string | null; botCategory: string; path: string; method: string; ruleId?: string | null; uaFamily?: string | null; status?: number | null; tlsJa4?: string | null; host: string; decision: string; score: number; solveMs?: number | null }
-const SCAN_COLS = ['ts', 'ip', 'ipNet', 'country', 'asn', 'asnOrg', 'botName', 'botCategory', 'path', 'method', 'ruleId', 'uaFamily', 'status', 'tlsJa4', 'host', 'decision', 'score', 'solveMs']
+type Row = { ts: Date; ip?: string | null; ipNet: string; country?: string | null; continent?: string | null; local?: boolean | null; asn?: number | null; asnOrg?: string | null; botName?: string | null; botCategory: string; path: string; method: string; ruleId?: string | null; uaFamily?: string | null; status?: number | null; tlsJa4?: string | null; host: string; decision: string; score: number; solveMs?: number | null }
+const SCAN_COLS = ['ts', 'ip', 'ipNet', 'country', 'continent', 'local', 'asn', 'asnOrg', 'botName', 'botCategory', 'path', 'method', 'ruleId', 'uaFamily', 'status', 'tlsJa4', 'host', 'decision', 'score', 'solveMs']
 async function scan(from: Date, to: Date, filters: Filter[]): Promise<{ rows: Row[]; capped: boolean }> {
   const rows = await applyFilters(ShieldEvent.objects.filter({ ts__gte: from, ts__lt: to }), filters).order('-ts').limit(CAP + 1).values(...SCAN_COLS).all() as Row[]   // scope: ok (indexed ts, capped)
   return { rows: rows.slice(0, CAP), capped: rows.length > CAP }
@@ -165,7 +166,7 @@ const bump = (m: Tally, k: unknown, n: number, mit: boolean) => {
 }
 const topOf = (m: Tally, label?: (k: string) => string | undefined, key = (k: string) => k) =>
   [...m].sort((a, b) => b[1][0] - a[1][0]).slice(0, 10).map(([k, [count, mitigated]]) => ({ key: key(k), ...(label?.(k) && { label: label(k) }), count: Math.round(count), mitigated: Math.round(mitigated) }))
-const TOPS = { countries: 'country', asns: 'asn', paths: 'path', ips: 'ip', bots: 'botName', botCategories: 'botCategory', rules: 'ruleId', methods: 'method', uaFamilies: 'uaFamily', statuses: 'status', ja4: 'tlsJa4', hosts: 'host' } as const
+const TOPS = { countries: 'country', continents: 'continent', asns: 'asn', paths: 'path', ips: 'ip', bots: 'botName', botCategories: 'botCategory', rules: 'ruleId', methods: 'method', uaFamilies: 'uaFamily', statuses: 'status', ja4: 'tlsJa4', hosts: 'host' } as const
 type TopName = keyof typeof TOPS
 const tallies = () => Object.fromEntries(Object.keys(TOPS).map((k) => [k, new Map()])) as Record<TopName, Tally>
 function timeline(from: Date, to: Date, step: keyof typeof STEP) {
@@ -193,7 +194,7 @@ function digest(rows: Row[], weight: (d: string) => number, tl?: ReturnType<type
     countInto(t, d, log, w); scoreSum += r.score * w
     hist[Math.min(9, Math.max(0, Math.floor(r.score / 10)))]! += w
     tl?.add(+new Date(r.ts), d, log, w)
-    for (const [k, col] of Object.entries(TOPS) as [TopName, keyof Row][]) bump(tally[k], k === 'ips' ? (r.ip ?? r.ipNet) : r[col], w, mit)
+    for (const [k, col] of Object.entries(TOPS) as [TopName, keyof Row][]) bump(tally[k], k === 'ips' ? (r.ip ?? r.ipNet) : k === 'countries' && r.local ? 'LOCAL' : k === 'continents' ? (r.continent ?? (r.country ? continentOf(r.country) : undefined)) : r[col], w, mit)
     if (r.asn && r.asnOrg) orgs.set(String(r.asn), r.asnOrg)
     if (d === 'challenge-passed' && typeof r.solveMs === 'number') solve.push(r.solveMs)
   }
@@ -244,7 +245,9 @@ export const analytics = defineAction('shield.analytics', z.object({ range: z.en
   const names = new Map(state.rules.map((r) => [r.id, r.name]))
   const top = Object.fromEntries((Object.keys(TOPS) as TopName[]).map((k) => [k,
     k === 'asns' ? topOf(tally.asns, (a) => ipdb.orgs.get(Number(a)) ?? ev.orgs.get(a), (a) => `AS${a}`)
-    : k === 'rules' ? topOf(tally.rules, (r) => names.get(r)) : topOf(tally[k])])) as Record<TopName, ReturnType<typeof topOf>>
+    : k === 'rules' ? topOf(tally.rules, (r) => names.get(r))
+    : k === 'continents' ? topOf(tally.continents, (c) => CONTINENTS[c])
+    : k === 'countries' ? topOf(tally.countries, (c) => (c === 'LOCAL' ? 'Local network' : undefined)) : topOf(tally[k])])) as Record<TopName, ReturnType<typeof topOf>>
   return {
     range: { from: w.from.toISOString(), to: w.to.toISOString(), step: w.step },
     source, sampled: cur.capped || (source === 'events' && rate < 1), sampleRate: rate,
@@ -252,13 +255,13 @@ export const analytics = defineAction('shield.analytics', z.object({ range: z.en
     ...tl.out(),
     histogram: hist,
     funnel: { issued: totals.challenged, solved: totals.solved, failed: totals.failed, solveMsP50: quantile(ev.solve, 0.5), solveMsP95: quantile(ev.solve, 0.95) },
-    geo: [...tally.countries].sort((a, b) => b[1][0] - a[1][0]).map(([country, [requests, mitigated]]) => ({ country, requests: Math.round(requests), mitigated: Math.round(mitigated) })),
+    geo: [...tally.countries].filter(([c]) => c !== 'LOCAL').sort((a, b) => b[1][0] - a[1][0]).map(([country, [requests, mitigated]]) => ({ country, ...(continentOf(country) && { continent: continentOf(country) }), requests: Math.round(requests), mitigated: Math.round(mitigated) })),
     top,
   }
 }, read)
 
 type Ev = Record<string, unknown> & { ts: Date; ray: string; path: string; score: number; decision: string }
-const eventRow = (r: Ev) => ({ ts: new Date(r.ts).toISOString(), ray: r.ray, ...(r.ip ? { ip: r.ip as string } : { ip: r.ipNet as string }), ...(r.country ? { country: r.country } : {}), ...(r.asn ? { asn: r.asn } : {}), ...(r.asnOrg ? { asnOrg: r.asnOrg } : {}),
+const eventRow = (r: Ev) => ({ ts: new Date(r.ts).toISOString(), ray: r.ray, ...(r.ip ? { ip: r.ip as string } : { ip: r.ipNet as string }), ...(r.country ? { country: r.country } : {}), ...(r.continent ? { continent: r.continent } : {}), ...(r.local ? { local: true } : {}), ...(r.asn ? { asn: r.asn } : {}), ...(r.asnOrg ? { asnOrg: r.asnOrg } : {}),
   path: r.path, method: r.method, host: r.host, ua: r.ua, ...(r.uaFamily ? { uaFamily: r.uaFamily } : {}), ...(r.botName ? { bot: r.botName } : {}), botCategory: r.botCategory, score: r.score, decision: r.decision,
   mode: String(r.decision).startsWith('would-') ? 'log' : 'enforce', ...(r.ruleId ? { ruleId: r.ruleId } : {}), ...(r.status ? { status: r.status } : {}), ...(r.level ? { level: r.level } : {}), reason: r.reason })
 export const events = defineAction('shield.events', z.object({ filters: filtersIn, from: isoIn, to: isoIn, page: z.number().int().min(1).max(10_000).default(1), pageSize: z.number().int().min(1).max(200).default(50) }), async ({ filters, from, to, page, pageSize }) => {
@@ -267,7 +270,7 @@ export const events = defineAction('shield.events', z.object({ filters: filtersI
   return { rows: (await qs.order('-ts').offset((page - 1) * pageSize).limit(pageSize).all() as Ev[]).map(eventRow), count, page, pages: Math.max(1, Math.ceil(count / pageSize)) }
 }, read)
 // a stored row as Signals (what was kept: no headers, no rate counters, no clearance)
-const signalsOf = (r: Ev) => ({ ip: (r.ip ?? r.ipNet) as string, ipNet: r.ipNet as string, country: r.country, asn: r.asn, asnOrg: r.asnOrg, asnKind: r.asnKind, tor: false, ua: r.ua as string, uaFamily: r.uaFamily,
+const signalsOf = (r: Ev) => ({ ip: (r.ip ?? r.ipNet) as string, ipNet: r.ipNet as string, country: r.country, continent: r.continent, local: !!r.local, asn: r.asn, asnOrg: r.asnOrg, asnKind: r.asnKind, tor: false, ua: r.ua as string, uaFamily: r.uaFamily,
   bot: { name: r.botName, category: r.botCategory, verified: r.botVerified, spoofed: r.spoofed, via: r.botVia }, headerScore: r.headerScore, ...(r.tlsJa4 ? { tls: { ja4: r.tlsJa4 } } : {}),
   path: r.path, method: r.method as string, host: r.host, rate: { ip: 0, asn: 0, path: 0 }, score: r.score })
 // the stored row, its decision and its signals as stored (no header list is kept: owner data policy)
@@ -297,7 +300,7 @@ export const ip = defineAction('shield.ip', z.object({ ip: z.string().min(2).max
   const signals = await collectSignals({ ip: addr, method: 'GET', path: '/', host: 'localhost', secure: true, header: (n) => h[n], count: false })
   const { decision } = await decide(signals, { settings: ctx.settings, ray: 'test', headers: h, dryRun: true })
   return {
-    ip: addr, ipNet, ...(geo.country && { country: geo.country }), ...(geo.asn && { asn: geo.asn }), ...(geo.asnOrg && { asnOrg: geo.asnOrg }), ...(kind && { asnKind: kind }), tor: isTor(addr),
+    ip: addr, ipNet, ...(geo.country && { country: geo.country }), ...(geo.continent && { continent: geo.continent }), local: isLocal(addr), ...(geo.asn && { asn: geo.asn }), ...(geo.asnOrg && { asnOrg: geo.asnOrg }), ...(kind && { asnKind: kind }), tor: isTor(addr),
     lists, counts: { requests: decisions.length, mitigated, byDecision },
     ...(first && { firstSeen: new Date(first.ts).toISOString() }), ...(last && { lastSeen: new Date(last.ts).toISOString() }),
     recent: (await mine().order('-ts').limit(50).all() as Ev[]).map(eventRow),

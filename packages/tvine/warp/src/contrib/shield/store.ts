@@ -90,8 +90,12 @@ export async function flushHits(): Promise<void> {
 
 // `tvine shield mode off|log|enforce` / `tvine shield rules disable <id>|--all`: straight to the DB + a version bump, so a
 // locked-out owner gets back in without the panel (running servers reload within 3 s)
-export async function shieldCommand(settings: Settings, args: string[], o: { all?: boolean }): Promise<string> {
+export async function shieldCommand(settings: Settings, args: string[], o: { all?: boolean; count?: string; hours?: string; clear?: boolean }): Promise<string> {
   const [what, a, b] = args
+  if (what === 'simulate' && a === undefined) {
+    const { simulate } = await import('./simulate.js')
+    return simulate(settings, { clear: !!o.clear, ...(o.count !== undefined && { count: Number(o.count) }), ...(o.hours !== undefined && { hours: Number(o.hours) }) })
+  }
   if (what === 'mode' && (a === 'off' || a === 'log' || a === 'enforce') && b === undefined) {
     await saveConfig({ mode: a }); await changed(settings)
     return `shield mode: ${a}`
@@ -102,5 +106,5 @@ export async function shieldCommand(settings: Settings, args: string[], o: { all
     await changed(settings)
     return `disabled ${n} rule(s)`
   }
-  throw new Error('usage: tvine shield mode off|log|enforce | tvine shield rules disable <id>|--all')
+  throw new Error('usage: tvine shield mode off|log|enforce | tvine shield rules disable <id>|--all | tvine shield simulate [--count n] [--hours h] | --clear')
 }

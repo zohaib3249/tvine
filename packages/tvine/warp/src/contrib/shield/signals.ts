@@ -3,7 +3,7 @@
 import { promises as dns } from 'node:dns'
 import { createHash } from 'node:crypto'
 import { ipKey } from '../../security/ratelimit.js'
-import { asnKind, botOf, hasRanges, inRanges, isTor, lookupIp } from './data.js'
+import { asnKind, botOf, hasRanges, inRanges, isLocal, isTor, lookupIp } from './data.js'
 import { scoreSensor } from './sensor-score.js'
 import type { BotCategory, SensorReport, Signals } from './types.js'
 
@@ -158,7 +158,7 @@ export async function collectSignals(i: SignalInput): Promise<Signals> {
     ? { ip: hit(`ip:${ipKey(i.ip)}`), asn: geo.asn ? hit(`asn:${geo.asn}`) : 0, path: hit(`path:${i.path}`) }
     : { ip: 0, asn: 0, path: 0 }
   const s: Signals = {
-    ip: i.ip, ipNet, ...geo, asnKind: asnKind(geo.asn, geo.asnOrg), tor: isTor(i.ip),
+    ip: i.ip, ipNet, ...geo, asnKind: asnKind(geo.asn, geo.asnOrg), tor: isTor(i.ip), local: isLocal(i.ip),
     ua, ...(fam && { uaFamily: fam }),
     bot: { ...(name && { name }), category, verified, spoofed, ...(via && { via }) },
     headerScore: headerScore(ua, i.header, i.secure),

@@ -20,11 +20,14 @@ export const queue: Record<string, unknown>[] = []
 export const counters = { written: 0, dropped: 0, failed: 0 }
 let minute = 0, inMinute = 0, timer: NodeJS.Timeout | undefined, flushing: Promise<void> | undefined
 
+// the admin rollup sample of one decision (tvine shield simulate feeds its own back-dated Collector with it)
+export const statOf = (s: Signals, d: Decision, decision: string) =>
+  ({ k: 'shield' as const, decision, category: s.bot.category, mode: d.mode, score: s.score, ...(s.country && { country: s.country }), ...(s.asn && { asn: s.asn }), ...(d.ruleId && { rule: d.ruleId }) })
 export interface Outcome { failed?: boolean; passed?: boolean; solveMs?: number; sensorFlags?: string[]; fpHash?: string; level?: string }
 export function record(settings: Settings, s: Signals, d: Decision, _req: unknown, o: Outcome = {}): void {
   const decision = o.failed ? 'challenge-failed' : o.passed ? 'challenge-passed' : d.action
   countHit(d.ruleId)
-  statTap({ k: 'shield', decision, category: s.bot.category, mode: d.mode, score: s.score, ...(s.country && { country: s.country }), ...(s.asn && { asn: s.asn }), ...(d.ruleId && { rule: d.ruleId }) })
+  statTap(statOf(s, d, decision))
   const notable = decision !== 'pass' && decision !== 'allow'
   if (notable) {
     const k = `${decision}|${s.ipNet}`, now = Date.now()
@@ -51,7 +54,7 @@ export function eventRow(s: Signals, d: Decision, decision: string, storeIp: boo
   const notable = decision !== 'pass' && decision !== 'allow'
   return {
     ts: new Date(), ray: d.ray, ip: storeIp ? s.ip : null, ipHash: ipHash(s.ip), ipNet: s.ipNet,
-    country: s.country ?? null, asn: s.asn ?? null, asnOrg: s.asnOrg?.slice(0, 200) ?? null, asnKind: s.asnKind ?? null,
+    country: s.country ?? null, continent: s.continent ?? null, local: !!s.local, asn: s.asn ?? null, asnOrg: s.asnOrg?.slice(0, 200) ?? null, asnKind: s.asnKind ?? null,
     method: s.method.slice(0, 10), host: s.host.slice(0, 255), path: s.path.split('?')[0]!.slice(0, 500), ua: s.ua.slice(0, 300), uaFamily: s.uaFamily ?? null,
     botName: s.bot.name ?? null, botCategory: s.bot.category, botVerified: s.bot.verified, botVia: s.bot.via ?? null, spoofed: s.bot.spoofed,
     score: s.score, headerScore: s.headerScore, tlsJa4: s.tls?.ja4?.slice(0, 100) ?? null,
