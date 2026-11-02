@@ -43,7 +43,7 @@ and which backend each subsystem uses.
 | `allowedHosts` | Django `ALLOWED_HOSTS` | dev: localhost; prod: required |
 | `db` | `{ url, pool: { max, acquireMs, idleMs }, atomicRequests, slowQueryMs }` | `file:./tvine.db`, one transaction per request |
 | `session` | `{ ttlMs, maxAgeMs, cookieName, secure, sameSite, max, backend }` | 24 h idle, 14 days max, `lax` |
-| `limits` | `{ bodyBytes, handlerMs, rate: { limit, windowMs }, sseConnPerIp, backend }` | 64 KB, 10 s, 60/min |
+| `limits` | `{ bodyBytes, handlerMs, rate: { limit, windowMs, by }, sseConnPerIp, backend }` (`rate.by: 'shield'` lets Shield's rules be the only general rate limit, see [shield.md](shield.md#rate-limits-shield-and-the-framework)) | 64 KB, 10 s, 60/min, `'framework'` |
 | `trustProxy` | how many `X-Forwarded-For` hops to trust (drives `request.ip`) | `0` |
 | `middleware` / `actionMiddleware` | HTTP middleware (Django `MIDDLEWARE`) / around each action | RequestId, AllowedHosts, Security, Cors, GZip |
 | `security.headers` | HSTS, CSP, COOP, CORP, Referrer-Policy, Permissions-Policy | on |
@@ -105,6 +105,7 @@ the order it will use.
 | `ConditionalGet` | off | `ETag` → 304 | — |
 | `RateLimit` | off | per-IP limit on every path → 429 + `Retry-After` | `limit`, `windowMs`, `exempt` |
 | `IpFilter` | off | allow / deny by address or CIDR → 403 | `allow`, `deny`, `paths` |
+| `Shield` | off | bot protection: score, rules, challenges, the /shield panel; needs `tvine.shield` installed. See [shield.md](shield.md) | `prefix` |
 | `Maintenance` | off | 503 while `enabled` or while `file` exists | `enabled`, `file`, `retryAfter`, `allowIps`, `allowPaths`, `allowStaff`, `message` |
 | `BodyLimit` | off | body over the cap → 413 | `maxBytes`, `paths: { '/upload': n }` |
 | `Timeout` | off | no response in `ms` → 503 (streams are never cut) | `ms`, `exempt` |

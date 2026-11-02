@@ -19,6 +19,7 @@ npm package name: `tvinejs` (you import it and run it as `tvine`): `npm install 
 - **Next.js pages.** React 19 + Next 16 for the frontend, calling the backend through a typed `api.*` client.
 - **One Node process.** **Warp** is the server, **Weft** the frontend. Tvine is Icelandic for "twine two threads".
 - **Secure by default.** Host allow-list, CSP, CORS, sessions, 2FA, encrypted fields, human-only actions, confirm prompts for agents.
+- **Bot protection built in.** Shield scores every request, challenges bots with an invisible check or an image puzzle, and lets AI agents through. Rules, country rules and sandboxed JavaScript rules, managed from its own /shield panel with live analytics.
 
 ## Screenshots
 
@@ -92,6 +93,7 @@ Two modes: **headless** (the agent works on the server-rendered page, no browser
 | MCP, tab control, WebMCP, inspector | [agents-and-mcp.md](docs/agents-and-mcp.md) |
 | Admin panel, dashboard, charts, system pages | [admin.md](docs/admin.md) |
 | Auth, 2FA, tokens, permissions, security features | [auth-and-security.md](docs/auth-and-security.md) |
+| Bot protection (Shield): rules, challenges, code rules, analytics globe | [shield.md](docs/shield.md) |
 | Background tasks, cache, email | [tasks-cache-email.md](docs/tasks-cache-email.md) |
 | Testing | [testing.md](docs/testing.md) |
 | Every CLI command | [cli.md](docs/cli.md) |

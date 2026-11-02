@@ -256,46 +256,18 @@ gets a 400.
 
 ## Bot protection (tvine.shield)
 
-Cloudflare-style protection built in: every request gets signals (IP range, country/ASN, datacenter, Tor, browser
-header consistency, verified bots), a score from 1 (bot) to 99 (human), and your rules decide: pass, challenge,
-block or rate-limit. Real people pass an invisible check once and get a signed pass cookie.
+Cloudflare-style protection built in: every request gets signals (IP range, country, network, Tor, browser
+consistency, verified bots) and a score from 1 (bot) to 99 (human); your rules pass, challenge, block or rate-limit
+it. Real people pass an invisible check once. Managed from its own `/shield` panel.
 
 ```ts
 installedApps: [..., 'tvine.shield'],
 middleware: ['tvine.middleware.RequestId', 'tvine.middleware.AllowedHosts', 'tvine.middleware.Shield', ...],
-shield: { mode: 'log' },   // 'log' (default) records what it would do; 'enforce' acts; 'off'
+shield: { mode: 'log' },   // 'log' records what it would do; 'enforce' acts; 'off'
 ```
 
-Then `tvine migrate`. Start in `log` mode and watch the `/shield` panel (superusers only by default), then switch to
-`enforce`.
-
-Out of the box (editable in /shield → Rules, "reset" restores them):
-
-| Who | What happens |
-|---|---|
-| Spoofed bots (Googlebot UA that fails reverse DNS) | blocked |
-| Verified search engines | allowed |
-| AI agents acting for a user (Claude-User, ChatGPT-User…, Tvine API tokens, Web Bot Auth agents from `shield.webBotAuth.directories`) | allowed |
-| Scanners (sqlmap, nikto…) | blocked |
-| AI crawlers (GPTBot, ClaudeBot, CCBot…) | challenged |
-| More than 300 requests a minute from one IP | 429 |
-| Score below 30 on a page | challenged |
-
-- Agent paths (`/mcp`, `/tvine/*`, `/.well-known/*`, `/llms.txt`) never get an HTML challenge: a JSON 403/429.
-- Every response carries `tvine-ray` (look it up in /shield → Events), `tvine-shield` (`pass`, `challenge`, `block`, or
-  `would-…` in log mode) and `Server-Timing: shield;dur=…`.
-- Custom rules in code: `import { shield } from 'tvinejs/contrib/shield/index'` then
-  `shield.registerRule('vip', (req, s) => s.country === 'IS' ? { type: 'allow' } : undefined)`; pick it in the panel.
-- Country / ASN: run the `shield.ipdb_update` task (or "update now" in Settings) to download DB-IP Lite (monthly,
-  CC BY 4.0). Without it those signals are empty. AI-crawler IP ranges and Tor exits: `shield.ranges_update` (daily).
-- Locked out? `tvine shield mode off` or `tvine shield rules disable --all` (running servers pick it up within 3 s). The
-  panel, the admin and sign-in are never challenged.
-- Behind a proxy, set `trustProxy`; TLS fingerprints come only from `shield.tlsHeader` through a trusted proxy.
-- Who may open /shield: Settings → Panel access, a condition on the user (`isStaff eq true`, `groups contains
-  security`, any custom user field). Every shield.* action re-checks it, plus the admin hardening (allowIps, 2FA).
-- What is stored: only blocks/challenges and a 1% sample of passes (or everything with `events.logAll`), no query
-  strings, cookies, auth headers or bodies. Charts come from hourly rollups. Old data is pruned by the
-  `shield.cleanup` task (needs `tvine.tasks` + a beat).
+Then `tvine migrate`. Everything else (default rules, challenges, the panel, rules and code rules, country rules, rate
+limits, stored data, settings): [shield.md](shield.md).
 
 ## Audit
 
