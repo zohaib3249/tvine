@@ -11,7 +11,9 @@ export type Action =
   | { type: 'block'; status?: 403 | 404 | 429 | 451; message?: string }
   | { type: 'rateLimit'; limit: number; window: string; key: 'ip' | 'asn' | 'path' | 'ip+path' }
   | { type: 'custom'; name: string }
-export interface Rule { id: string; name: string; enabled: boolean; order: number; when: Condition; then: Action; ttl?: string; hits?: number; hits24h?: number; spark?: number[] }
+  | { type: 'code'; source: string }
+export interface Rule { id: string; name: string; enabled: boolean; order: number; when: Condition; then: Action; ttl?: string; hits?: number; hits24h?: number; spark?: number[]
+  code?: { errors1h: number; lastError?: { at: string; message: string; kind: string }; paused?: boolean } }
 export interface SensorReport {
   webdriver: boolean; headless: string[]; webgl?: string; canvas?: string; audio?: string
   screen: string; tz: string; langs: string[]; touch: number; cores?: number; plugins: number
@@ -87,3 +89,10 @@ export type IpProfile = {
   test: { action: string; reason: string; ruleId?: string; score: number }
 }
 export type RulePreview = { matched: number; scanned: number; sample: EventRow[] }
+
+// ---- code rules (shield.code.*) ---------------------------------------------------------------------------------------
+export type CodeField = { name: string; type: string; description: string }
+export type CodeTemplate = { template: string; fields: CodeField[]; actions: string[] }
+export type CodeProblem = { line: number; column: number; message: string }
+export type CodeCheck = { ok: boolean; errors: CodeProblem[] }
+export type CodeRun = { ok: boolean; result?: Action | null; error?: { kind: string; message: string; line?: number }; ms: number; logs: string[] }

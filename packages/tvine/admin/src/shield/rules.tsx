@@ -6,6 +6,7 @@ import { Sparkline } from '../charts.js'
 import { Dialog, SortableList, Switch } from '../../../weft/dist/widgets/index.js'
 import { useLiveData } from '../live.js'
 import { Empty, ErrorBox, Icon, Region, Skeleton, cx } from '../ui.js'
+import { CodePanel } from './code.js'
 import { ConditionBuilder } from './condition.js'
 import { useShield, write } from './ctx.js'
 import { RULE_FIELDS, describe } from './fields.js'
@@ -18,8 +19,8 @@ export const actionText = (a: Action): string =>
   a.type === 'challenge' ? `Challenge (${a.level}${a.ttl ? `, pass lasts ${a.ttl}` : ''})`
   : a.type === 'block' ? `Block ${a.status ?? 403}`
   : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window} per ${a.key}`
-  : a.type === 'custom' ? `Custom: ${a.name}` : a.type === 'allow' ? 'Allow' : 'Log only'
-const tone = (a: Action) => (a.type === 'block' || a.type === 'rateLimit' ? 'error' : a.type === 'challenge' ? 'warn' : a.type === 'log' || a.type === 'custom' ? 'info' : 'ok')
+  : a.type === 'custom' ? `Custom: ${a.name}` : a.type === 'code' ? 'Run code' : a.type === 'allow' ? 'Allow' : 'Log only'
+export const tone = (a: Action) => (a.type === 'block' || a.type === 'rateLimit' ? 'error' : a.type === 'challenge' ? 'warn' : a.type === 'log' || a.type === 'custom' || a.type === 'code' ? 'info' : 'ok')
 
 // a compact one-line expression: "country eq CN and score < 30 → Challenge (pow)"
 const SYM: Record<string, string> = { eq: 'eq', neq: 'ne', lt: '<', gt: '>', in: 'in', notIn: 'not in', contains: 'contains', startsWith: 'starts with', endsWith: 'ends with', regex: 'matches', cidr: 'in' }
@@ -34,7 +35,7 @@ export function expr(c: Condition): string {
   const v = Array.isArray(l.value) ? `{${l.value.join(' ')}}` : typeof l.value === 'string' ? (/\s/.test(l.value) || l.value === '' ? JSON.stringify(l.value) : l.value) : String(l.value)
   return `${l.field} ${SYM[l.op] ?? l.op} ${v}`
 }
-const actionShort = (a: Action) => (a.type === 'challenge' ? `Challenge (${a.level})` : a.type === 'block' ? `Block ${a.status ?? 403}` : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window}` : a.type === 'custom' ? `Custom ${a.name}` : a.type === 'allow' ? 'Allow' : 'Log')
+const actionShort = (a: Action) => (a.type === 'challenge' ? `Challenge (${a.level})` : a.type === 'block' ? `Block ${a.status ?? 403}` : a.type === 'rateLimit' ? `Rate limit ${a.limit}/${a.window}` : a.type === 'custom' ? `Custom ${a.name}` : a.type === 'code' ? 'Code' : a.type === 'allow' ? 'Allow' : 'Log')
 
 // move one id to a new index (SortableList onMove) — pure, tested
 export function moveId(ids: string[], id: string, to: number): string[] {
@@ -48,6 +49,7 @@ export function Rules() {
   const r = useLiveData<Rule[] | { rules: Rule[] }>(call, 'shield.rules.list', {})
   const [rules, setRules] = useState<Rule[]>()
   const [reset, setReset] = useState(false)
+  const [errOpen, setErrOpen] = useState<string>()
   useEffect(() => { const l = listOf(r.data); if (l) setRules([...l].sort((a, b) => a.order - b.order)) }, [r.data])
   const onMove = async (id: string, to: number) => {
     const ids = moveId(rules!.map((x) => x.id), id, to)
@@ -85,8 +87,9 @@ export function Rules() {
                 <Icon name="drag" className="tvs-grip text-muted" />
                 <span className="tvs-order">{rule.order + 1}</span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{rule.name}</p>
+                  <p className="flex min-w-0 items-center gap-1.5 font-medium"><span className="truncate">{rule.name}</span>{rule.then.type === 'code' && <CodeBadges rule={rule} open={errOpen === rule.id} onToggle={() => setErrOpen(errOpen === rule.id ? undefined : rule.id)} />}</p>
                   <p className="tvs-expr truncate" title={describe(rule.when)}>{expr(rule.when)} <span className="text-muted">→</span> <span data-t={tone(rule.then)}>{actionShort(rule.then)}</span></p>
+                  {errOpen === rule.id && <CodeError rule={rule} />}
                 </div>
                 <span className="tvs-decision hidden md:inline-flex" data-t={tone(rule.then)}>{actionText(rule.then)}</span>
                 <span className="hidden w-24 sm:block">{rule.spark && rule.spark.length > 1 && <Sparkline values={rule.spark} width={96} height={24} label={`${rule.name}, last 24h`} />}</span>
@@ -119,6 +122,7 @@ function prefill(q: Record<string, string>): Rule {
   const r = blank()
   try { if (q.when) r.when = JSON.parse(q.when) as Condition } catch { /* keep the blank */ }
   if (q.name) r.name = q.name.slice(0, 120)
+  if (q.action === 'code') r.then = { type: 'code', source: '' }
   return r
 }
 
@@ -129,6 +133,7 @@ export function RuleEditor({ id }: { id: string }) {
   const [draft, setDraft] = useState<Rule>()
   const [busy, setBusy] = useState(false)
   const [del, setDel] = useState(false)
+  const [codeErrors, setCodeErrors] = useState(0)
   const isNew = id === 'new'
   useEffect(() => {
     if (draft) return
@@ -138,6 +143,8 @@ export function RuleEditor({ id }: { id: string }) {
   }, [r.data])   // eslint-disable-line react-hooks/exhaustive-deps
   const back = () => navigate(`${base}/rules/`)
   if (!draft) return r.data && !isNew ? <Empty title="Rule not found" icon="search">It may have been deleted.</Empty> : <div className="tva-card"><Skeleton rows={8} /></div>
+  const code = draft.then.type === 'code' ? draft.then : undefined
+  const blocked = code && (codeErrors > 0 ? `Fix ${codeErrors === 1 ? 'the code problem' : `${codeErrors} code problems`} to save.` : !code.source.trim() ? 'Write some code to save.' : '')
   const save = async () => {
     setBusy(true)
     const { id: _id, hits: _h, hits24h: _h24, spark: _s, ...rest } = draft
@@ -166,18 +173,20 @@ export function RuleEditor({ id }: { id: string }) {
             <p className="mb-3 text-sm text-muted">The request must match these conditions. Now: <em>{describe(draft.when)}</em>.</p>
             <ConditionBuilder value={draft.when} fields={RULE_FIELDS} onChange={(when) => setDraft({ ...draft, when })} />
           </section>
-          <Preview when={draft.when} />
+          <Preview when={draft.when} then={code} />
         </div>
         <section className="tva-card h-fit p-4 xl:sticky xl:top-4">
           <h2 className="mb-3 font-semibold">Then</h2>
-          <ActionPicker value={draft.then} onChange={(then) => setDraft({ ...draft, then })} custom={custom.data ?? []} />
+          <ActionPicker value={draft.then} onChange={(then) => { setCodeErrors(0); setDraft({ ...draft, then }) }} custom={custom.data ?? []} />
           <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
-            <button type="button" agentId="save" className="tva-btn tva-btn-primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rule'}</button>
+            <button type="button" agentId="save" className="tva-btn tva-btn-primary" disabled={busy || !draft.name.trim() || !!blocked} aria-describedby={blocked ? 'save-why' : undefined} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rule'}</button>
             <button type="button" agentId="cancel" className="tva-btn" onClick={back}>Cancel</button>
             <div className="flex-1" />
             {!isNew && <button type="button" agentId="delete" className="tva-btn tva-btn-danger" onClick={() => setDel(true)}><Icon name="trash" size={14} />Delete</button>}
           </div>
+          {blocked && <p id="save-why" className="mt-2 text-[13px] text-danger" role="status">{blocked}</p>}
         </section>
+        {code && <div className="min-w-0 xl:col-span-2 xl:row-start-2"><CodePanel value={code} onChange={(then) => setDraft({ ...draft, then })} onErrors={setCodeErrors} ray={query.ray} /></div>}
       </div>
       <Dialog name="delete-rule" label="Delete rule" open={del} onOpenChange={setDel} slots={{ trigger: { className: 'hidden' } }}>
         <h2 className="text-lg font-semibold">Delete “{draft.name}”?</h2>
@@ -198,6 +207,7 @@ const ACTIONS: { type: Action['type']; label: string; help: string }[] = [
   { type: 'block', label: 'Block', help: 'Refuse with an error page (JSON on agent paths).' },
   { type: 'rateLimit', label: 'Rate limit', help: 'Allow up to N requests per time window, then answer 429.' },
   { type: 'custom', label: 'Custom', help: 'Run a rule your app registered in code with shield.registerRule(name, fn).' },
+  { type: 'code', label: 'Run code', help: 'Write JavaScript below that looks at the request and returns an action. Shield runs it in a sandbox. If it throws or runs too long, the rule is skipped: a broken rule never blocks traffic.' },
 ]
 export function defaultAction(type: Action['type'], custom: string[] = []): Action {
   switch (type) {
@@ -205,6 +215,7 @@ export function defaultAction(type: Action['type'], custom: string[] = []): Acti
     case 'block': return { type, status: 403 }
     case 'rateLimit': return { type, limit: 300, window: '1m', key: 'ip' }
     case 'custom': return { type, name: custom[0] ?? '' }
+    case 'code': return { type, source: '' }
     default: return { type }
   }
 }
@@ -215,8 +226,8 @@ export function ActionPicker({ value, onChange, custom }: { value: Action; onCha
     <div className="flex flex-col gap-3">
       <div role="radiogroup" aria-label="Action" className="grid grid-cols-3 gap-1.5">
         {ACTIONS.map((a) => (
-          <button key={a.type} type="button" role="radio" agentId={`action-${a.type}`} aria-checked={value.type === a.type} className="tvs-action" data-t={tone(defaultAction(a.type))}
-            onClick={() => value.type !== a.type && onChange(defaultAction(a.type, custom))}>{a.label}</button>
+          <button key={a.type} type="button" role="radio" agentId={`action-${a.type}`} aria-checked={value.type === a.type} className={cx('tvs-action', a.type === 'code' && 'col-span-3 inline-flex items-center justify-center gap-1.5')} data-t={tone(defaultAction(a.type))}
+            onClick={() => value.type !== a.type && onChange(defaultAction(a.type, custom))}>{a.type === 'code' && <Icon name="code" size={14} />}{a.label}</button>
         ))}
       </div>
       <p className="text-sm text-muted">{ACTIONS.find((a) => a.type === value.type)?.help}</p>
@@ -259,22 +270,23 @@ export function ActionPicker({ value, onChange, custom }: { value: Action; onCha
         <label className={lab}>Rule
           <select agentId="custom" className={cls} value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })}>{custom.map((n) => <option key={n}>{n}</option>)}</select>
         </label>
-      ) : <p className="rounded-md bg-sunken p-3 text-sm text-muted">No custom rules registered. Add one in app code: <code className="tva-kbd">shield.registerRule('name', fn)</code>.</p>)}
+      ) : <CustomEmpty onCode={() => onChange(defaultAction('code'))} />)}
+      {value.type === 'code' && <p className="rounded-md bg-sunken p-3 text-[13px] text-muted"><Icon name="code" size={13} className="mr-1 inline" />Edit and test the code in the editor below.</p>}
     </div>
   )
 }
 
 // live match preview: what this condition would have matched over the last 24h (debounced)
 export const PREVIEW_DEBOUNCE_MS = 400
-function Preview({ when }: { when: Condition }) {
+function Preview({ when, then }: { when: Condition; then?: Action }) {
   const { call, base, navigate } = useShield()
   const [res, setRes] = useState<{ data?: RulePreview; error?: string; busy: boolean }>({ busy: true })
-  const key = JSON.stringify(when)
+  const key = JSON.stringify([when, then])
   useEffect(() => {
     let live = true
     setRes((r) => ({ ...r, busy: true }))
     const t = setTimeout(async () => {
-      const r = await call('shield.rules.preview', { when, sinceHours: 24 })
+      const r = await call('shield.rules.preview', then ? { when, then, sinceHours: 24 } : { when, sinceHours: 24 })
       if (live) setRes(r.ok ? { data: r.data as RulePreview, busy: false } : { error: r.message, busy: false })
     }, PREVIEW_DEBOUNCE_MS)
     return () => { live = false; clearTimeout(t) }
@@ -288,6 +300,7 @@ function Preview({ when }: { when: Condition }) {
           <p className="text-sm text-muted" role="status">
             {res.error ? <span className="text-danger">{res.error}</span>
               : !d ? 'Checking the last 24 hours…'
+              : then ? <>The code would have decided <strong className="text-fg tabular-nums">{d.matched.toLocaleString()}</strong> of <span className="tabular-nums">{d.scanned.toLocaleString()}</span> stored requests in the last 24h{d.scanned ? ` (${Math.round((d.matched / d.scanned) * 1000) / 10}%)` : ''}.</>
               : <>Would have matched <strong className="text-fg tabular-nums">{d.matched.toLocaleString()}</strong> of <span className="tabular-nums">{d.scanned.toLocaleString()}</span> stored requests in the last 24h{d.scanned ? ` (${Math.round((d.matched / d.scanned) * 1000) / 10}%)` : ''}.</>}
           </p>
         </div>
@@ -307,6 +320,57 @@ function Preview({ when }: { when: Condition }) {
           </table>
         </div>
       )}
+    </Region>
+  )
+}
+
+// "Custom (app code)" with nothing registered: how to register one, or write the rule here instead
+export const REGISTER_SAMPLE = `import { shield } from 'tvinejs/contrib/shield/index'
+
+// req: the raw request · signals: ip, country, bot, score, rate…
+shield.registerRule('trusted-country', (req, signals) => {
+  if (signals.country === 'IS' && signals.score > 50) return { type: 'allow' }
+  return undefined   // no decision: the next rule runs
+})`
+function CustomEmpty({ onCode }: { onCode(): void }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => { try { await navigator.clipboard.writeText(REGISTER_SAMPLE); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* no clipboard: the text stays selectable */ } }
+  return (
+    <Region id="rule:custom-empty" label="No app rules" state={{ registered: 0 }} className="rounded-lg border border-line bg-sunken p-3 text-[13px]">
+      <p className="font-semibold">No app rules yet</p>
+      <p className="mt-1 text-muted">An app rule is a function in your server code. Register it at startup and it shows up here.</p>
+      <div className="tvs-sample mt-2">
+        <pre className="tva-pre !bg-surface text-[11.5px]">{REGISTER_SAMPLE}</pre>
+        <button type="button" agentId="copy-sample" className="tva-btn h-7 px-2 text-xs" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+      <button type="button" agentId="write-here" className="tva-btn tva-btn-primary mt-3 h-8 w-full text-xs" onClick={onCode}><Icon name="code" size={13} />Write it here instead</button>
+    </Region>
+  )
+}
+
+// code rule health in the rules list: errors in the last hour (click: the last one, under the row) and the paused state
+function CodeBadges({ rule, open, onToggle }: { rule: Rule; open: boolean; onToggle(): void }) {
+  const c = rule.code
+  const n = c?.errors1h ?? 0
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1" onKeyDown={(e) => e.stopPropagation()}>
+      <span className="tvs-badge" title="Code rule"><Icon name="code" size={11} />code</span>
+      {c?.paused && <span className="tvs-badge" data-t="warn" title="Paused after repeated errors. It is skipped, so requests go on to the next rules.">paused</span>}
+      {n > 0 && (
+        <button type="button" agentId={`code-errors-${rule.id}`} className="tvs-badge" data-t="error" aria-expanded={open} title={c?.lastError ? `${c.lastError.kind}: ${c.lastError.message}` : undefined} onClick={(e) => { e.stopPropagation(); onToggle() }}>
+          {num(n)} {n === 1 ? 'error' : 'errors'} / 1h
+        </button>
+      )}
+    </span>
+  )
+}
+function CodeError({ rule }: { rule: Rule }) {
+  const e = rule.code?.lastError
+  return (
+    <Region id={`code-error:${rule.id}`} label="Last code error" state={{ kind: e?.kind ?? null, message: e?.message ?? null, at: e?.at ?? null }} className="tvs-run mt-2 text-[13px] font-normal">
+      {e ? <p className="flex flex-wrap items-center gap-2"><span className="tvs-decision" data-t="error">{e.kind}</span><span className="break-all font-mono text-xs">{e.message}</span><span className="text-xs text-muted"><Ago ts={e.at} /></span></p>
+        : <p className="text-xs">No details kept.</p>}
+      <p className="mt-1 text-xs text-muted">A failing code rule is skipped: the request goes on to the next rules and is never blocked by the error.{rule.code?.paused ? ' This rule is paused after repeated errors.' : ''}</p>
     </Region>
   )
 }

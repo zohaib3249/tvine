@@ -162,6 +162,7 @@ function EventDrawer({ ray, rules, onFilterIp }: { ray: string; rules: Rule[]; o
           <button type="button" agentId="block-ip" className="tva-btn tva-btn-danger h-8 text-xs" onClick={() => void list('deny')}><Icon name="stop" size={13} />Block IP</button>
           <button type="button" agentId="allow-ip" className="tva-btn h-8 text-xs" onClick={() => void list('allow')}><Icon name="check" size={13} />Allow IP</button>
           <button type="button" agentId="create-rule" className="tva-btn tva-btn-primary col-span-2 h-8 text-xs" onClick={rule}><Icon name="plus" size={13} />Create rule from this</button>
+          <button type="button" agentId="test-code" className="tva-btn col-span-2 h-8 text-xs" onClick={() => navigate(`${base}/rules/new/?action=code&ray=${encodeURIComponent(ray)}&name=${encodeURIComponent(`Code rule from ${ray}`)}`)}><Icon name="code" size={13} />Test code with this event</button>
         </Region>
       )}
       <section>
