@@ -336,6 +336,19 @@ export const CATALOG: Record<string, Factory> = {
     processResponse(req, res) { if (b.debug) res.appendHeader('server-timing', `app;dur=${(performance.now() - req.tvine.start).toFixed(1)}`) },
   }),
 
+  // tvine.shield (docs/design/contrib/shield.md): signals → score → rules → pass / challenge / block. Needs 'tvine.shield'
+  // installed (settings refine). Loaded on first request so apps without it never load its models.
+  Shield: (o, b) => {
+    let mw: Promise<HttpMiddleware> | undefined
+    return {
+      name: 'Shield',
+      async processRequest(req, res) {
+        const m = await (mw ??= import('../contrib/shield/middleware.js').then((x) => x.shield(o, b)))
+        return m.processRequest!(req, res)
+      },
+    }
+  },
+
   // known-bad scanners' User-Agents get a 403. The agent surface (/mcp, /tvine/*, discovery, agent.json) is never blocked.
   BotGuard: (o, b) => {
     const re = (o.block as RegExp | undefined) ?? /sqlmap|nikto|masscan|zgrab|nmap|nuclei|acunetix|wpscan|dirbuster|gobuster|feroxbuster|ffuf|jaeles|netsparker|havij|w3af/i

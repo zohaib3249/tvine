@@ -137,7 +137,7 @@ export class Collector {
   private lastPrune = 0
   private readonly capSeen = new WeakMap<Cells, Map<string, Set<string>>>()
   private distinct = { hour: 0, seen: new Set<string>() }   // (key, term/path, visitor hash) seen this hour
-  onLive?: (type: 'agent' | 'security' | 'tick') => void
+  onLive?: (type: 'agent' | 'security' | 'tick' | 'shield') => void
 
   constructor(readonly o: {
     slowMs: number; retentionDays: number; now?: () => number
@@ -227,6 +227,7 @@ export class Collector {
       return
     }
     if (s.k === 'cache') { this.inc('cache', { c: s.alias, h: s.hit ? '1' : '0' }); return }
+    if (s.k === 'shield') { this.inc('shield', { d: s.decision, c: s.category, m: s.mode }); this.onLive?.('shield'); return }
     if (s.k === 'mail') {
       this.inc('mail', { ok: s.ok ? '1' : '0' }, undefined, s.n)
       if (!s.ok) this.mailFailedAt = this.now()

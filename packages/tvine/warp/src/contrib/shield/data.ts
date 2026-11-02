@@ -48,6 +48,7 @@ export function setRanges(r: RangesFile): void {
   ranges.updatedAt = r.updatedAt
 }
 export const inRanges = (source: string, ip: string): boolean => { const b = ranges.lists.get(source), v = isIP(ip); return !!b && !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4') }
+export const hasRanges = (source: string) => (ranges.lists.get(source)?.rules.length ?? 0) > 0
 export const isTor = (ip: string) => ranges.tor.has(ip)
 export const rangesStatus = () => ({ sources: ranges.lists.size, prefixes: [...ranges.lists.values()].reduce((n, b) => n + b.rules.length, 0), torExits: ranges.tor.size, updatedAt: ranges.updatedAt ?? null })
 
