@@ -1,8 +1,8 @@
 // tvine start --workers <n|auto> (or WEB_CONCURRENCY): one primary (node:cluster) forks N workers on one port, the OS
 // shares the connections. Each worker is a full `tvine start` (TVINE_WORKER=<slot>); the primary only checks the
 // settings, pings Redis, restarts crashed workers and stops them all on SIGTERM / SIGINT.
-// Nothing in the web server needs moving to one worker: beat runs only in `tvine worker --beat` (one leader through the
-// broker lock), the redis session sweep claims each expired sid once, the progress relay claims through redis, the
+// Nothing in the web server needs moving to one worker: beat runs only in `tvine worker --beat` or `--with-worker` (worker 1;
+// one leader through the broker lock either way), the redis session sweep claims each expired sid once, the progress relay claims through redis, the
 // outbox relay's enqueue skips a job id already there, shield hit counts / admin stats flush per-process buffers
 // (additive / per-process rows), and the memory-only per-process state is refused below.
 import cluster, { type Worker } from 'node:cluster'
@@ -63,7 +63,7 @@ const WINDOW_MS = 60_000, MAX_RESTARTS = 5, STOP_MS = 10_000
 
 // the primary: fork n workers, restart a crashed one (backoff 0.5 s, 1 s, 2 s …; more than 5 in a minute = that slot
 // stays down, loudly, the others keep serving), SIGTERM / SIGINT = every worker closes gracefully, then exit
-export function runPrimary(n: number, io: { out(s: string): void; err(s: string): void; exit(code: number): void }): void {
+export function runPrimary(n: number, io: { out(s: string): void; err(s: string): void; exit(code: number): void }, stopMs = STOP_MS): void {
   const live = new Set<Worker>(), crashes = new Map<number, number[]>(), up = new Set<number>(), dead = new Set<number>()
   let stopping = false
   const fork = (slot: number) => {
@@ -90,7 +90,7 @@ export function runPrimary(n: number, io: { out(s: string): void; err(s: string)
     if (stopping) return
     stopping = true
     for (const w of live) w.process.kill('SIGTERM')   // each worker: srv.close() (in-flight requests finish), exit 0
-    setTimeout(() => { io.err(`tvine start: workers did not stop within ${STOP_MS / 1000} s; killing them`); for (const w of live) w.process.kill('SIGKILL'); io.exit(1) }, STOP_MS).unref()
+    setTimeout(() => { io.err(`tvine start: workers did not stop within ${stopMs / 1000} s; killing them`); for (const w of live) w.process.kill('SIGKILL'); io.exit(1) }, stopMs).unref()
     if (!live.size) io.exit(0)
   }
   process.on('SIGTERM', stop); process.on('SIGINT', stop)

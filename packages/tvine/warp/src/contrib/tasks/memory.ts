@@ -320,8 +320,9 @@ export class MemoryBroker implements Broker {
   async stats(leaseMs: number): Promise<QueueStats> {
     const now = Date.now(), c = { queued: 0, scheduled: 0, running: 0, dead: 0 }
     for (const r of this.jobs.values()) if (r.status in c) c[r.status as keyof typeof c]++
+    const l = this.locks.get('beat'), beat = l && l.expiresAt > now ? l.owner : undefined
     return {
-      ...c,
+      ...c, ...(beat && { beat }),
       workers: [...this.workers.values()].sort((a, b) => a.name.localeCompare(b.name)).map((w) => ({ name: w.name, queues: w.queues, running: w.running, processed: w.processed, beatAgoMs: now - w.beatAt, stale: now - w.beatAt > leaseMs })),
     }
   }

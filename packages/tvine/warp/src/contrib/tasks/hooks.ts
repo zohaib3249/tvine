@@ -32,3 +32,4 @@ export async function ready(server: ServerCtx): Promise<void> {
     return (['queued', 'scheduled', 'running', 'dead'] as const).filter((k) => typeof s[k] === 'number').map((k) => [{ broker, status: k }, s[k]!])
   })
 }
+

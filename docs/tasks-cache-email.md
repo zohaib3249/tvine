@@ -65,17 +65,23 @@ More ways to enqueue: `apply({ args, countdown, eta, priority, queue, expires })
 The handler's second argument `ctx` has `jobId, attempt, signal, progress(pct, msg), retry({ inMs }), log()`.
 Progress is pushed live to the tab and the agent that started the job.
 
-### Run a worker
+### Run a job worker
+
+The web server (`tvine start` / `tvine dev`) does **not** run jobs: start a job worker next to it, or queued jobs
+wait forever and schedules never fire (`tvine start` warns once after ~30 s when no job worker is running).
 
 ```bash
 pnpm exec tvine worker
 pnpm exec tvine worker --queues default --concurrency 2
 # INFO  tvine.tasks worker.start worker=…:16247:bd5463 queues=["default"] concurrency=2
-pnpm exec tvine worker --beat           # also runs scheduled (cron) tasks; use --beat in ONE worker
+pnpm exec tvine worker --beat           # also runs scheduled (cron) tasks; several --beat workers are safe (one leads)
+pnpm exec tvine start --with-worker --beat   # small site: jobs + schedules inside the one web process
 ```
 
-Ctrl-C or SIGTERM: stop claiming, wait up to 30 s (`--grace`) for running jobs, then put unfinished ones back in the
-queue. With `broker: 'memory'` (dev and tests only) the web server runs jobs itself.
+Run as many job workers as you like: each job is claimed with a lease and runs once. Ctrl-C or SIGTERM: stop
+claiming, wait up to 30 s (`--grace`) for running jobs, then put unfinished ones back in the queue. With
+`broker: 'memory'` (dev and tests only) the web server runs jobs itself. Production setups, process-manager files
+and the safety checks: [deploy.md](deploy.md#background-jobs).
 
 ### Ops
 
@@ -86,8 +92,10 @@ pnpm exec tvine tasks purge --dead                # purged 0 dead job(s)
 pnpm exec tvine tasks compact                     # VACUUM tasks.db
 ```
 
-Also `tasks inspect <id>`, `tasks retry <id>`, and `tasks bench`. The admin lists jobs under System → Jobs, and
-`/tvine/health` reports queue counts.
+Also `tasks inspect <id>`, `tasks retry <id>`, and `tasks bench` ([cli.md](cli.md#tvine-tasks)). `tvine check` prints
+`tasks: N job worker(s) running · M job(s) waiting · scheduler on|off`. The admin lists jobs under System → Jobs and
+shows a **Job workers** tile under System → Health (red when jobs wait and no worker runs); `/tvine/health` reports
+queue counts.
 
 ### Settings
 

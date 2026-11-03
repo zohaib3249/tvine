@@ -4,10 +4,13 @@
 `settings.ts`):
 
 ```bash
-pnpm exec tvine            # prints every command
+pnpm exec tvine help              # every command
+pnpm exec tvine worker --help     # one command: usage, every flag with its default, examples (also -h, tvine help worker)
 ```
 
-Global flag: `--apps ./apps` (where your apps live; that is the default).
+Every command takes `--apps ./apps` (where your apps live; that is the default) and `--settings config/settings/prod`
+(or `TVINE_SETTINGS`). `--help` / `-h` works anywhere on the line and never runs the command. A mistyped flag or
+command names the closest real one (`unknown option '--queus'. Did you mean --queues?`) and lists the right flags.
 `TVINE_DEBUG=1` prints stack traces on errors.
 
 All examples below were run in `examples/notes`.
@@ -19,16 +22,7 @@ A bare `tvine` in a shell says "command not found" until you pick one:
 1. Inside a project: `pnpm exec tvine <cmd>` / `npx tvine <cmd>`, or a script like `"dev": "tvine dev"` then `pnpm dev`.
 2. Global: `npm i -g tvinejs` (gives the `tvine` command). From a clone: `cd packages/tvine && npm link`; undo with `npm unlink -g tvinejs`.
 
-## Scaffolding
-
-| Command | What it does |
-|---|---|
-| `npx tvinejs startproject my-app` | new project with a welcome page |
-| `tvine startproject <name> [dir] [--db sqlite\|postgres\|mysql] [--no-admin] [--no-tasks] [--pm pnpm\|npm\|yarn] [--no-install] [--local]` | same, from the CLI. `--no-admin` / `--no-tasks` leave out `tvine.admin` / `tvine.tasks`; `--pm` picks the package manager; `--no-install` skips the install; `--local` links this clone's packages |
-| `tvine startapp <name>` | `apps/<name>/` empty stubs; adds it to `installedApps` and its `include()` to `config/urls.ts` |
-| `tvine shell` | REPL with settings and models loaded |
-
-Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`).
+## Project layout
 
 ```
 mysite/
@@ -40,7 +34,7 @@ mysite/
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
 │  ├─ urls.ts               root URL table (settings.rootUrlconf)
-│  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
+│  └─ tasks.ts              job worker queues, beatSchedule (settings.tasksModule)
 ├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
@@ -79,125 +73,509 @@ Optional app files (create them when you need them):
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
-## Serve
+## Commands
 
-| Command | What it does |
-|---|---|
-| `start [--port 3000] [--host h] [--api-only] [--workers n\|auto]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s. `--workers` (or `WEB_CONCURRENCY`; the flag wins): that many worker processes on one port, `auto` = CPU cores, default 1; a crashed worker is restarted. More than 1 needs every backend on Redis (it refuses and lists what to change) and a reachable Redis. One worker on a multi-core machine prints a one-line hint ([deploy.md](deploy.md#2-scaling)) |
-| `dev [--port 3000] [--host h] [--noreload]` | Dev server: Next with hot reload, `tvine-api.d.ts` regenerated on save. The server restarts (same port) when any backend file changes (code, json, md, templates, `config/`, `lib/`, `.env*`, `package.json`…); pages, components and CSS hot-reload instead. Open tabs refresh by themselves after a restart. After a crash it waits for the next save. `--noreload`: one process, no restart |
-| `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed |
+Generated from the command spec (`packages/tvine/warp/src/cli/spec.ts`), the same one `tvine help` prints, so the
+two never disagree. Guides: [deploy.md](deploy.md) (start, workers), [tasks-cache-email.md](tasks-cache-email.md)
+(jobs), [models-and-orm.md](models-and-orm.md) (migrations), [shield.md](shield.md).
 
-```bash
-pnpm exec tvine dev --port 4612
-# listening on http://localhost:4612 (bound to [::], every interface)
+<!-- cli-reference: generated from packages/tvine/warp/src/cli/spec.ts; in packages/tvine/warp: UPDATE_CLI_DOCS=1 pnpm vitest run test/server/cli-help.test.ts -->
 
-TVINE_SECRET=$(openssl rand -hex 32) TVINE_ALLOWED_HOSTS=localhost,127.0.0.1 TVINE_SESSION_SECURE=0 \
-  pnpm exec tvine start --port 4610
+### Every command
 
-pnpm exec tvine inspect http://127.0.0.1:4610 --port 4611
-# inspector on http://127.0.0.1:4611 -> http://127.0.0.1:4610
+| Flag | Default | What it does |
+|---|---|---|
+| `--apps ./apps` | `apps` | where your apps live |
+| `--settings path` | - | the settings module to load (or TVINE_SETTINGS); default: config/settings/prod when NODE_ENV=production, else config/settings/dev |
+| `-h, --help` | - | print this help and exit (works anywhere on the line; the command does not run) |
+
+### Project
+
+#### `tvine startproject`
+
+```
+tvine startproject <name> [dir] [--db sqlite|postgres|mysql] [--no-admin] [--no-tasks] [--pm pnpm|npm|yarn] [--no-install] [--local]
 ```
 
-## Check and introspect
+Create a ready-to-run project (settings, urls, a welcome page, admin and background jobs) and install its packages.
 
-| Command | What it does |
-|---|---|
-| `check` | Settings, actions, migrations and the frontend/backend boundary (a page importing a model). Exit 1 on problems. Prints middleware order, env vars set (names only), backends |
-| `routes` | Every action: id, app, params, permissions, whether it is an MCP tool |
-| `show_urls` | The `urls.ts` routes: pattern, methods, name, action |
-| `generate [--check]` | Write `tvine-api.d.ts` (types for `api.*`). `--check` exits 1 when the file is stale (for CI) |
-
-```bash
-pnpm exec tvine show_urls
-# pattern                   methods  name         action
-# /api/notes/               GET      notes:notes  notes.list
-# /api/notes/<int:id>/pin/  POST     notes:pin    notes.pin
-```
-
-## Database
-
-| Command | What it does |
-|---|---|
-| `makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]` | Write migration files from model changes. `--check`: exit 1 if one is missing. `--allow-drop`: allow dropping columns/tables. `--merge`: merge two leaves. `--empty`: an empty migration for `app` |
-| `migrate [<app> [<target>\|zero]] [--check] [--plan] [--fake]` | Apply pending migrations. With `<app> <target>`: go forward or roll back to that migration; `zero` unapplies the whole app. `--plan` prints what would run, `--check` exits 1 if anything is pending, `--fake` marks as applied without running |
-| `sqlmigrate <app> <migration> [--backwards]` | Print the SQL of one migration (or of its rollback) |
-| `showmigrations` | Each app's migrations, `[X]` applied |
-| `dumpdata [app[.model] …] [--output f.json]` | Fixtures as JSON, in foreign-key order |
-| `loaddata <f.json> …` | Load fixtures in one transaction (upsert by pk) |
+| Flag | Default | What it does |
+|---|---|---|
+| `--db sqlite\|postgres\|mysql` | `sqlite` | the database the project starts with |
+| `--no-admin` | - | leave out tvine.admin |
+| `--no-tasks` | - | leave out tvine.tasks (background jobs) |
+| `--pm pnpm\|npm\|yarn` | `pnpm` | the package manager to install with |
+| `--no-install` | - | write the files only; install yourself |
+| `--local` | - | link this clone's packages instead of the npm ones |
 
 ```bash
-pnpm exec tvine migrate notes zero      # → unapplied notes.0001_initial
-pnpm exec tvine migrate notes           # → applied notes.0001_initial
-pnpm exec tvine dumpdata notes --output notes.json
-pnpm exec tvine loaddata notes.json     # → installed N object(s) from 1 fixture(s)
+npx tvinejs startproject my-app
+tvine startproject shop ./shop --db postgres --pm npm
 ```
 
-More: [models-and-orm.md](models-and-orm.md).
+#### `tvine startapp`
 
-## Users (needs `tvine.auth`)
+```
+tvine startapp <name>
+```
 
-| Command | What it does |
-|---|---|
-| `createsuperuser [--username u] [--email e] [--noinput]` | Make a staff superuser. `--noinput` reads `TVINE_SUPERUSER_USERNAME`, `_EMAIL`, `_PASSWORD` |
-| `changepassword <username>` | Set a password (prompts; needs a terminal) |
-| `privacy export <user> [--output file]` | A user's data as JSON |
-| `privacy erase <user> --yes` | Anonymize / delete a user's data (per model `onErase`). Refuses without `--yes` |
+Create apps/<name>/ with empty stubs, add it to installedApps and its include() to config/urls.ts.
 
 ```bash
-TVINE_SUPERUSER_USERNAME=admin TVINE_SUPERUSER_EMAIL=admin@example.com \
-TVINE_SUPERUSER_PASSWORD='change-me-please-42' pnpm exec tvine createsuperuser --noinput
-# Superuser created successfully.
-pnpm exec tvine privacy export admin --output admin.json
+tvine startapp blog
 ```
 
-## Background jobs (needs `tvine.tasks`)
+#### `tvine check`
 
-| Command | What it does |
-|---|---|
-| `worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]` | Run jobs. `--beat` also fires cron schedules. SIGTERM stops claiming and lets running jobs finish within the grace |
-| `tasks list [--status s] [--queue q] [--limit n]` | Queued / running / dead jobs |
-| `tasks inspect <id>` | One job in detail |
-| `tasks retry <id>` | Re-queue a failed job |
-| `tasks purge --dead` | Delete dead jobs |
-| `tasks compact` | Vacuum the job database |
-| `tasks bench [--jobs n] [--workers n] [--batch n]` | Raw jobs/s of the configured broker |
+```
+tvine check
+```
+
+Check settings, actions, migrations, Redis, background job workers and the frontend/database boundary; print middleware order, env vars set (names only) and backends. Exit 1 on problems.
 
 ```bash
-pnpm exec tvine worker
-# worker <host>:<pid>:<id>: 2 task(s), broker file, queues *, concurrency 10
-pnpm exec tvine tasks list
-# ID  TASK  STATUS  TRIES  QUEUE  CREATED
-pnpm exec tvine tasks bench --jobs 200
-# file: 200 jobs · enqueue 10342/s ... · claim+complete 11400 jobs/s ...
+tvine check
+tvine check --settings config/settings/prod
 ```
 
-More: [tasks-cache-email.md](tasks-cache-email.md).
+#### `tvine routes`
 
-## Maintenance
+```
+tvine routes
+```
 
-| Command | What it does |
-|---|---|
-| `audit prune [--days n]` | Delete audit rows older than n days (default `settings.audit.retentionDays`). Needs `tvine.audit` in `installedApps` |
-| `encryption rotate` | Re-encrypt every encrypted field with the newest key in `settings.encryption.keys` |
-| `shield mode off\|log\|enforce` | Change the Shield mode; running servers pick it up within 3 s. Needs `tvine.shield` |
-| `shield rules disable <id>\|--all` | Turn off one Shield rule, or all of them (the lock-out escape hatch) |
-| `shield lists` / `shield lists remove <value>\|--all` | Show Shield's allow / deny entries, or remove one (e.g. your own IP denied by mistake) |
-| `shield simulate [--count n] [--hours h]` / `--clear` | Dev only (`debug` on): realistic sample traffic from public IPs through your rules, tagged `simulated.tvine`; `--clear` removes it |
+Print every action: id, app, params, permissions, whether it is an MCP tool.
 
-| `docs` | Print the guides' URL |
-| `docs --ai` / `docs --ai --path` | Print the AI-assistant guide (`AGENTS.md`), or only its file path |
+```bash
+tvine routes
+```
+
+#### `tvine show_urls`
+
+```
+tvine show_urls
+```
+
+Print the urls.ts routes: pattern, methods, name, action.
+
+```bash
+tvine show_urls
+```
+
+#### `tvine generate`
+
+```
+tvine generate [--check]
+```
+
+Write tvine-api.d.ts (the types for api.*).
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--check` | - | write nothing; exit 1 when the file is missing or stale (for CI) |
+
+```bash
+tvine generate
+tvine generate --check
+```
+
+### Database
+
+#### `tvine makemigrations`
+
+```
+tvine makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
+```
+
+Write migration files from model changes.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--name x` | - | the new migration's name (default: generated from the changes) |
+| `--allow-drop` | - | allow a migration that drops columns or tables |
+| `--merge` | - | merge two migration leaves |
+| `--empty` | - | an empty migration for [app] (needs the app) |
+| `--check` | - | write nothing; exit 1 when a migration is missing (for CI) |
+| `--dry-run` | - | print what would be written, write nothing |
+
+```bash
+tvine makemigrations
+tvine makemigrations --check
+tvine makemigrations blog --empty --name seed_tags
+```
+
+#### `tvine migrate`
+
+```
+tvine migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
+```
+
+Apply pending migrations. <app>: forward to its latest; <target>: forward or roll back to it; zero: unapply the whole app.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--check` | - | apply nothing; exit 1 when anything is pending |
+| `--plan` | - | print what would run, run nothing |
+| `--fake` | - | mark as applied (or unapplied) without running the SQL |
+
+```bash
+tvine migrate
+tvine migrate notes zero
+tvine migrate --check
+```
+
+#### `tvine sqlmigrate`
+
+```
+tvine sqlmigrate <app> <migration> [--backwards]
+```
+
+Print the SQL of one migration for the connected database.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--backwards` | - | the SQL of its rollback instead |
+
+```bash
+tvine sqlmigrate notes 0001_initial
+```
+
+#### `tvine showmigrations`
+
+```
+tvine showmigrations
+```
+
+List each app's migrations; [X] = applied.
+
+```bash
+tvine showmigrations
+```
+
+#### `tvine dumpdata`
+
+```
+tvine dumpdata [app[.model] …] [--output f.json]
+```
+
+Print fixtures as JSON, in foreign-key order (every model, or the apps / models named).
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--output f.json` | - | write to this file instead of stdout |
+
+```bash
+tvine dumpdata notes --output notes.json
+```
+
+#### `tvine loaddata`
+
+```
+tvine loaddata <f.json> …
+```
+
+Load fixture files in one transaction (upsert by primary key).
+
+```bash
+tvine loaddata notes.json
+```
+
+#### `tvine encryption`
+
+```
+tvine encryption rotate
+```
+
+Re-encrypt every encrypted field with the newest key in settings.encryption.keys.
+
+```bash
+tvine encryption rotate
+```
+
+### Run
+
+#### `tvine dev`
+
+```
+tvine dev [--port n] [--host h] [--noreload]
+```
+
+Development server: Next with hot reload; the server restarts on any backend change (apps/, config/, .env…); tvine-api.d.ts is regenerated on save.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--port n` | `3000` | the port (or PORT); a busy port moves to the next free one unless forced |
+| `--host h` | `every interface` | the address to bind (or HOST) |
+| `--noreload` | - | one process, no restart on changes |
+
+```bash
+tvine dev
+tvine dev --port 4000
+```
+
+#### `tvine build`
+
+```
+tvine build
+```
+
+next build: the pages tvine start serves.
+
+```bash
+tvine build
+```
+
+#### `tvine start`
+
+```
+tvine start [--port n] [--host h] [--api-only] [--workers n|auto] [--with-worker] [--concurrency n] [--beat]
+```
+
+Production web server: pages (after tvine build), API, MCP. NODE_ENV=production by default, so it needs TVINE_SECRET and TVINE_ALLOWED_HOSTS. It runs no background jobs unless --with-worker is given: run `tvine worker --beat` next to it (about 30 s after start it warns once when no job worker is running). SIGTERM / SIGINT: graceful close, hard exit at 5 s (with --with-worker: the job grace + 5 s).
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--port n` | `3000` | the port (or PORT) |
+| `--host h` | `every interface` | the address to bind (or HOST) |
+| `--api-only` | - | no frontend: Next runs separately with TVINE_API_URL |
+| `--workers n\|auto` | `1` | web worker processes on one port (or WEB_CONCURRENCY; the flag wins); auto = CPU cores; a crashed one is restarted; more than 1 needs every backend on Redis (it refuses and lists what to change) |
+| `--with-worker` | - | also run a job worker inside the web process (small single-process sites); with --workers > 1 only web worker 1 runs it |
+| `--concurrency n` | `10` | with --with-worker: jobs at once |
+| `--beat` | - | with --with-worker: also run the scheduler (cron / every) |
+
+```bash
+tvine start
+tvine start --workers auto
+tvine start --with-worker --beat
+```
+
+#### `tvine shell`
+
+```
+tvine shell
+```
+
+Node REPL with settings loaded, the database configured and every model by name (await works).
+
+```bash
+tvine shell
+```
+
+#### `tvine test`
+
+```
+tvine test [vitest args]
+```
+
+vitest run; every argument after `test` goes to vitest.
+
+```bash
+tvine test
+tvine test apps/blog
+```
+
+### Users
+
+#### `tvine createsuperuser`
+
+```
+tvine createsuperuser [--username u] [--email e] [--noinput]
+```
+
+Create a staff superuser (tvine.auth). Prompts for what is missing.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--username u` | - | the username |
+| `--email e` | - | the email |
+| `--noinput` | - | no prompts: read TVINE_SUPERUSER_USERNAME / _EMAIL / _PASSWORD |
+
+```bash
+tvine createsuperuser
+TVINE_SUPERUSER_USERNAME=admin TVINE_SUPERUSER_EMAIL=a@example.com TVINE_SUPERUSER_PASSWORD='change-me-42' tvine createsuperuser --noinput
+```
+
+#### `tvine changepassword`
+
+```
+tvine changepassword <username>
+```
+
+Set a user's password (tvine.auth; prompts, needs a terminal).
+
+```bash
+tvine changepassword admin
+```
+
+#### `tvine privacy`
+
+```
+tvine privacy export|erase <username> [--output file] [--yes]
+```
+
+tvine.auth: a user's data as JSON (export), or anonymize / delete it per model onErase (erase).
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--output file` | - | export: write to this file (mode 600) instead of stdout |
+| `--yes` | - | erase: confirm (it cannot be undone) |
+
+```bash
+tvine privacy export alice --output alice.json
+tvine privacy erase alice --yes
+```
+
+### Jobs
+
+#### `tvine worker`
+
+```
+tvine worker [--queues a,b] [--concurrency n] [--beat] [--name x] [--grace ms]
+```
+
+Run a job worker (tvine.tasks): claims queued jobs with leases, so each job runs once; a dead worker's lease expires and another takes its job. Run as many as you like. SIGTERM: stop claiming, finish or release running jobs within the grace.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--queues a,b` | `config/tasks.ts queues, else *` | the queues to take jobs from; * = every queue |
+| `--concurrency n` | `10` | jobs at once in this worker |
+| `--beat` | - | also run the scheduler (cron / every); several --beat workers are safe: one leads, the others stand by and take over in ~30 s |
+| `--name x` | `<host>:<pid>:<random>` | the worker name shown in tasks list / admin |
+| `--grace ms` | `settings.tasks.graceMs (30000)` | on stop: how long running jobs may finish before they are released |
+
+```bash
+tvine worker --beat
+tvine worker --queues emails,default --concurrency 20
+tvine worker --name reports-1 --grace 60000
+```
+
+#### `tvine tasks`
+
+```
+tvine tasks list | inspect <id> | retry <id> | purge --dead | compact | bench [--status s] [--queue q] [--limit n] [--dead] [--jobs n] [--workers n] [--batch n]
+```
+
+Look at and fix background jobs: list them, show one, re-queue a dead one, delete dead ones, compact the file broker, or measure the broker.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--status s` | - | list: only this status: queued, running, success, dead, expired, cancelled or deduped |
+| `--queue q` | - | list: only this queue |
+| `--limit n` | `50` | list: at most n rows |
+| `--dead` | - | purge: delete the dead jobs |
+| `--jobs n` | `5000` | bench: jobs to push through |
+| `--workers n` | `4` | bench: claimers at once |
+| `--batch n` | `settings.tasks.claimBatch (10)` | bench: jobs per claim (max 100) |
+
+```bash
+tvine tasks list --status dead
+tvine tasks retry <id>
+tvine tasks bench --jobs 200
+```
+
+### Maintenance
+
+#### `tvine audit`
+
+```
+tvine audit prune [--days n]
+```
+
+tvine.audit: delete audit rows older than n days.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--days n` | `settings.audit.retentionDays` | keep this many days |
+
+```bash
+tvine audit prune
+tvine audit prune --days 90
+```
+
+#### `tvine shield`
+
+```
+tvine shield mode off|log|enforce | rules disable <id> | lists [remove <value>] | simulate [--all] [--count n] [--hours h] [--clear]
+```
+
+tvine.shield escape hatch (running servers pick changes up within 3 s): set the mode, turn rules off, show / remove allow-deny entries, or (dev only) add sample traffic.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--all` | - | rules disable / lists remove: every rule / entry |
+| `--count n` | `300` | simulate: requests to add |
+| `--hours h` | `24` | simulate: spread over the last h hours |
+| `--clear` | - | simulate: remove the simulated traffic |
+
+```bash
+tvine shield mode log
+tvine shield rules disable --all
+tvine shield lists remove 203.0.113.7
+```
+
+### Tools
+
+#### `tvine inspect`
+
+```
+tvine inspect [url] [--port n]
+```
+
+Dev inspector on 127.0.0.1: the page and the agent's view side by side, with a live command feed.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--port n` | `7357` | the inspector's port |
+
+```bash
+tvine inspect
+tvine inspect http://127.0.0.1:4610 --port 4611
+```
+
+#### `tvine docs`
+
+```
+tvine docs [--ai] [--path]
+```
+
+Print the guides' URL.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--ai` | - | print the AI-assistant guide (AGENTS.md) instead |
+| `--path` | - | with --ai: only its file path |
+
+```bash
+tvine docs
+tvine docs --ai --path
+```
+
+#### `tvine help`
+
+```
+tvine help [command]
+```
+
+Every command, or one command's usage, flags and examples.
+
+```bash
+tvine help
+tvine help worker
+```
+
+<!-- /cli-reference -->
 
 Inside a project the full docs ship in the package: `node_modules/tvine/llms-full.txt` (everything in one file) and
 `node_modules/tvine/docs/<topic>.md`.
-
-```bash
-pnpm exec tvine encryption rotate     # → re-encrypted 0 row(s) with the newest key
-```
 
 ## Gotchas
 
 - `start` is production mode: no secret or no allowed hosts → it exits with the fix in the message. Use `dev`
   locally.
+- `start` runs no background jobs (unless `--with-worker`): run `tvine worker --beat` next to it. About 30 s after
+  start, a server whose jobs nobody runs prints once:
+  `tvine start: background jobs are queued but no job worker is running. Start one: tvine worker --beat   (see docs/deploy.md#background-jobs)`.
+  See [deploy.md](deploy.md#how-a-tvine-app-runs-in-production).
 - `changepassword` needs an interactive terminal; in scripts use `createsuperuser --noinput` or the admin.
 - `audit prune` without `tvine.audit` installed exits 1 with "add 'tvine.audit' to settings.installedApps".
 - `inspect` binds to 127.0.0.1 and is for development only.

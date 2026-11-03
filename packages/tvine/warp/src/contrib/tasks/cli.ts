@@ -12,7 +12,7 @@ import { STATUSES, type JobStatus } from './models.js'
 import { OutboxRelay } from './relay.js'
 import { dirname } from 'node:path'
 import { appModule, importApp } from '../../core/actions.js'
-import { checkSchedule, configureTasks, discoverTasks, type ScheduleOpt, type Task } from './task.js'
+import { checkSchedule, configureTasks, discoverTasks, tasks, type ScheduleOpt, type Task } from './task.js'
 import { Worker, type Log } from './worker.js'
 
 export interface Io { out(s: string): void; err(s: string): void; exit(code: number): void }
@@ -91,7 +91,7 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   const stop = () => {
     if (stopping) { io.err('tvine worker: second signal, exiting now'); io.exit(1); return }
     stopping = true
-    io.err(`tvine worker: stopping (${w.busy} running; grace ${settings.tasks.graceMs} ms)`)
+    io.err(`tvine worker: stopping (${w.busy} running; grace ${int(o.grace, 'grace', 0) ?? settings.tasks.graceMs} ms)`)
     void (async () => {
       await beat?.stop()
       await outbox.stop()
@@ -106,6 +106,22 @@ export async function workerCommand(apps: string, settings: Settings, o: Flags, 
   }
   process.on('SIGTERM', stop); process.on('SIGINT', stop)
   return undefined
+}
+
+// `tvine start --with-worker`: a job worker (and with beat, the scheduler) inside the web process, after its ready()
+// configured the broker and found the tasks. config/tasks.ts (queues, beatSchedule) applies like in `tvine worker`.
+// Broker 'memory' already runs an embedded worker (hooks.ts): only the scheduler is added then.
+export async function embeddedWorker(apps: string, settings: Settings, o: { concurrency?: number; beat?: boolean }, log: Log): Promise<{ name: string; stop(): Promise<void> }> {
+  await withTasksModule(apps, settings, tasks())
+  const w = settings.tasks.broker === 'memory' ? undefined
+    : new Worker({ queues: tasksConfig.queues?.length ? tasksConfig.queues : '*', concurrency: o.concurrency, log })
+  const beat = o.beat ? new Beat({ log }) : undefined
+  await w?.start()
+  beat?.start()
+  return {
+    name: [w ? `job worker ${w.name} (concurrency ${w.concurrency})` : 'jobs run by the memory broker', beat && 'scheduler'].filter(Boolean).join(' + '),
+    async stop() { await beat?.stop(); await w?.stop() },
+  }
 }
 
 export async function tasksCommand(apps: string, settings: Settings, args: string[], o_: Flags, io: Io): Promise<number> {

@@ -126,3 +126,25 @@ export function healthSection(leaseMs: number, log: ServerCtx['log'], refreshMs 
     }
   }
 }
+
+// Who runs the jobs: live (non-stale) job workers, jobs ready to run, the scheduler leader. Shared by `tvine check`,
+// the admin's System > Health tile and the `tvine start` warning. alarm: jobs wait and nobody will ever take them.
+export interface JobWorkers { running: number; waiting: number; scheduler?: string; alarm: boolean }
+export function jobWorkers(s: QueueStats): JobWorkers {
+  const running = s.workers.filter((w) => !w.stale).length
+  return { running, waiting: s.queued, ...(s.beat && { scheduler: s.beat }), alarm: running === 0 && s.queued > 0 }
+}
+export const jobWorkersLine = (j: JobWorkers): string => `tasks: ${j.running} job worker(s) running · ${j.waiting} job(s) waiting`
+
+// `tvine start` with a broker outside this process (file / db / redis) runs no jobs and no schedules itself: without a
+// `tvine worker` queued jobs wait forever, silently. ~30 s after start (a worker started alongside has registered by
+// then), one line when the broker knows no live job worker. Not in dev, not with broker 'memory' (jobs run here).
+export const NO_WORKER = 'tvine start: background jobs are queued but no job worker is running. Start one: tvine worker --beat   (see docs/deploy.md#background-jobs)'
+export function noWorkerWarning(settings: Pick<Settings, 'installedApps' | 'tasks'>, say: (s: string) => void, o: { dev?: boolean; delayMs?: number } = {}): () => void {
+  if (o.dev || !settings.installedApps.includes('tvine.tasks') || (settings.tasks.broker ?? 'file') === 'memory') return () => {}
+  const t = setTimeout(() => {
+    broker().stats(settings.tasks.leaseMs).then((s) => { if (jobWorkers(s).running === 0) say(NO_WORKER) }, () => undefined)
+  }, o.delayMs ?? 30_000)
+  t.unref()
+  return () => clearTimeout(t)
+}

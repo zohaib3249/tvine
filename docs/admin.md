@@ -162,7 +162,7 @@ Under **System** in the sidebar (`/admin/system/<page>/`):
 
 | Page | Shows | Who |
 |---|---|---|
-| Health | database latency, pending migrations, Redis, task queue, cache hit rate, mail, memory, event-loop lag, config warnings | staff |
+| Health | database latency, pending migrations, Redis, task queue, job workers (running · waiting · scheduler on/off with the leader; red when jobs wait and no worker runs), cache hit rate, mail, memory, event-loop lag, config warnings | staff |
 | Traffic | requests, status codes, latency per route | staff |
 | Metrics | counters and histograms | staff |
 | Agents | connected agents and controlled tabs; **Stop** ends an agent's tab control | staff (Stop: superuser) |
