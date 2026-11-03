@@ -1,6 +1,6 @@
 {
   "name": "tvinejs",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Tvine: agent-native full-stack web framework. TypeScript backend (ORM, migrations, auth, admin, tasks, built-in MCP server) + Next.js/React frontend that AI agents can read and drive.",
   "keywords": [
     "agent-native",
