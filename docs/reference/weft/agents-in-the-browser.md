@@ -245,7 +245,7 @@ Not covered: the inspector's full feature list (it lives in `packages/tvine/insp
 
 - `HumanOnly` stops in-tab agents and synthetic events, but `do` / MCP / HTTP can still call the action unless the action has `rules.humanOnly`.
 - `do` skips page hooks by design. Put rules that must always hold on the server action.
-- During a **remote-tab** step, `api.*` calls your own handlers make are not marked as agent calls (only WebMCP steps set the mark in this version). See [api-client.md](api-client.md#agent-marking).
+- During a **remote-tab** step, the server marks every request of the session as an agent request (even `api.*` calls your own handlers make), so `rules.humanOnly` holds. See [api-client.md](api-client.md#agent-marking).
 - Agent-typed text is instant unless `typing: 'animate'`; tests that watch keystrokes need that.
 - The Allow prompt cannot be clicked by scripts, test runners that fake events, or an agent: approve it by hand.
 

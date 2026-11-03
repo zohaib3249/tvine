@@ -229,7 +229,7 @@ The server always knows whether a call came from an agent:
 | A person's click → `api.*` | human |
 | A WebMCP agent's step runs a control whose handler calls `api.*` | agent (`via: 'webmcp'`): while a step runs, the browser build adds `agentCmd: { via }` to the body |
 | A remote agent driving the tab, or the dev gallery's "try it as agent": the executor's own posts (a control bound to a server action, the `do` tool) | agent (`agentCmd: { via: 'channel' \| 'inspector' }`) |
-| A remote agent driving the tab: `api.*` calls made by *your* handlers during its step | **not marked** — the executor sets the in-page mark only for `via: 'webmcp'` steps (see Gotchas) |
+| A remote agent driving the tab: `api.*` calls made by *your* handlers during its step | **agent** — the browser does not add the mark, but the server marks every request of the session as agent while a forwarded command runs (and a short time after), whatever the client sends (`asAgent` in warp `core/dispatch.ts`) |
 | A server component rendered for an agent's snapshot | agent (split mode forwards the agent flag from `x-tvine` / the tvine `Accept` header) |
 
 The marker is downgrade-only: page code can mark its own call as agent, never turn an agent call into a
@@ -251,7 +251,7 @@ human one. `rules.humanOnly`, `denyAgents` and `mcp: false` are enforced on the 
 - After a mutation in a client component, call `router.refresh()` yourself; `api.*` does not.
 - `api.*` sends JSON only; for file uploads post `multipart/form-data` yourself (see [forms.md](forms.md#file-uploads)).
 - Do not import `apps/**`, models or the ORM in frontend files; `tvine check` fails. `import type` is fine.
-- Not covered / possible gap: during a remote-tab agent step, `api.*` calls your own click handlers make are sent without the agent marker (only WebMCP steps set it in this version). The server then sees them as the person's own calls, so `rules.humanOnly` does not stop them; wrap such buttons in `HumanOnly` (the in-tab executor refuses those).
+- During a remote-tab agent step the browser does not mark your handlers' `api.*` calls, but the server does: while a forwarded command runs in a tab of the session, every request of that session is an agent request, so `rules.humanOnly` still refuses them. (Per session, not per tab: a person acting in another tab of the same session at that moment is treated as agent too, which is stricter, never looser.)
 - `currentUser()` returns `null` on any error, not only when signed out.
 - `api` is a Proxy: `api.shop.foo` exists for any name; a wrong name fails at call time with `unknown_action` (types catch it once `tvine-api.d.ts` is generated).
 
