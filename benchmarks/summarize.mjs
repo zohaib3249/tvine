@@ -42,3 +42,11 @@ if (rp.length) {
   console.log('\n### Fixed-rate ramp, GET /api/items/<id>, all cores, 200 conns, 4 clients\n\n| server | target req/s | attempt | achieved req/s (completed / wall time) | p50 ms | p99 ms | max | errors+non2xx % | server CPU % | client CPU % |\n|---|---|---|---|---|---|---|---|---|---|')
   for (const r of rp) { const m = r.median; console.log(`| ${r.server} | ${r.targetRps} | ${r.attempt}${r.failed ? ' (failed)' : ''} | ${f(m.reqTotal / m.durationS)} | ${f(m.latency.p50, 1)} | ${f(m.latency.p99, 1)} | ${f(m.latency.max, 1)} | ${f(r.errPct, 2)} | ${f(m.server.cpuPctAvg)} | ${cc(m.clientCpuPct)} |`) }
 }
+const mem = R.runs.filter((r) => r.section === 'memory')
+if (mem.length) {
+  console.log('\n### Memory: one Tvine process, back-to-back 15 s runs (heap via inspector after each run)\n\n| run | req/s | p99 ms | RSS max during run MB | heapUsed MB | heapUsed after forced GC MB | RSS after GC MB |\n|---|---|---|---|---|---|---|')
+  for (const r of mem) console.log(r.kind === 'start' ? `| start (idle) | – | – | ${f(r.rssMB)} | ${r.heapMB.before.heapUsed} | ${r.heapMB.afterGc.heapUsed} | ${r.heapMB.afterGc.rss} |`
+    : `| ${r.kind} #${r.run} | ${f(r.median.reqPerSec)} | ${r.median.latency.p99} | ${f(r.median.server.rssMBMax)} | ${r.heapMB.before.heapUsed} | ${r.heapMB.afterGc.heapUsed} | ${r.heapMB.afterGc.rss} |`)
+}
+const wa = R.runs.filter((r) => r.section === 'workers-attribution').at(-1)
+if (wa) console.log(`\n### Tvine x8: built-in workers vs cluster wrapper, both with Redis backends\n\n| variant | req/s | Redis ops/s | Redis CPU % |\n|---|---|---|---|\n| ${wa.builtin.desc} | ${f(wa.builtin.reqPerSec)} | ${wa.builtin.redisOpsPerSec} | ${wa.builtin.redisCpuPct} |\n| ${wa.wrapper.desc} | ${f(wa.wrapper.reqPerSec)} | ${wa.wrapper.redisOpsPerSec} | ${wa.wrapper.redisCpuPct} |\n\n${wa.finding}`)

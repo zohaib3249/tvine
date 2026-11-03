@@ -113,7 +113,7 @@ const html = `<!doctype html>
   <section>
     <h2>All cores and rising load</h2>
     <div class="grid">
-      <div class="card"><h3>Eight processes each</h3><p class="note">200 connections from 4 load processes on the same 8 cores. Tvine has no built-in multi-process mode yet, so it ran under a small cluster wrapper.</p><div class="legend" id="lg-cores"></div><div class="chart" id="ch-cores"></div></div>
+      <div class="card"><h3>Eight processes each</h3><p class="note">200 connections from 4 load processes on the same 8 cores. Tvine runs tvine start --workers 8 with sessions and rate limits shared on Redis; that Redis bookkeeping (about 19 calls per request) is its limit here, the next speed task.</p><div class="legend" id="lg-cores"></div><div class="chart" id="ch-cores"></div></div>
       <div class="card"><h3>One process, more connections</h3><p class="note">One row by id, from 10 to 500 open connections. A flat line means the process was already full at 10.</p><div class="legend" id="lg-scale"></div><div class="chart" id="ch-scale"></div></div>
     </div>
     <div class="card"><h3>Fixed-rate ramp, eight processes</h3><p class="note">The client sends at a fixed rate; a step fails when p99 goes over the dashed line or more than 1% of requests fail (red dots). 100,000 a second was not reachable here: the load processes ran out of CPU first.</p><div class="legend" id="lg-ramp"></div><div class="chart" id="ch-ramp"></div></div>

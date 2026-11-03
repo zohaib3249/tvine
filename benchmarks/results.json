@@ -9731,6 +9731,3422 @@
     "timeWaitAtStart": 0
    },
    "label": "open-loop fixed rate 100000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T09:49:50.403Z",
+   "section": "main",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "kind": "ping",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 12970.4,
+    "reqTotal": 194543,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 3,
+     "p90": 5,
+     "p99": 7,
+     "max": 26,
+     "mean": 3.34
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 194543
+    },
+    "throughputMBs": 10.6225664,
+    "clientCpuPct": 46.19747837992978,
+    "server": {
+     "cpuPctAvg": 116.08472806291128,
+     "cpuPctMax": 126.04769329595022,
+     "rssMBAvg": 346.99583333333334,
+     "rssMBMax": 348.609375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 13057.87,
+     "reqTotal": 195859,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 3,
+      "p90": 4,
+      "p99": 7,
+      "max": 56,
+      "mean": 3.32
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 195859
+     },
+     "throughputMBs": 10.694109869999998,
+     "clientCpuPct": 45.61148461367137,
+     "server": {
+      "cpuPctAvg": 116.45954785014345,
+      "cpuPctMax": 122.87462180777294,
+      "rssMBAvg": 364.453125,
+      "rssMBMax": 401.0625,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 12970.4,
+     "reqTotal": 194543,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 3,
+      "p90": 5,
+      "p99": 7,
+      "max": 26,
+      "mean": 3.34
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 194543
+     },
+     "throughputMBs": 10.6225664,
+     "clientCpuPct": 46.19747837992978,
+     "server": {
+      "cpuPctAvg": 116.08472806291128,
+      "cpuPctMax": 126.04769329595022,
+      "rssMBAvg": 346.99583333333334,
+      "rssMBMax": 348.609375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 12748,
+     "reqTotal": 191208,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 3,
+      "p90": 5,
+      "p99": 8,
+      "max": 61,
+      "mean": 3.42
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 191208
+     },
+     "throughputMBs": 10.43961174,
+     "clientCpuPct": 45.63248154709675,
+     "server": {
+      "cpuPctAvg": 116.06586340985805,
+      "cpuPctMax": 123.97979129401924,
+      "rssMBAvg": 350.446875,
+      "rssMBMax": 355.25,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "ping",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:50:43.750Z",
+   "section": "main",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "kind": "get",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 8048.67,
+    "reqTotal": 120715,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 5,
+     "p90": 7,
+     "p99": 12,
+     "max": 61,
+     "mean": 5.7
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 120715
+    },
+    "throughputMBs": 7.448576,
+    "clientCpuPct": 30.848047223593856,
+    "server": {
+     "cpuPctAvg": 110.10505256839859,
+     "cpuPctMax": 114.023479372802,
+     "rssMBAvg": 348.98333333333335,
+     "rssMBMax": 362.28125,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 8048.67,
+     "reqTotal": 120715,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 5,
+      "p90": 7,
+      "p99": 12,
+      "max": 61,
+      "mean": 5.7
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 120715
+     },
+     "throughputMBs": 7.448576,
+     "clientCpuPct": 30.848047223593856,
+     "server": {
+      "cpuPctAvg": 110.10505256839859,
+      "cpuPctMax": 114.023479372802,
+      "rssMBAvg": 348.98333333333335,
+      "rssMBMax": 362.28125,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 8084.8,
+     "reqTotal": 121263,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 5,
+      "p90": 7,
+      "p99": 12,
+      "max": 108,
+      "mean": 5.68
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 121263
+     },
+     "throughputMBs": 7.48161707,
+     "clientCpuPct": 31.373121765989826,
+     "server": {
+      "cpuPctAvg": 109.7913422136507,
+      "cpuPctMax": 112.97525841840621,
+      "rssMBAvg": 349.43854166666665,
+      "rssMBMax": 361.234375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 6824.6,
+     "reqTotal": 102361,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 6,
+      "p90": 9,
+      "p99": 22,
+      "max": 211,
+      "mean": 6.82
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 102361
+     },
+     "throughputMBs": 6.3162367999999995,
+     "clientCpuPct": 30.874012163221902,
+     "server": {
+      "cpuPctAvg": 101.80736145071637,
+      "cpuPctMax": 111.06937204160052,
+      "rssMBAvg": 341.64270833333336,
+      "rssMBMax": 351.6875,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "get",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:51:37.069Z",
+   "section": "main",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "kind": "list",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 4680.94,
+    "reqTotal": 70212,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 10,
+     "p90": 12,
+     "p99": 22,
+     "max": 114,
+     "mean": 10.18
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 70212
+    },
+    "throughputMBs": 14.26909867,
+    "clientCpuPct": 20.24930692569209,
+    "server": {
+     "cpuPctAvg": 105.99464556339565,
+     "cpuPctMax": 112.1220354173027,
+     "rssMBAvg": 341.246875,
+     "rssMBMax": 351.09375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 4555.4,
+     "reqTotal": 68326,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 10,
+      "p90": 13,
+      "p99": 22,
+      "max": 247,
+      "mean": 10.47
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 68326
+     },
+     "throughputMBs": 13.88516694,
+     "clientCpuPct": 21.283970746976717,
+     "server": {
+      "cpuPctAvg": 107.04202869295179,
+      "cpuPctMax": 111.04150631568761,
+      "rssMBAvg": 331.15625,
+      "rssMBMax": 351.390625,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 4680.94,
+     "reqTotal": 70212,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 10,
+      "p90": 12,
+      "p99": 22,
+      "max": 114,
+      "mean": 10.18
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 70212
+     },
+     "throughputMBs": 14.26909867,
+     "clientCpuPct": 20.24930692569209,
+     "server": {
+      "cpuPctAvg": 105.99464556339565,
+      "cpuPctMax": 112.1220354173027,
+      "rssMBAvg": 341.246875,
+      "rssMBMax": 351.09375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 4871.07,
+     "reqTotal": 73060,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 9,
+      "p90": 12,
+      "p99": 20,
+      "max": 192,
+      "mean": 9.76
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 73060
+     },
+     "throughputMBs": 14.848,
+     "clientCpuPct": 20.109012667496355,
+     "server": {
+      "cpuPctAvg": 108.38516494564936,
+      "cpuPctMax": 112.95223532348506,
+      "rssMBAvg": 334.68854166666665,
+      "rssMBMax": 347.421875,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "list",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:52:35.485Z",
+   "section": "main",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "kind": "cached",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 11063.2,
+    "reqTotal": 165936,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 4,
+     "p90": 5,
+     "p99": 7,
+     "max": 40,
+     "mean": 4.02
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 165936
+    },
+    "throughputMBs": 10.23918081,
+    "clientCpuPct": 31.768501277068488,
+    "server": {
+     "cpuPctAvg": 115.16251810992577,
+     "cpuPctMax": 119.94185818424366,
+     "rssMBAvg": 397.665625,
+     "rssMBMax": 407.0625,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0,
+    "cache": {
+     "hits": 165986,
+     "misses": 0,
+     "hitRatio": 1
+    }
+   },
+   "all": [
+    {
+     "reqPerSec": 11053.07,
+     "reqTotal": 165782,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 4,
+      "p90": 5,
+      "p99": 7,
+      "max": 87,
+      "mean": 4.02
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 165782
+     },
+     "throughputMBs": 10.22880427,
+     "clientCpuPct": 31.779875490588523,
+     "server": {
+      "cpuPctAvg": 115.55586934643337,
+      "cpuPctMax": 118.98303004533865,
+      "rssMBAvg": 413.5208333333333,
+      "rssMBMax": 419.8125,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 165832,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    },
+    {
+     "reqPerSec": 11124.54,
+     "reqTotal": 166838,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 4,
+      "p90": 5,
+      "p99": 7,
+      "max": 40,
+      "mean": 4
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 166838
+     },
+     "throughputMBs": 10.294886400000001,
+     "clientCpuPct": 31.61164448552619,
+     "server": {
+      "cpuPctAvg": 115.08676946875121,
+      "cpuPctMax": 119.03753646348612,
+      "rssMBAvg": 403.615625,
+      "rssMBMax": 408.59375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 166888,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    },
+    {
+     "reqPerSec": 11063.2,
+     "reqTotal": 165936,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 4,
+      "p90": 5,
+      "p99": 7,
+      "max": 40,
+      "mean": 4.02
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 165936
+     },
+     "throughputMBs": 10.23918081,
+     "clientCpuPct": 31.768501277068488,
+     "server": {
+      "cpuPctAvg": 115.16251810992577,
+      "cpuPctMax": 119.94185818424366,
+      "rssMBAvg": 397.665625,
+      "rssMBMax": 407.0625,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 165986,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "cached",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:53:28.812Z",
+   "section": "main",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "kind": "post",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 6194.54,
+    "reqTotal": 92908,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 7,
+     "p90": 10,
+     "p99": 17,
+     "max": 159,
+     "mean": 7.57
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "201": 92908
+    },
+    "throughputMBs": 5.7331712,
+    "clientCpuPct": 25.49806919030208,
+    "server": {
+     "cpuPctAvg": 105.52697792175543,
+     "cpuPctMax": 112.03577201368165,
+     "rssMBAvg": 398.11041666666665,
+     "rssMBMax": 405.6875,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 5263.07,
+     "reqTotal": 78942,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 7,
+      "p90": 11,
+      "p99": 31,
+      "max": 561,
+      "mean": 8.99
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 78942
+     },
+     "throughputMBs": 4.86744747,
+     "clientCpuPct": 23.43796920463495,
+     "server": {
+      "cpuPctAvg": 95.5378213269387,
+      "cpuPctMax": 111.89950495688943,
+      "rssMBAvg": 349.80104166666666,
+      "rssMBMax": 397.75,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 6194.54,
+     "reqTotal": 92908,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 7,
+      "p90": 10,
+      "p99": 17,
+      "max": 159,
+      "mean": 7.57
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 92908
+     },
+     "throughputMBs": 5.7331712,
+     "clientCpuPct": 25.49806919030208,
+     "server": {
+      "cpuPctAvg": 105.52697792175543,
+      "cpuPctMax": 112.03577201368165,
+      "rssMBAvg": 398.11041666666665,
+      "rssMBMax": 405.6875,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 6283.87,
+     "reqTotal": 94248,
+     "durationS": 15.07,
+     "latency": {
+      "p50": 7,
+      "p90": 9,
+      "p99": 15,
+      "max": 196,
+      "mean": 7.41
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 94248
+     },
+     "throughputMBs": 5.8161834699999995,
+     "clientCpuPct": 26.185735542209503,
+     "server": {
+      "cpuPctAvg": 107.87473145930583,
+      "cpuPctMax": 112.09043366516,
+      "rssMBAvg": 399.2604166666667,
+      "rssMBMax": 408.90625,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "post",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:54:23.116Z",
+   "section": "main",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "kind": "ping",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 46689.07,
+    "reqTotal": 700305,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 0,
+     "p90": 1,
+     "p99": 2,
+     "max": 48,
+     "mean": 0.43
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 700305
+    },
+    "throughputMBs": 9.010653869999999,
+    "clientCpuPct": 98.78003486458519,
+    "server": {
+     "cpuPctAvg": 94.6248289004433,
+     "cpuPctMax": 98.93854679512157,
+     "rssMBAvg": 113.903125,
+     "rssMBMax": 114.03125,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 46755.2,
+     "reqTotal": 701325,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 0,
+      "p90": 1,
+      "p99": 2,
+      "max": 45,
+      "mean": 0.41
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 701325
+     },
+     "throughputMBs": 9.02417067,
+     "clientCpuPct": 99.2942293986985,
+     "server": {
+      "cpuPctAvg": 95.16406523812368,
+      "cpuPctMax": 98.05132987118861,
+      "rssMBAvg": 114.33541666666666,
+      "rssMBMax": 123.3125,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 46689.07,
+     "reqTotal": 700305,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 0,
+      "p90": 1,
+      "p99": 2,
+      "max": 48,
+      "mean": 0.43
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 700305
+     },
+     "throughputMBs": 9.010653869999999,
+     "clientCpuPct": 98.78003486458519,
+     "server": {
+      "cpuPctAvg": 94.6248289004433,
+      "cpuPctMax": 98.93854679512157,
+      "rssMBAvg": 113.903125,
+      "rssMBMax": 114.03125,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 39696.54,
+     "reqTotal": 595477,
+     "durationS": 15.03,
+     "latency": {
+      "p50": 0,
+      "p90": 1,
+      "p99": 3,
+      "max": 115,
+      "mean": 0.65
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 595477
+     },
+     "throughputMBs": 7.66143147,
+     "clientCpuPct": 89.17148409957386,
+     "server": {
+      "cpuPctAvg": 84.62525653301883,
+      "cpuPctMax": 96.99763170582413,
+      "rssMBAvg": 104.11041666666667,
+      "rssMBMax": 114.046875,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "ping",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:54:44.431Z",
+   "section": "main-2clients",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "label": "client-bound check: 2 autocannon processes x 25 conns",
+   "kind": "ping",
+   "connections": 50,
+   "clients": 2,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 40232.94,
+    "reqTotal": 603476,
+    "durationS": 15.05,
+    "latency": {
+     "p50": 0,
+     "p90": 1,
+     "p99": 4,
+     "max": 83,
+     "mean": 0.65
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 603476
+    },
+    "throughputMBs": 7.7645824,
+    "clientCpuPct": [
+     57.618326145508206,
+     56.62371351408707
+    ],
+    "clients": 2,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 86.44017528168305,
+     "cpuPctMax": 99.03871591770526,
+     "rssMBAvg": 103.31666666666666,
+     "rssMBMax": 103.875,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 40232.94,
+     "reqTotal": 603476,
+     "durationS": 15.05,
+     "latency": {
+      "p50": 0,
+      "p90": 1,
+      "p99": 4,
+      "max": 83,
+      "mean": 0.65
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 603476
+     },
+     "throughputMBs": 7.7645824,
+     "clientCpuPct": [
+      57.618326145508206,
+      56.62371351408707
+     ],
+     "clients": 2,
+     "latencyNote": "max over client processes",
+     "server": {
+      "cpuPctAvg": 86.44017528168305,
+      "cpuPctMax": 99.03871591770526,
+      "rssMBAvg": 103.31666666666666,
+      "rssMBMax": 103.875,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "ping",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:55:37.743Z",
+   "section": "main",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "kind": "get",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 31572.8,
+    "reqTotal": 473576,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 1,
+     "p90": 1,
+     "p99": 3,
+     "max": 31,
+     "mean": 1.12
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 473576
+    },
+    "throughputMBs": 9.489476269999999,
+    "clientCpuPct": 81.92348431532007,
+    "server": {
+     "cpuPctAvg": 95.43885206741932,
+     "cpuPctMax": 100.88592324229315,
+     "rssMBAvg": 86.93645833333333,
+     "rssMBMax": 96.109375,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 31807.47,
+     "reqTotal": 477059,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 3,
+      "max": 98,
+      "mean": 1.11
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 477059
+     },
+     "throughputMBs": 9.55979094,
+     "clientCpuPct": 81.600856308824,
+     "server": {
+      "cpuPctAvg": 95.20111785126828,
+      "cpuPctMax": 99.99596266300927,
+      "rssMBAvg": 111.81979166666666,
+      "rssMBMax": 114.359375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 26641.87,
+     "reqTotal": 399617,
+     "durationS": 15.03,
+     "latency": {
+      "p50": 1,
+      "p90": 2,
+      "p99": 7,
+      "max": 174,
+      "mean": 1.4
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 399617
+     },
+     "throughputMBs": 8.008021339999999,
+     "clientCpuPct": 72.18239858664884,
+     "server": {
+      "cpuPctAvg": 84.42256295252453,
+      "cpuPctMax": 100.05998175654204,
+      "rssMBAvg": 88.421875,
+      "rssMBMax": 107.078125,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 31572.8,
+     "reqTotal": 473576,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 3,
+      "max": 31,
+      "mean": 1.12
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 473576
+     },
+     "throughputMBs": 9.489476269999999,
+     "clientCpuPct": 81.92348431532007,
+     "server": {
+      "cpuPctAvg": 95.43885206741932,
+      "cpuPctMax": 100.88592324229315,
+      "rssMBAvg": 86.93645833333333,
+      "rssMBMax": 96.109375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "get",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:56:31.059Z",
+   "section": "main",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "kind": "list",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 9144.67,
+    "reqTotal": 137161,
+    "durationS": 15.05,
+    "latency": {
+     "p50": 5,
+     "p90": 6,
+     "p99": 11,
+     "max": 69,
+     "mean": 4.97
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 137161
+    },
+    "throughputMBs": 22.1626368,
+    "clientCpuPct": 32.94174542224449,
+    "server": {
+     "cpuPctAvg": 96.37246900094569,
+     "cpuPctMax": 100.05116786811486,
+     "rssMBAvg": 91.89375,
+     "rssMBMax": 100.046875,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 9144.67,
+     "reqTotal": 137161,
+     "durationS": 15.05,
+     "latency": {
+      "p50": 5,
+      "p90": 6,
+      "p99": 11,
+      "max": 69,
+      "mean": 4.97
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 137161
+     },
+     "throughputMBs": 22.1626368,
+     "clientCpuPct": 32.94174542224449,
+     "server": {
+      "cpuPctAvg": 96.37246900094569,
+      "cpuPctMax": 100.05116786811486,
+      "rssMBAvg": 91.89375,
+      "rssMBMax": 100.046875,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 9080.27,
+     "reqTotal": 136208,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 5,
+      "p90": 6,
+      "p99": 11,
+      "max": 66,
+      "mean": 4.99
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 136208
+     },
+     "throughputMBs": 22.007534940000003,
+     "clientCpuPct": 32.78827150643918,
+     "server": {
+      "cpuPctAvg": 96.05511890324662,
+      "cpuPctMax": 99.93231664139365,
+      "rssMBAvg": 87.31041666666667,
+      "rssMBMax": 90.09375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 9310.67,
+     "reqTotal": 139652,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 5,
+      "p90": 6,
+      "p99": 10,
+      "max": 55,
+      "mean": 4.85
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 139652
+     },
+     "throughputMBs": 22.5656832,
+     "clientCpuPct": 31.514129277371104,
+     "server": {
+      "cpuPctAvg": 97.18251952727127,
+      "cpuPctMax": 99.93096858628213,
+      "rssMBAvg": 87.26875,
+      "rssMBMax": 88.09375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "list",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:57:27.118Z",
+   "section": "main",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "kind": "cached",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 33283.2,
+    "reqTotal": 499260,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 1,
+     "p90": 1,
+     "p99": 3,
+     "max": 170,
+     "mean": 1.12
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 499260
+    },
+    "throughputMBs": 10.00475307,
+    "clientCpuPct": 76.35519046602262,
+    "server": {
+     "cpuPctAvg": 101.36416823665496,
+     "cpuPctMax": 104.05192628139257,
+     "rssMBAvg": 456.865625,
+     "rssMBMax": 484.65625,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0,
+    "cache": {
+     "hits": 499310,
+     "misses": 0,
+     "hitRatio": 1
+    }
+   },
+   "all": [
+    {
+     "reqPerSec": 35138.67,
+     "reqTotal": 527075,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 2,
+      "max": 69,
+      "mean": 1.08
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 527075
+     },
+     "throughputMBs": 10.5619456,
+     "clientCpuPct": 78.71232011179845,
+     "server": {
+      "cpuPctAvg": 101.09790374542402,
+      "cpuPctMax": 107.98772989418937,
+      "rssMBAvg": 309.3375,
+      "rssMBMax": 378.734375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 527125,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    },
+    {
+     "reqPerSec": 33080,
+     "reqTotal": 496205,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 3,
+      "max": 104,
+      "mean": 1.11
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 496205
+     },
+     "throughputMBs": 9.94331307,
+     "clientCpuPct": 73.8421899137874,
+     "server": {
+      "cpuPctAvg": 100.23636540667381,
+      "cpuPctMax": 106.96267900989402,
+      "rssMBAvg": 353.725,
+      "rssMBMax": 397.171875,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 496255,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    },
+    {
+     "reqPerSec": 33283.2,
+     "reqTotal": 499260,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 3,
+      "max": 170,
+      "mean": 1.12
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 499260
+     },
+     "throughputMBs": 10.00475307,
+     "clientCpuPct": 76.35519046602262,
+     "server": {
+      "cpuPctAvg": 101.36416823665496,
+      "cpuPctMax": 104.05192628139257,
+      "rssMBAvg": 456.865625,
+      "rssMBMax": 484.65625,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0,
+     "cache": {
+      "hits": 499310,
+      "misses": 0,
+      "hitRatio": 1
+     }
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "cached",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:58:21.550Z",
+   "section": "main",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "kind": "post",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 3,
+   "median": {
+    "reqPerSec": 13839.2,
+    "reqTotal": 207556,
+    "durationS": 15.02,
+    "latency": {
+     "p50": 2,
+     "p90": 5,
+     "p99": 12,
+     "max": 128,
+     "mean": 3.06
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "201": 207556
+    },
+    "throughputMBs": 4.16856747,
+    "clientCpuPct": 47.54170248713406,
+    "server": {
+     "cpuPctAvg": 76.71924409191753,
+     "cpuPctMax": 88.98996638129172,
+     "rssMBAvg": 131.9130859375,
+     "rssMBMax": 144.125,
+     "procs": 1,
+     "samples": 16
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 13217.2,
+     "reqTotal": 198249,
+     "durationS": 15.04,
+     "latency": {
+      "p50": 2,
+      "p90": 5,
+      "p99": 14,
+      "max": 277,
+      "mean": 3.23
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 198249
+     },
+     "throughputMBs": 3.9800832,
+     "clientCpuPct": 43.61835381024485,
+     "server": {
+      "cpuPctAvg": 78.74244111962295,
+      "cpuPctMax": 87.00800108176685,
+      "rssMBAvg": 159.540625,
+      "rssMBMax": 275.640625,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 13839.2,
+     "reqTotal": 207556,
+     "durationS": 15.02,
+     "latency": {
+      "p50": 2,
+      "p90": 5,
+      "p99": 12,
+      "max": 128,
+      "mean": 3.06
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 207556
+     },
+     "throughputMBs": 4.16856747,
+     "clientCpuPct": 47.54170248713406,
+     "server": {
+      "cpuPctAvg": 76.71924409191753,
+      "cpuPctMax": 88.98996638129172,
+      "rssMBAvg": 131.9130859375,
+      "rssMBMax": 144.125,
+      "procs": 1,
+      "samples": 16
+     },
+     "timeWaitAtStart": 0
+    },
+    {
+     "reqPerSec": 15034.4,
+     "reqTotal": 225506,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 2,
+      "p90": 5,
+      "p99": 10,
+      "max": 69,
+      "mean": 2.77
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "201": 225506
+     },
+     "throughputMBs": 4.5303808,
+     "clientCpuPct": 47.436171933651885,
+     "server": {
+      "cpuPctAvg": 83.66794705627458,
+      "cpuPctMax": 89.05794332437773,
+      "rssMBAvg": 134.05625,
+      "rssMBMax": 135.734375,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "post",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:58:44.166Z",
+   "section": "scale",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 10,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 7995.47,
+    "reqTotal": 119926,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 1,
+     "p90": 2,
+     "p99": 3,
+     "max": 18,
+     "mean": 0.76
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 119926
+    },
+    "throughputMBs": 7.4002432,
+    "clientCpuPct": 30.94772674535583,
+    "server": {
+     "cpuPctAvg": 111.85928485442403,
+     "cpuPctMax": 120.14453387425081,
+     "rssMBAvg": 353.93333333333334,
+     "rssMBMax": 363.609375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 7995.47,
+     "reqTotal": 119926,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 2,
+      "p99": 3,
+      "max": 18,
+      "mean": 0.76
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 119926
+     },
+     "throughputMBs": 7.4002432,
+     "clientCpuPct": 30.94772674535583,
+     "server": {
+      "cpuPctAvg": 111.85928485442403,
+      "cpuPctMax": 120.14453387425081,
+      "rssMBAvg": 353.93333333333334,
+      "rssMBMax": 363.609375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "get",
+    "connections": 10
+   }
+  },
+  {
+   "at": "2026-11-03T09:59:05.384Z",
+   "section": "scale",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 8194.27,
+    "reqTotal": 122909,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 5,
+     "p90": 7,
+     "p99": 12,
+     "max": 26,
+     "mean": 5.6
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 122909
+    },
+    "throughputMBs": 7.584017070000001,
+    "clientCpuPct": 31.816078679595744,
+    "server": {
+     "cpuPctAvg": 110.98200074630098,
+     "cpuPctMax": 114.02960014569456,
+     "rssMBAvg": 366.76145833333334,
+     "rssMBMax": 381,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 8194.27,
+     "reqTotal": 122909,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 5,
+      "p90": 7,
+      "p99": 12,
+      "max": 26,
+      "mean": 5.6
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 122909
+     },
+     "throughputMBs": 7.584017070000001,
+     "clientCpuPct": 31.816078679595744,
+     "server": {
+      "cpuPctAvg": 110.98200074630098,
+      "cpuPctMax": 114.02960014569456,
+      "rssMBAvg": 366.76145833333334,
+      "rssMBMax": 381,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "get",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T09:59:26.684Z",
+   "section": "scale",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 200,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 7722.94,
+    "reqTotal": 115834,
+    "durationS": 15.02,
+    "latency": {
+     "p50": 25,
+     "p90": 29,
+     "p99": 42,
+     "max": 95,
+     "mean": 25.38
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 115834
+    },
+    "throughputMBs": 7.147929599999999,
+    "clientCpuPct": 32.014911778087054,
+    "server": {
+     "cpuPctAvg": 109.50446215662838,
+     "cpuPctMax": 113.97020157903479,
+     "rssMBAvg": 417.5552083333333,
+     "rssMBMax": 425.9375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 7722.94,
+     "reqTotal": 115834,
+     "durationS": 15.02,
+     "latency": {
+      "p50": 25,
+      "p90": 29,
+      "p99": 42,
+      "max": 95,
+      "mean": 25.38
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 115834
+     },
+     "throughputMBs": 7.147929599999999,
+     "clientCpuPct": 32.014911778087054,
+     "server": {
+      "cpuPctAvg": 109.50446215662838,
+      "cpuPctMax": 113.97020157903479,
+      "rssMBAvg": 417.5552083333333,
+      "rssMBMax": 425.9375,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "get",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T09:59:47.987Z",
+   "section": "scale",
+   "server": "tvine",
+   "desc": "tvine start, 1 process, NODE_ENV=production, no Shield, limits.rate lifted",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 500,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 7822,
+    "reqTotal": 117322,
+    "durationS": 15.04,
+    "latency": {
+     "p50": 64,
+     "p90": 70,
+     "p99": 79,
+     "max": 132,
+     "mean": 63.31
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 117322
+    },
+    "throughputMBs": 7.23940694,
+    "clientCpuPct": 36.828639281875795,
+    "server": {
+     "cpuPctAvg": 110.73332453407455,
+     "cpuPctMax": 115.07632437214012,
+     "rssMBAvg": 406.15625,
+     "rssMBMax": 434.328125,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 7822,
+     "reqTotal": 117322,
+     "durationS": 15.04,
+     "latency": {
+      "p50": 64,
+      "p90": 70,
+      "p99": 79,
+      "max": 132,
+      "mean": 63.31
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 117322
+     },
+     "throughputMBs": 7.23940694,
+     "clientCpuPct": 36.828639281875795,
+     "server": {
+      "cpuPctAvg": 110.73332453407455,
+      "cpuPctMax": 115.07632437214012,
+      "rssMBAvg": 406.15625,
+      "rssMBMax": 434.328125,
+      "procs": 2,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5151",
+    "kind": "get",
+    "connections": 500
+   }
+  },
+  {
+   "at": "2026-11-03T10:00:16.313Z",
+   "section": "scale",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 10,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 34896.54,
+    "reqTotal": 523444,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 0,
+     "p90": 0,
+     "p99": 0,
+     "max": 42,
+     "mean": 0.01
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 523444
+    },
+    "throughputMBs": 10.489856,
+    "clientCpuPct": 85.92357975794859,
+    "server": {
+     "cpuPctAvg": 97.32139660556378,
+     "cpuPctMax": 99.99391697005613,
+     "rssMBAvg": 145,
+     "rssMBMax": 145,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 34896.54,
+     "reqTotal": 523444,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 0,
+      "p90": 0,
+      "p99": 0,
+      "max": 42,
+      "mean": 0.01
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 523444
+     },
+     "throughputMBs": 10.489856,
+     "clientCpuPct": 85.92357975794859,
+     "server": {
+      "cpuPctAvg": 97.32139660556378,
+      "cpuPctMax": 99.99391697005613,
+      "rssMBAvg": 145,
+      "rssMBMax": 145,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "get",
+    "connections": 10
+   }
+  },
+  {
+   "at": "2026-11-03T10:00:37.561Z",
+   "section": "scale",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 50,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 34282.67,
+    "reqTotal": 514259,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 1,
+     "p90": 1,
+     "p99": 2,
+     "max": 18,
+     "mean": 1.07
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 514259
+    },
+    "throughputMBs": 10.30417067,
+    "clientCpuPct": 85.97438603010823,
+    "server": {
+     "cpuPctAvg": 96.78156465793872,
+     "cpuPctMax": 99.1121577955665,
+     "rssMBAvg": 141.25104166666668,
+     "rssMBMax": 147.3125,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 34282.67,
+     "reqTotal": 514259,
+     "durationS": 15.01,
+     "latency": {
+      "p50": 1,
+      "p90": 1,
+      "p99": 2,
+      "max": 18,
+      "mean": 1.07
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 514259
+     },
+     "throughputMBs": 10.30417067,
+     "clientCpuPct": 85.97438603010823,
+     "server": {
+      "cpuPctAvg": 96.78156465793872,
+      "cpuPctMax": 99.1121577955665,
+      "rssMBAvg": 141.25104166666668,
+      "rssMBMax": 147.3125,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "get",
+    "connections": 50
+   }
+  },
+  {
+   "at": "2026-11-03T10:00:58.846Z",
+   "section": "scale",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 200,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 34093.87,
+    "reqTotal": 511425,
+    "durationS": 15.02,
+    "latency": {
+     "p50": 5,
+     "p90": 6,
+     "p99": 10,
+     "max": 80,
+     "mean": 5.36
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 511425
+    },
+    "throughputMBs": 10.24832854,
+    "clientCpuPct": 86.02792775071005,
+    "server": {
+     "cpuPctAvg": 96.5703553109822,
+     "cpuPctMax": 99.9168025757487,
+     "rssMBAvg": 128.52395833333333,
+     "rssMBMax": 128.90625,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 34093.87,
+     "reqTotal": 511425,
+     "durationS": 15.02,
+     "latency": {
+      "p50": 5,
+      "p90": 6,
+      "p99": 10,
+      "max": 80,
+      "mean": 5.36
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 511425
+     },
+     "throughputMBs": 10.24832854,
+     "clientCpuPct": 86.02792775071005,
+     "server": {
+      "cpuPctAvg": 96.5703553109822,
+      "cpuPctMax": 99.9168025757487,
+      "rssMBAvg": 128.52395833333333,
+      "rssMBMax": 128.90625,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "get",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T10:01:20.160Z",
+   "section": "scale",
+   "server": "express",
+   "desc": "node server.mjs, 1 process",
+   "label": "single 15 s run after 5 s warm-up",
+   "kind": "get",
+   "connections": 500,
+   "clients": 1,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 31729.07,
+    "reqTotal": 475942,
+    "durationS": 15.03,
+    "latency": {
+     "p50": 15,
+     "p90": 17,
+     "p99": 30,
+     "max": 79,
+     "mean": 15.26
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 475942
+    },
+    "throughputMBs": 9.5363072,
+    "clientCpuPct": 92.35962336553276,
+    "server": {
+     "cpuPctAvg": 94.96726148981881,
+     "cpuPctMax": 99.93206278602696,
+     "rssMBAvg": 130.52708333333334,
+     "rssMBMax": 134.296875,
+     "procs": 1,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 31729.07,
+     "reqTotal": 475942,
+     "durationS": 15.03,
+     "latency": {
+      "p50": 15,
+      "p90": 17,
+      "p99": 30,
+      "max": 79,
+      "mean": 15.26
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 475942
+     },
+     "throughputMBs": 9.5363072,
+     "clientCpuPct": 92.35962336553276,
+     "server": {
+      "cpuPctAvg": 94.96726148981881,
+      "cpuPctMax": 99.93206278602696,
+      "rssMBAvg": 130.52708333333334,
+      "rssMBMax": 134.296875,
+      "procs": 1,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5152",
+    "kind": "get",
+    "connections": 500
+   }
+  },
+  {
+   "at": "2026-11-03T10:01:49.114Z",
+   "section": "allcores2",
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "label": "8 server processes + 4 autocannon processes (50 conns each), same 8 cores",
+   "kind": "ping",
+   "connections": 200,
+   "clients": 4,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 13599.740000000002,
+    "reqTotal": 203963,
+    "durationS": 15.03,
+    "latency": {
+     "p50": 12,
+     "p90": 25,
+     "p99": 58,
+     "max": 152,
+     "mean": 14.54
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 203963
+    },
+    "throughputMBs": 11.136409610000001,
+    "clientCpuPct": [
+     22.11368807228373,
+     21.417277945448898,
+     21.028954993115313,
+     22.263354613521965
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 361.63427720126407,
+     "cpuPctMax": 422.89929710487667,
+     "rssMBAvg": 2172.475,
+     "rssMBMax": 2373.875,
+     "procs": 18,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 13599.740000000002,
+     "reqTotal": 203963,
+     "durationS": 15.03,
+     "latency": {
+      "p50": 12,
+      "p90": 25,
+      "p99": 58,
+      "max": 152,
+      "mean": 14.54
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 203963
+     },
+     "throughputMBs": 11.136409610000001,
+     "clientCpuPct": [
+      22.11368807228373,
+      21.417277945448898,
+      21.028954993115313,
+      22.263354613521965
+     ],
+     "clients": 4,
+     "latencyNote": "max over client processes",
+     "server": {
+      "cpuPctAvg": 361.63427720126407,
+      "cpuPctMax": 422.89929710487667,
+      "rssMBAvg": 2172.475,
+      "rssMBMax": 2373.875,
+      "procs": 18,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5158",
+    "kind": "ping",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T10:02:10.464Z",
+   "section": "allcores2",
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "label": "8 server processes + 4 autocannon processes (50 conns each), same 8 cores",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 11406.68,
+    "reqTotal": 171068,
+    "durationS": 15.02,
+    "latency": {
+     "p50": 14,
+     "p90": 29,
+     "p99": 68,
+     "max": 150,
+     "mean": 17.2
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 171068
+    },
+    "throughputMBs": 10.55511894,
+    "clientCpuPct": [
+     19.501657183974867,
+     19.48597061713863,
+     19.20199096392422,
+     19.19117043411075
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 409.46359465309047,
+     "cpuPctMax": 445.89172277527996,
+     "rssMBAvg": 2282.6895833333333,
+     "rssMBMax": 2477.109375,
+     "procs": 18,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 11406.68,
+     "reqTotal": 171068,
+     "durationS": 15.02,
+     "latency": {
+      "p50": 14,
+      "p90": 29,
+      "p99": 68,
+      "max": 150,
+      "mean": 17.2
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 171068
+     },
+     "throughputMBs": 10.55511894,
+     "clientCpuPct": [
+      19.501657183974867,
+      19.48597061713863,
+      19.20199096392422,
+      19.19117043411075
+     ],
+     "clients": 4,
+     "latencyNote": "max over client processes",
+     "server": {
+      "cpuPctAvg": 409.46359465309047,
+      "cpuPctMax": 445.89172277527996,
+      "rssMBAvg": 2282.6895833333333,
+      "rssMBMax": 2477.109375,
+      "procs": 18,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5158",
+    "kind": "get",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T10:02:38.578Z",
+   "section": "allcores2",
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "label": "8 server processes + 4 autocannon processes (50 conns each), same 8 cores",
+   "kind": "ping",
+   "connections": 200,
+   "clients": 4,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 92885.34,
+    "reqTotal": 1393245,
+    "durationS": 15.02,
+    "latency": {
+     "p50": 1,
+     "p90": 4,
+     "p99": 15,
+     "max": 154,
+     "mean": 1.86
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 1393245
+    },
+    "throughputMBs": 17.92607574,
+    "clientCpuPct": [
+     68.51904751992407,
+     62.283936607101886,
+     68.42477447423377,
+     64.71483625638948
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 301.61364202342963,
+     "cpuPctMax": 334.92655328627603,
+     "rssMBAvg": 1161.4427083333333,
+     "rssMBMax": 1173.59375,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 92885.34,
+     "reqTotal": 1393245,
+     "durationS": 15.02,
+     "latency": {
+      "p50": 1,
+      "p90": 4,
+      "p99": 15,
+      "max": 154,
+      "mean": 1.86
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 1393245
+     },
+     "throughputMBs": 17.92607574,
+     "clientCpuPct": [
+      68.51904751992407,
+      62.283936607101886,
+      68.42477447423377,
+      64.71483625638948
+     ],
+     "clients": 4,
+     "latencyNote": "max over client processes",
+     "server": {
+      "cpuPctAvg": 301.61364202342963,
+      "cpuPctMax": 334.92655328627603,
+      "rssMBAvg": 1161.4427083333333,
+      "rssMBMax": 1173.59375,
+      "procs": 9,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5159",
+    "kind": "ping",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T10:02:59.908Z",
+   "section": "allcores2",
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "label": "8 server processes + 4 autocannon processes (50 conns each), same 8 cores",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "warmupS": 5,
+   "durationS": 15,
+   "reps": 1,
+   "median": {
+    "reqPerSec": 81051.75,
+    "reqTotal": 1215792,
+    "durationS": 15.07,
+    "latency": {
+     "p50": 0,
+     "p90": 5,
+     "p99": 24,
+     "max": 163,
+     "mean": 1.98
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 1215792
+    },
+    "throughputMBs": 24.36191574,
+    "clientCpuPct": [
+     55.10250241599112,
+     53.9869264925684,
+     54.21403759372198,
+     53.76040019409327
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 387.94799906151513,
+     "cpuPctMax": 409.3492260584791,
+     "rssMBAvg": 1144.3052083333334,
+     "rssMBMax": 1163.078125,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "all": [
+    {
+     "reqPerSec": 81051.75,
+     "reqTotal": 1215792,
+     "durationS": 15.07,
+     "latency": {
+      "p50": 0,
+      "p90": 5,
+      "p99": 24,
+      "max": 163,
+      "mean": 1.98
+     },
+     "errors": 0,
+     "timeouts": 0,
+     "non2xx": 0,
+     "statusCodes": {
+      "200": 1215792
+     },
+     "throughputMBs": 24.36191574,
+     "clientCpuPct": [
+      55.10250241599112,
+      53.9869264925684,
+      54.21403759372198,
+      53.76040019409327
+     ],
+     "clients": 4,
+     "latencyNote": "max over client processes",
+     "server": {
+      "cpuPctAvg": 387.94799906151513,
+      "cpuPctMax": 409.3492260584791,
+      "rssMBAvg": 1144.3052083333334,
+      "rssMBMax": 1163.078125,
+      "procs": 9,
+      "samples": 15
+     },
+     "timeWaitAtStart": 0
+    }
+   ],
+   "opts": {
+    "mode": "cannon",
+    "url": "http://127.0.0.1:5159",
+    "kind": "get",
+    "connections": 200
+   }
+  },
+  {
+   "at": "2026-11-03T10:03:31.604Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 1000,
+   "errPct": 0,
+   "failed": false,
+   "median": {
+    "reqPerSec": 1000,
+    "reqTotal": 15000,
+    "durationS": 15.002134416,
+    "latency": {
+     "p50": 6.3906660000002375,
+     "p90": 7.410417000000052,
+     "p99": 17.186958000000004,
+     "max": 56.56383300000016,
+     "mean": 6.7835582159998875
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 15000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     6.090546682647453,
+     6.209994459619585,
+     6.186880672848338,
+     6.170437465857632
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 85.68650044423867,
+     "cpuPctMax": 115.90916106320125,
+     "rssMBAvg": 2025.4208333333333,
+     "rssMBMax": 2387.359375,
+     "procs": 18,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 1000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:03:47.625Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 5000,
+   "errPct": 0,
+   "failed": false,
+   "median": {
+    "reqPerSec": 5000,
+    "reqTotal": 75000,
+    "durationS": 15.006869499999999,
+    "latency": {
+     "p50": 6.079791000000114,
+     "p90": 18.710291999999754,
+     "p99": 76.12549999999828,
+     "max": 157.37154100000043,
+     "mean": 10.32681298266679
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 75000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     18.57502659032252,
+     18.63211003053875,
+     18.72121803952273,
+     18.625363233773363
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 339.79517241781167,
+     "cpuPctMax": 374.7588273295011,
+     "rssMBAvg": 1875.0916666666667,
+     "rssMBMax": 2012.140625,
+     "procs": 18,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 5000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:04:05.647Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 10000,
+   "errPct": 0,
+   "failed": true,
+   "median": {
+    "reqPerSec": 10000,
+    "reqTotal": 150000,
+    "durationS": 17.490167458,
+    "latency": {
+     "p50": 1180.2945,
+     "p90": 2341.4927910000006,
+     "p99": 2532.4943329999987,
+     "max": 2604.7353329999987,
+     "mean": 1433.2105879522317
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 150000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     23.34415613689546,
+     23.679796674786704,
+     23.703913812073335,
+     23.5876180640154
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 331.76719847714514,
+     "cpuPctMax": 391.7971470271272,
+     "rssMBAvg": 1817.7389705882354,
+     "rssMBMax": 2058.71875,
+     "procs": 18,
+     "samples": 17
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 10000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:04:21.670Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 2,
+   "server": "tvine_x8",
+   "desc": "tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 10000,
+   "errPct": 0,
+   "failed": true,
+   "median": {
+    "reqPerSec": 10000,
+    "reqTotal": 150000,
+    "durationS": 15.050891125,
+    "latency": {
+     "p50": 131.36633399999982,
+     "p90": 252.81216700000004,
+     "p99": 314.8535839999986,
+     "max": 398.2508749999997,
+     "mean": 131.7328268955735
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 150000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     24.66422067085413,
+     24.62880993611716,
+     24.926021470643388,
+     24.70946595736835
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 378.3432945064877,
+     "cpuPctMax": 412.14363205576603,
+     "rssMBAvg": 2137.6833333333334,
+     "rssMBMax": 2402.96875,
+     "procs": 18,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 10000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:04:52.767Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 1000,
+   "errPct": 0,
+   "failed": false,
+   "median": {
+    "reqPerSec": 1000,
+    "reqTotal": 15000,
+    "durationS": 15.001149208000001,
+    "latency": {
+     "p50": 4.975333000000319,
+     "p90": 5.495875000000069,
+     "p99": 9.574375000000146,
+     "max": 62.289458000001105,
+     "mean": 5.183011826933606
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 15000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     6.548151654115592,
+     6.791138122788334,
+     6.828358489720651,
+     6.793175668009386
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 14.192897689283875,
+     "cpuPctMax": 16.99889648263692,
+     "rssMBAvg": 1143.7208333333333,
+     "rssMBMax": 1152.296875,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 1000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:05:08.789Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 5000,
+   "errPct": 0,
+   "failed": false,
+   "median": {
+    "reqPerSec": 5000,
+    "reqTotal": 75000,
+    "durationS": 15.002080833,
+    "latency": {
+     "p50": 1.7681250000005093,
+     "p90": 2.387457999999242,
+     "p99": 3.4038749999990614,
+     "max": 16.70999999999998,
+     "mean": 1.8244748674135105
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 75000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     14.779323113116572,
+     14.66899791970996,
+     14.598989950373396,
+     14.74380458058615
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 48.734396792179936,
+     "cpuPctMax": 58.98394162189374,
+     "rssMBAvg": 1128.4520833333333,
+     "rssMBMax": 1142.25,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 5000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:05:24.804Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 10000,
+   "errPct": 0.009333333333333332,
+   "failed": false,
+   "median": {
+    "reqPerSec": 9999.066666666668,
+    "reqTotal": 149986,
+    "durationS": 15.001064542,
+    "latency": {
+     "p50": 1.4643340000020544,
+     "p90": 2.191667000000052,
+     "p99": 11.362625000001572,
+     "max": 53.45762500000001,
+     "mean": 1.7779401290274701
+    },
+    "errors": 14,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 149986
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     18.933196321154792,
+     18.850159526980683,
+     19.08614351249909,
+     18.860044493943448
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 72.93299126663022,
+     "cpuPctMax": 85.90261864394006,
+     "rssMBAvg": 1045.16875,
+     "rssMBMax": 1108.1875,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 10000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:05:40.832Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 25000,
+   "errPct": 0,
+   "failed": false,
+   "median": {
+    "reqPerSec": 25000,
+    "reqTotal": 375000,
+    "durationS": 15.000691957999999,
+    "latency": {
+     "p50": 1.4629580000000715,
+     "p90": 2.415791999999783,
+     "p99": 31.123625000000175,
+     "max": 65.40725000000111,
+     "mean": 2.2427274229437275
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 375000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     28.598447405035365,
+     28.642819369494525,
+     28.47295712538973,
+     28.340246513013206
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 133.649341143711,
+     "cpuPctMax": 163.19172988364755,
+     "rssMBAvg": 866.9364583333333,
+     "rssMBMax": 929.375,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 25000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:05:56.860Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 1,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 50000,
+   "errPct": 0,
+   "failed": true,
+   "median": {
+    "reqPerSec": 50000,
+    "reqTotal": 750000,
+    "durationS": 15.001454041999999,
+    "latency": {
+     "p50": 10.672207999999955,
+     "p90": 269.8912080000009,
+     "p99": 337.201791999998,
+     "max": 364.9979999999996,
+     "mean": 70.53619668741877
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 750000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     50.7869035806096,
+     50.27296993923576,
+     49.61115060160393,
+     50.79680676648024
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 278.14926234289993,
+     "cpuPctMax": 311.8316888459456,
+     "rssMBAvg": 809.86875,
+     "rssMBMax": 836.046875,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 50000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:06:12.893Z",
+   "section": "ramp",
+   "rampVersion": 3,
+   "attempt": 2,
+   "server": "express_x8",
+   "desc": "node:cluster x8",
+   "kind": "get",
+   "connections": 200,
+   "clients": 4,
+   "targetRps": 50000,
+   "errPct": 0,
+   "failed": true,
+   "median": {
+    "reqPerSec": 50000,
+    "reqTotal": 750000,
+    "durationS": 15.08264325,
+    "latency": {
+     "p50": 8.76129100000071,
+     "p90": 342.956584,
+     "p99": 434.9789579999997,
+     "max": 513.8980409999999,
+     "mean": 106.17962696983896
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 750000
+    },
+    "throughputMBs": 0,
+    "clientCpuPct": [
+     49.52482715521366,
+     50.15752936560469,
+     49.83203881964989,
+     49.4059009001517
+    ],
+    "clients": 4,
+    "latencyNote": "max over client processes",
+    "server": {
+     "cpuPctAvg": 255.85871781665568,
+     "cpuPctMax": 298.9154724913802,
+     "rssMBAvg": 788.271875,
+     "rssMBMax": 803.453125,
+     "procs": 9,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "label": "open-loop fixed rate 50000 req/s (load.mjs mode rate, 1 ms slots, latency from scheduled send time) split over 4 client processes x 50 keep-alive sockets"
+  },
+  {
+   "at": "2026-11-03T10:06:14.253Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "start",
+   "heapMB": {
+    "before": {
+     "rss": 177.9,
+     "heapTotal": 86.4,
+     "heapUsed": 68.6,
+     "external": 3.8,
+     "arrayBuffers": 0.1
+    },
+    "afterGc": {
+     "rss": 136.2,
+     "heapTotal": 43.8,
+     "heapUsed": 41.1,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMB": 154.65625
+  },
+  {
+   "at": "2026-11-03T10:06:38.491Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "cached",
+   "run": 1,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 10652,
+    "reqTotal": 159770,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 4,
+     "p90": 5,
+     "p99": 8,
+     "max": 16,
+     "mean": 4.19
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 159770
+    },
+    "throughputMBs": 9.859072,
+    "clientCpuPct": 31.29489805071372,
+    "server": {
+     "cpuPctAvg": 115.90697886209357,
+     "cpuPctMax": 120.05055124627049,
+     "rssMBAvg": 462.31145833333335,
+     "rssMBMax": 479.84375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0,
+    "cache": {
+     "hits": 159820,
+     "misses": 0,
+     "hitRatio": 1
+    }
+   },
+   "heapMB": {
+    "before": {
+     "rss": 387.6,
+     "heapTotal": 256.7,
+     "heapUsed": 204.6,
+     "external": 3.8,
+     "arrayBuffers": 0.1
+    },
+    "afterGc": {
+     "rss": 191.2,
+     "heapTotal": 59.8,
+     "heapUsed": 57.4,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 209.703125,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:06:55.798Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "cached",
+   "run": 2,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 10358.14,
+    "reqTotal": 155357,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 4,
+     "p90": 6,
+     "p99": 10,
+     "max": 36,
+     "mean": 4.32
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 155357
+    },
+    "throughputMBs": 9.586141869999999,
+    "clientCpuPct": 31.254633659055877,
+    "server": {
+     "cpuPctAvg": 114.88092577551892,
+     "cpuPctMax": 119.00314370604752,
+     "rssMBAvg": 446.14479166666666,
+     "rssMBMax": 464.984375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0,
+    "cache": {
+     "hits": 155407,
+     "misses": 0,
+     "hitRatio": 1
+    }
+   },
+   "heapMB": {
+    "before": {
+     "rss": 434.3,
+     "heapTotal": 268.5,
+     "heapUsed": 226.3,
+     "external": 3.8,
+     "arrayBuffers": 0.1
+    },
+    "afterGc": {
+     "rss": 174.5,
+     "heapTotal": 60.6,
+     "heapUsed": 58.4,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 191.125,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:07:13.118Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "cached",
+   "run": 3,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 10249.87,
+    "reqTotal": 153743,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 4,
+     "p90": 6,
+     "p99": 11,
+     "max": 40,
+     "mean": 4.37
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "200": 153743
+    },
+    "throughputMBs": 9.48578987,
+    "clientCpuPct": 31.32136490119535,
+    "server": {
+     "cpuPctAvg": 113.88767918824115,
+     "cpuPctMax": 124.94824019150046,
+     "rssMBAvg": 436.00208333333336,
+     "rssMBMax": 450.53125,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0,
+    "cache": {
+     "hits": 153793,
+     "misses": 0,
+     "hitRatio": 1
+    }
+   },
+   "heapMB": {
+    "before": {
+     "rss": 420.1,
+     "heapTotal": 231,
+     "heapUsed": 190.2,
+     "external": 3.8,
+     "arrayBuffers": 0.1
+    },
+    "afterGc": {
+     "rss": 158.8,
+     "heapTotal": 59.1,
+     "heapUsed": 57.3,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 175.453125,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:07:34.430Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "post",
+   "run": 1,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 6210,
+    "reqTotal": 93134,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 7,
+     "p90": 10,
+     "p99": 16,
+     "max": 47,
+     "mean": 7.55
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "201": 93134
+    },
+    "throughputMBs": 5.7438208,
+    "clientCpuPct": 26.169950879695293,
+    "server": {
+     "cpuPctAvg": 104.8797272961612,
+     "cpuPctMax": 110.09507623622198,
+     "rssMBAvg": 409.14166666666665,
+     "rssMBMax": 419.34375,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "heapMB": {
+    "before": {
+     "rss": 406.3,
+     "heapTotal": 196.8,
+     "heapUsed": 70.8,
+     "external": 3.8,
+     "arrayBuffers": 0.1
+    },
+    "afterGc": {
+     "rss": 149.8,
+     "heapTotal": 57.6,
+     "heapUsed": 55.1,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 161.65625,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:07:50.516Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "post",
+   "run": 2,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 6059.34,
+    "reqTotal": 90881,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 7,
+     "p90": 10,
+     "p99": 17,
+     "max": 243,
+     "mean": 7.74
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "201": 90881
+    },
+    "throughputMBs": 5.6086528,
+    "clientCpuPct": 25.722685944846862,
+    "server": {
+     "cpuPctAvg": 106.06603217160782,
+     "cpuPctMax": 119.00743296624803,
+     "rssMBAvg": 391.9760416666667,
+     "rssMBMax": 426.515625,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "heapMB": {
+    "before": {
+     "rss": 413.7,
+     "heapTotal": 184.3,
+     "heapUsed": 92.5,
+     "external": 3.9,
+     "arrayBuffers": 0.2
+    },
+    "afterGc": {
+     "rss": 156,
+     "heapTotal": 57.1,
+     "heapUsed": 55.1,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 167.875,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:08:06.590Z",
+   "section": "memory",
+   "server": "tvine_mem",
+   "desc": "tvine start, 1 process (same settings as main) + --inspect on 127.0.0.1:5166 to read process.memoryUsage()",
+   "kind": "post",
+   "run": 3,
+   "connections": 50,
+   "durationS": 15,
+   "median": {
+    "reqPerSec": 6242,
+    "reqTotal": 93624,
+    "durationS": 15.01,
+    "latency": {
+     "p50": 7,
+     "p90": 10,
+     "p99": 16,
+     "max": 31,
+     "mean": 7.5
+    },
+    "errors": 0,
+    "timeouts": 0,
+    "non2xx": 0,
+    "statusCodes": {
+     "201": 93624
+    },
+    "throughputMBs": 5.7782272,
+    "clientCpuPct": 25.858949705926626,
+    "server": {
+     "cpuPctAvg": 107.60257084492424,
+     "cpuPctMax": 116.08610686977185,
+     "rssMBAvg": 400.36354166666666,
+     "rssMBMax": 418.03125,
+     "procs": 2,
+     "samples": 15
+    },
+    "timeWaitAtStart": 0
+   },
+   "heapMB": {
+    "before": {
+     "rss": 406.2,
+     "heapTotal": 224,
+     "heapUsed": 161.1,
+     "external": 4.1,
+     "arrayBuffers": 0.4
+    },
+    "afterGc": {
+     "rss": 160.2,
+     "heapTotal": 57.1,
+     "heapUsed": 55,
+     "external": 3.8,
+     "arrayBuffers": 0
+    }
+   },
+   "rssMBAfter": 172.0625,
+   "label": "3 back-to-back 15 s runs; heap read over the inspector after each (before / after a forced full GC)"
+  },
+  {
+   "at": "2026-11-03T10:09:37.787Z",
+   "section": "workers-attribution",
+   "label": "GET /api/items/<id>, 4 autocannon x 50 conns, 10 s, all Tvine backends on Redis :6391 (BENCH_REDIS=1); ad-hoc run, Redis INFO commandstats reset before",
+   "builtin": {
+    "desc": "tvine start --workers 8",
+    "reqPerSec": 11075.3,
+    "redisOpsPerSec": 334746,
+    "redisCpuPct": 79.1,
+    "commands": {
+     "evalsha": 665604,
+     "hset": 443736,
+     "hmget": 443736,
+     "time": 443736,
+     "zcount": 110934
+    }
+   },
+   "wrapper": {
+    "desc": "node:cluster wrapper x8 (cluster.mjs), same Redis backends",
+    "reqPerSec": 11222.6,
+    "redisOpsPerSec": 338332,
+    "redisCpuPct": 77.7,
+    "commands": {
+     "evalsha": 674368,
+     "hset": 449616,
+     "hmget": 449616,
+     "time": 449604,
+     "zcount": 112397
+    }
+   },
+   "finding": "built-in workers and the wrapper are equal (~11.1k vs ~11.2k req/s) once both use Redis backends; ~19 Redis commands per anonymous GET (6 EVALSHA, 4 HSET, 4 HMGET, 4 TIME, 1 ZCOUNT), Redis at ~80% of one core. The earlier 17k (wrapper) used memory backends."
   }
  ],
  "machine": {

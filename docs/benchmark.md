@@ -10,7 +10,7 @@ results are in [`benchmarks/`](../benchmarks/README.md), so you can rerun everyt
 - **Against Django:** Tvine is faster on every endpoint, 3–6× on one process.
 - **Against FastAPI:** Tvine is faster on everything that touches the database. On a page of 20 rows it is 6×
   faster, and its insert p99 is 10× lower. FastAPI wins only on `ping`, which touches nothing.
-- **Against Express:** Express is 2–4.6× faster on raw throughput. The benchmark Express app does only the query and
+- **Against Express:** Express is 2–3.9× faster on raw throughput on one process (the gap is smallest on a page of 20 and on inserts). The benchmark Express app does only the query and
   the JSON. Tvine also validates input, keeps sessions, marks agents and serves every action over MCP. A CPU profile
   shows where most of the gap comes from, and both causes are fixable (see [where the time goes](#where-tvines-time-goes)).
 - **Shield** costs about 16–19% of throughput. During a flood from one IP, a real visitor kept 100% of their
@@ -33,11 +33,11 @@ results are in [`benchmarks/`](../benchmarks/README.md), so you can rerun everyt
 
 | Endpoint | Tvine | Raw Node | Express | FastAPI | Django (threads) | Django (sync) |
 |---|---|---|---|---|---|---|
-| Ping | 11,765 · p99 8 ms | 44,525 · 2 ms | 48,884 · 1 ms | 17,752 · 5 ms | 2,339 · 43 ms | 1,617 · 4.6 s |
-| One row | 7,417 · 14 ms | 42,098 · 2 ms | 33,859 · 2 ms | 4,751 · 17 ms | 1,251 · 109 ms | 920 · 5.4 s |
-| Page of 20 | 4,621 · 22 ms | 9,706 · 10 ms | 9,478 · 10 ms | 753 · 113 ms | 850 · 129 ms | 864 · 5.6 s |
-| Redis cache | 7,976 · 12 ms | 42,156 · 2 ms | 35,337 · 3 ms | 7,061 · 22 ms | 1,546 · 87 ms | 1,072 · 6.0 s |
-| Insert | 4,844 · 20 ms | 13,373 · 20 ms | 12,941 · 17 ms | 3,936 · 202 ms | 1,677 · 106 ms | 1,302 · 4.8 s |
+| Ping | 12,970 · p99 7 ms | 44,525 · 2 ms | 46,689 · 2 ms | 17,752 · 5 ms | 2,339 · 43 ms | 1,617 · 4.6 s |
+| One row | 8,049 · 12 ms | 42,098 · 2 ms | 31,573 · 3 ms | 4,751 · 17 ms | 1,251 · 109 ms | 920 · 5.4 s |
+| Page of 20 | 4,681 · 22 ms | 9,706 · 10 ms | 9,145 · 11 ms | 753 · 113 ms | 850 · 129 ms | 864 · 5.6 s |
+| Redis cache | 11,063 · 7 ms | 42,156 · 2 ms | 33,283 · 3 ms | 7,061 · 22 ms | 1,546 · 87 ms | 1,072 · 6.0 s |
+| Insert | 6,195 · 17 ms | 13,373 · 20 ms | 13,839 · 12 ms | 3,936 · 202 ms | 1,677 · 106 ms | 1,302 · 4.8 s |
 
 Requests a second and p99 latency. Raw Node and Express reach the load tool's own limit on ping, one row and the cache,
 so their real ceiling may be higher. Django's sync worker closes the connection after every response, so on this
@@ -49,14 +49,18 @@ machine it is limited by opening new connections.
 
 | | Raw Node | Express | Tvine | FastAPI | Django |
 |---|---|---|---|---|---|
-| Ping | 99,133 | 85,582 | 33,930 | 40,653 | 8,809 |
-| One row | 89,330 | 53,921 | 17,011 | 15,622 | 5,666 |
+| Ping | 99,133 | 92,885 | 13,600 | 40,653 | 8,809 |
+| One row | 89,330 | 81,052 | 11,407 | 15,622 | 5,666 |
 
-200 connections from four load processes on the same eight cores. Tvine has no built-in multi-process mode yet; it ran
-under a small `node:cluster` wrapper. Each Tvine process carries Next.js as well, so eight of them used 1.5–1.9 GB.
+200 connections from four load processes on the same eight cores. Tvine runs `tvine start --workers 8`, which requires
+sessions, rate limits, channels and caches on Redis so every worker shares them. That shared state is now Tvine's limit
+here: each anonymous request makes about 19 Redis calls (rate-limit and session bookkeeping), so Redis sits near one
+full core. With the same Redis settings, a hand-written cluster wrapper gives the same numbers, so it is the per-request
+Redis work, not the workers code. With in-memory state (which only one process can use correctly), the same eight
+processes did 33,930 / 17,011 req/s. Cutting those Redis calls is the next speed task.
 
-At a fixed request rate, eight Express processes held 25,000 requests a second with p99 under 13 ms, and passed
-50,000 on a retry. Eight Tvine processes passed 5,000 but with p99 around 170–190 ms, and failed at 10,000. 100,000 a
+At a fixed request rate, eight Express processes held 25,000 requests a second (p99 31 ms) and failed at 50,000 this
+run. Eight Tvine processes held 1,000 (p99 17 ms, was 194 ms) and 5,000 (p99 76 ms, was 170 ms), and failed at 10,000. 100,000 a
 second was not reachable on this laptop: the load processes ran out of CPU first.
 
 ## Shield
@@ -118,5 +122,7 @@ A CPU profile of one Tvine process reading one row at full load:
 - Tvine ran as a full app with Next.js and security headers in the same process. Express, FastAPI and raw Node ran with
   no security middleware.
 - The scale, eight-process, MCP and flood results are single runs.
-- Under the Redis and insert tests, Tvine's memory grew from about 390 MB to 2.6 GB (the per-request sessions above).
-  That fix is in progress.
+- An earlier run found Tvine's memory growing from about 390 MB to 2.6 GB under the Redis and insert tests: the Redis
+  client's 5-second timer kept each finished request in memory. That is fixed: the same tests now stay at 406–407 MB at
+  peak, and the heap after garbage collection stays flat at about 55–58 MB across three back-to-back runs.
+- Tvine and Express were rerun after the memory fix; raw Node, FastAPI and Django numbers are from the first run.
