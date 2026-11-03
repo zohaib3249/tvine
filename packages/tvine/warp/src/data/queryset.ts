@@ -94,7 +94,7 @@ interface State {
   where: Where[]; order: Order[]; ordered?: boolean; search?: QuerySpec['search']
   q?: QNode[]; annotate?: [string, Expression][]; values?: string[]; list?: 'tuple' | 'flat'
   distinct?: true | string[]; related?: string[]; prefetch?: (string | PrefetchNode)[]; forUpdate?: QuerySpec['forUpdate']
-  slice?: { start: number; end?: number }          // Django qs[start:end] → OFFSET / LIMIT
+  slice?: { start: number; end?: number }          // → OFFSET / LIMIT
 }
 
 export const MAX_IN = 1000          // every value is a bound param; engines cap params per statement
@@ -156,13 +156,13 @@ export class QuerySet<T extends object> {
   }
   private get pk(): string { return this.source.def ? Object.entries(this.source.def.fields).find(([n]) => n === 'id')?.[0] ?? 'id' : 'id' }
 
-  // Django refuses to filter / reorder / write a sliced queryset (the slice would apply first)
+  // refuse to filter / reorder / write a sliced queryset (the slice would apply first)
   private unsliced(what: string): void {
     if (this.state.slice) throw new Error(`cannot ${what} a queryset once a slice has been taken`)
   }
 
-  // Django slicing qs[start:end] → LIMIT end-start OFFSET start (bound params). Lazy; non-negative only
-  // (Django has no negative indexing either). A slice of a slice narrows it.
+  // slicing [start:end] → LIMIT end-start OFFSET start (bound params). Lazy; non-negative only
+  // A slice of a slice narrows it.
   slice(start: number, end?: number): QuerySet<T> {
     const ok = (n: number) => Number.isInteger(n) && n >= 0
     if (!ok(start) || (end !== undefined && !ok(end))) throw new DomainError('invalid_param', 'slice bounds must be non-negative integers')
@@ -184,8 +184,8 @@ export class QuerySet<T extends object> {
     return this.with({ where: [...this.state.where, ...ws], ...(q ? { q: [...(this.state.q ?? []), q] } : {}) })
   }
 
-  // One condition per plain-object call: NOT(a) AND NOT(b) differs from Django's NOT(a AND b). Chain
-  // instead, or pass Q(...) — exclude(Q) is NOT(the whole Q), Django's semantics.
+  // One condition per plain-object call: NOT(a) AND NOT(b) differs from NOT(a AND b). Chain
+  // instead, or pass Q(...) — exclude(Q) is NOT(the whole Q).
   exclude(where: Partial<Record<keyof T & string, unknown>> | Lookups | Where[] | QNode | Expression): QuerySet<T> {
     this.unsliced('filter')
     if (where instanceof QNode || where instanceof Expression) return this.with({ q: [...(this.state.q ?? []), toQ(where).not()] })
@@ -201,7 +201,7 @@ export class QuerySet<T extends object> {
     return this.with({ where: [...this.state.where, ...ws.map(w => ({ ...w, not: true }))] })
   }
 
-  // Replaces the previous order (Django order_by). 'field' asc, '-field' desc, F('f').desc({ nulls: 'last' }).
+  // Replaces the previous order. 'field' asc, '-field' desc, F('f').desc({ nulls: 'last' }).
   order(...fields: (string | OrderBy)[]): QuerySet<T> {
     this.unsliced('reorder')
     return this.with({ order: fields.map(parseOrder), ordered: true })
@@ -220,7 +220,7 @@ export class QuerySet<T extends object> {
     for (const [n] of add) if (names.has(n)) throw new DomainError('invalid_param', `annotation "${n}" is already defined`, n)
     return this.with({
       annotate: [...(this.state.annotate ?? []), ...add],
-      ...(this.state.values ? { values: [...this.state.values, ...add.map(([n]) => n)] } : {}),   // Django: annotations after values() are output too
+      ...(this.state.values ? { values: [...this.state.values, ...add.map(([n]) => n)] } : {}),   // annotations after values() are output too
     })
   }
   having(q: QNode | Lookups): QuerySet<T> { return this.with({ q: [...(this.state.q ?? []), toQ(q)] }) }
@@ -280,7 +280,7 @@ export class QuerySet<T extends object> {
     return { items: pageItems, ...(count ? { total } : {}), pageSize: size, nextCursor }
   }
 
-  // the slice as one LIMIT / OFFSET query (Django evaluates qs[a:b] in one SELECT)
+  // the slice as one LIMIT / OFFSET query (one SELECT)
   private async sliced(limit: number): Promise<T[]> {
     const { start, end } = this.state.slice!
     const n = Math.min(limit, end === undefined ? Infinity : end - start)
@@ -330,7 +330,7 @@ export class QuerySet<T extends object> {
     return (await this.page({ size: 1 }, false)).items[0]
   }
 
-  // the last row under the current order (Django last(): the order reversed, id tiebreak included)
+  // the last row under the current order (the order reversed, id tiebreak included)
   async last(): Promise<T | undefined> {
     this.unsliced('reverse')
     const order = this.spec(0).order

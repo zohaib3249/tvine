@@ -18,7 +18,7 @@ export interface FieldMeta {
   step?: number; palette?: string[]; language?: string; from?: string; of?: Partial<FieldMeta>; free?: boolean; humanOnly?: boolean; allowRemoteImages?: boolean
 }
 
-// 'createdAt' → 'Created at', 'shipTo' → 'Ship to' (Django verbose_name from the attribute name)
+// 'createdAt' → 'Created at', 'shipTo' → 'Ship to' (a label from the attribute name)
 export const labelOf = (n: string) => {
   const s = n.replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().trim()
   return s ? s[0]!.toUpperCase() + s.slice(1) : n
@@ -35,7 +35,7 @@ function kindOf(n: string, f: AnyField): MetaKind {
       if (/email/i.test(n)) return 'email'
       if (/(^url|Url|URL)$/.test(n)) return 'url'
       if (n === 'slug') return 'slug'
-      return (f.opts.maxLength ?? 0) > 255 ? 'textarea' : 'text'   // Django: CharField → input, long text → textarea
+      return (f.opts.maxLength ?? 0) > 255 ? 'textarea' : 'text'   // short text → input, long text → textarea
     case 'richText': return 'rich'
     case 'dateRange': return 'daterange'
     case 'encrypted': return (f.opts as { of?: string }).of === 'json' ? 'json' : 'text'   // shown only with hidden: false
@@ -53,7 +53,7 @@ export function fieldMeta(n: string, f: AnyField, o: MetaOpts): FieldMeta {
   const kind = kindOf(n, f)
   const m: FieldMeta = {
     name: n, label: labelOf(n), kind,
-    required: f.kind !== 'm2m' && f.kind !== 'bool' && !f.opts.optional && !f.opts.auto && f.kind !== 'id' && f.kind !== 'uuid',   // Django blank=False; a default is the add form's initial
+    required: f.kind !== 'm2m' && f.kind !== 'bool' && !f.opts.optional && !f.opts.auto && f.kind !== 'id' && f.kind !== 'uuid',   // a default is the add form's initial
     readOnly: o.readonly.includes(n) || f.kind === 'id' || !!f.opts.readOnly || !!f.opts.auto,
     nullable: !!f.opts.optional,
   }

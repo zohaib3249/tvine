@@ -1,4 +1,4 @@
-// email / url / slug (Django EmailField, URLField, SlugField): validated text, VARCHAR(maxLength) where
+// email / url / slug: validated text, VARCHAR(maxLength) where
 // the engine enforces lengths (sqlite: TEXT, the length is checked by the schema).
 import { z } from 'zod'
 import { byDb, Field } from './base.js'
@@ -18,7 +18,7 @@ export class EmailField extends CharField<'email'> {
   protected check(s: z.ZodString) { return s.email() }
 }
 
-// Django URLValidator schemes only: never javascript: / data: links
+// http(s) / ftp(s) schemes only: never javascript: / data: links
 const SCHEMES = new Set(['http:', 'https:', 'ftp:', 'ftps:'])
 export class UrlField extends CharField<'url'> {
   readonly kind = 'url' as const

@@ -1,4 +1,4 @@
-// env — typed environment variables (django-environ) and .env loading (docs/design/conventions/env.md).
+// env — typed environment variables and .env loading (docs/design/conventions/env.md).
 // With settings.ts, the only warp module that reads process.env; everything else reads settings.
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -68,7 +68,7 @@ export const defaultEnv = (name: string, v: string): void => { process.env[name]
 // Names a .env file supplied (not the real environment): production refuses TVINE_DEBUG from one
 export const fromDotenv = new Set<string>()
 
-// .env files, Django-environ style: loaded when present, never overriding a variable already set by the real
+// .env files: loaded when present, never overriding a variable already set by the real
 // environment. First found wins per variable: .env.<NODE_ENV>.local, .env.local, .env.<NODE_ENV>, .env.
 // (.env.local is skipped under NODE_ENV=test, like Next.) Production: never, unless TVINE_LOAD_DOTENV=1 (a real
 // env var: settings.ts is read after the files, so it cannot switch them on). Returns the files loaded.

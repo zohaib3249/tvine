@@ -5,7 +5,7 @@ export type ErrCode =
   | 'invalid_param' | 'unknown_action' | 'stale_bind' | 'stale_rev'
   | 'expired_sid' | 'rate_limited' | 'conflict' | 'domain' | 'internal' | 'human_only' | 'confirm_required'
 
-// one bad field of an invalid_param (Django ValidationError dict style): every bad field is listed;
+// one bad field of an invalid_param: every bad field is listed;
 // `field` on the result is the first one (kept for older code)
 export interface FieldError { field: string; code?: string; message: string }
 

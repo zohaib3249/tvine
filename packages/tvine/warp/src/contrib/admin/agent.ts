@@ -54,7 +54,7 @@ export function adminSnapshot(d: AdminAgentDeps, base: string): (page: string, s
       nodes.push({ id: `add:${key}`, type: 'admin-add', data: { model: key, fields: meta.data.form.fields, inlines: meta.data.form.inlines.map((i: { name: string; fields: string[] }) => ({ name: i.name, fields: i.fields })) }, actions: ref('admin.create', { model: key }) })
       return out(`Add ${model.name} | ${site.data.title}`)
     }
-    // changelist: Django query params (q, o, p, all, every other key a filter), as the panel sends them
+    // changelist: query params (q, o, p, all, every other key a filter), as the panel sends them
     const q: Record<string, string> = Object.fromEntries(u.searchParams)
     const { q: text, o, p: pg, all, ...rest } = q
     const filters = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('tvine-')))

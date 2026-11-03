@@ -1,6 +1,6 @@
 // A small SMTP client on node:net / node:tls (RFC 5321): greeting, EHLO, STARTTLS (useTls) or implicit TLS
 // (useSsl), AUTH PLAIN / LOGIN, then MAIL / RCPT / DATA (dot-stuffed) per message, QUIT. One connection per
-// send() batch (Django's SMTP backend send_messages). Every wait is capped by email.timeoutMs.
+// send() batch. Every wait is capped by email.timeoutMs.
 // Messages are 7-bit clean (mail/index.ts encodes bodies and headers), so no 8BITMIME / SMTPUTF8.
 import { connect as netConnect, type Socket } from 'node:net'
 import { hostname } from 'node:os'

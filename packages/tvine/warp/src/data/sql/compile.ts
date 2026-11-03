@@ -48,7 +48,7 @@ const needCur = (c: Compiled, what: string): Expr => {
 const sameExpr = (a?: Expr, b?: Expr) => JSON.stringify(a) === JSON.stringify(b)
 
 const OUT = { int: new IntField(), float: new FloatField(), text: new TextField(), bool: new BoolField(), datetime: new DatetimeField(), date: new DateField() }
-// Django date transforms: `createdAt__year: 2024`, `createdAt__date__gte: '2024-01-01'` (UTC)
+// date transforms: `createdAt__year: 2024`, `createdAt__date__gte: '2024-01-01'` (UTC)
 const TRANSFORMS = new Set(['year', 'month', 'day', 'date'])
 const NUMERIC = new Set<Kind>(['int', 'float', 'money', 'id'])
 const LOOKUPS = new Set(['eq', 'exact', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'icontains', 'isnull',
@@ -120,7 +120,7 @@ export class Scope {
     return { e: mk(c), f, agg: false, ...(f.kind === 'money' ? { cur: mk(cur) } : {}) }
   }
 
-  // LEFT JOIN for one relation hop (fk: one row; reverse / m2m: many — Django's join semantics)
+  // LEFT JOIN for one relation hop (fk: one row; reverse / m2m: many)
   private join(key: string, rel: Relation, parentAlias: string | undefined, parent: TableDef): { alias: string; def: ModelDef } {
     const hit = this.joinAt.get(key)
     if (hit) return hit
@@ -273,7 +273,7 @@ export class Scope {
   // ---- conditions -------------------------------------------------------------------------------------
   q(node: QNode, safe = false): Expr {
     const inner = safe || node.negated
-    // Django: inside one filter() / one AND node, lookups through the SAME to-many relation must hold
+    // inside one filter() / one AND node, lookups through the SAME to-many relation must hold
     // for ONE related row — they share one subquery (chained filter() calls stay separate)
     const groups = new Map<string, [string, unknown][]>()
     if (node.conn === 'and') {
@@ -334,7 +334,7 @@ export class Scope {
       const rest = parts.length > 1 ? parts.slice(1) : [pkCol(rel.target)]
       const restKey = [...rest, ...(op === 'eq' ? [] : [op])].join('__')
       const e = this.relIn(rel, s => s.leaf(restKey, value))
-      // Django: `rel__x__isnull=True` also matches rows with no related row at all (LEFT JOIN semantics)
+      // `rel__x__isnull=True` also matches rows with no related row at all (LEFT JOIN semantics)
       if (rel.kind === 'fk' && op === 'isnull' && value) return { e: or(isNull(this.field(name).col), e), nullAware: true }
       return { e, subject: rel.kind === 'fk' ? this.field(name).col : undefined }
     }
@@ -399,12 +399,12 @@ export class Scope {
       if (!b) throw invalid(`${key}: ${op} cannot compare to an expression`, key)
       return { e: bin(b, lhs, rhs.e), subject: lhs }
     }
-    if (op === 'range') {   // Django __range: inclusive BETWEEN, each bound through the field
+    if (op === 'range') {   // __range: inclusive BETWEEN, each bound through the field
       if (!Array.isArray(value) || value.length !== 2 || value.some(v => v == null)) throw invalid(`${key}: __range takes [low, high]`, key)
       const lk = f ?? OUT.float
       return { e: named2(key, () => and(lk.lookup('gte', lhs, value[0], this.d), lk.lookup('lte', lhs, value[1], this.d))), subject: lhs }
     }
-    if (op === 'iexact') {  // Django __iexact: case-insensitive equality (LIKE with every wildcard escaped)
+    if (op === 'iexact') {  // __iexact: case-insensitive equality (LIKE with every wildcard escaped)
       if (value == null) return { e: isNull(lhs), nullAware: true }
       if (typeof value !== 'string') throw invalid(`${key}: iexact needs a string`, key)
       if (f?.kind === 'money') throw invalid(`money does not support iexact`, key)
@@ -563,7 +563,7 @@ function buildSelect(s: Scope, def: ModelDef, spec: QuerySpec, limit?: number): 
       outs.push({ key: name, alias: name, f: c.f, round: c.round })
       outCols(c, name)
     }
-    // Django: selectRelated('a__b') selects a too
+    // selectRelated('a__b') selects a too
     const paths = [...new Set((spec.related ?? []).flatMap(p => p.split('__').map((_, i, xs) => xs.slice(0, i + 1).join('__'))))]
     for (const path of paths) related.push(selectRelated(s, def, path, related.length, push))
   }

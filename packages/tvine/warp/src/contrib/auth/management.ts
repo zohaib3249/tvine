@@ -1,4 +1,4 @@
-// tvine createsuperuser / changepassword (Django management commands). The CLI configures the database and
+// tvine createsuperuser / changepassword. The CLI configures the database and
 // passes a prompt; nothing here prints a password.
 import type { Settings } from '../../core/types.js'
 import { getUserModel, userMeta } from './models.js'
@@ -19,7 +19,7 @@ async function askPassword(prompt: Prompt, io: Out, s: Settings, user: Record<st
   }
 }
 
-// Django createsuperuser on get_user_model(): its usernameField, then each of its requiredFields, then the password.
+// createsuperuser on getUserModel(): its usernameField, then each of its requiredFields, then the password.
 // --noinput reads TVINE_SUPERUSER_<FIELD> (USERNAME for the usernameField, EMAIL, PHONE…) and TVINE_SUPERUSER_PASSWORD;
 // --username / --email flags win.
 const envName = (f: string) => `TVINE_SUPERUSER_${f.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`
@@ -50,7 +50,7 @@ export async function createsuperuser(o: { username?: string; email?: string; no
     values[uf] = name
     for (const f of requiredFields) {
       let v = given(f)
-      // Django: email is in AbstractUser.REQUIRED_FIELDS but may be blank
+      // email is in the built-in REQUIRED_FIELDS but may be blank
       while (v === undefined) { v = (await o.prompt(`${label(f)}${f === 'email' ? ' address' : ''}: `)).trim(); if (!v && f === 'email') break; if (!v) v = undefined }
       if (v) values[f] = v
     }

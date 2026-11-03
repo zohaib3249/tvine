@@ -1,7 +1,7 @@
-// HTTP middleware — Django MIDDLEWARE for every request (docs/design/conventions/middleware-hooks.md).
+// HTTP middleware — runs for every request (docs/design/conventions/middleware-hooks.md).
 // settings.middleware lists them, outermost first; ONLY listed ones run. Each sees the request on the way in
 // (processRequest / process before next()) and the response headers on the way out (processResponse, run at the
-// moment headers are sent, innermost first, Django order). An ended response short-circuits: inner middleware and
+// moment headers are sent, innermost first). An ended response short-circuits: inner middleware and
 // the transports never run, and only the middleware it already passed see its headers.
 import { BlockList, isIP } from 'node:net'
 import { existsSync } from 'node:fs'
@@ -41,7 +41,7 @@ export interface HttpMiddleware {
   name: string
   // around style (Koa / Express): next() resolves when the response has finished (or the client went away)
   process?(req: MwRequest, res: ServerResponse, next: () => Promise<void>): Maybe<void>
-  // Django hooks. processRequest: end the response to short-circuit. processResponse: at header time, sync.
+  // hooks. processRequest: end the response to short-circuit. processResponse: at header time, sync.
   processRequest?(req: MwRequest, res: ServerResponse): Maybe<void>
   processResponse?(req: MwRequest, res: ServerResponse): void
   // an error thrown by this or an inner middleware: return true when you answered it (else the next outer one tries; then 500)
@@ -83,7 +83,7 @@ export function hostOf(req: IncomingMessage, trustProxy: number): string | undef
   const m = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::(\d{1,5}))?$/.exec(h)
   return m ? m[1] : ''   // '' = malformed: matches nothing
 }
-// Django validate_host: '*' any, '.example.com' = example.com and every subdomain, else exact
+// host check: '*' any, '.example.com' = example.com and every subdomain, else exact
 export function hostAllowed(host: string, allowed: readonly string[]): boolean {
   if (!host) return false
   const h = host.replace(/\.$/, '')
@@ -132,7 +132,7 @@ export const CATALOG: Record<string, Factory> = {
     processResponse(req, res) { if (!res.hasHeader('x-request-id')) res.setHeader('x-request-id', req.tvine.id!) },
   }),
 
-  // Django ALLOWED_HOSTS: an unknown Host is a 400 (DNS rebinding, poisoned absolute URLs). Always runs first.
+  // allowed hosts: an unknown Host is a 400 (DNS rebinding, poisoned absolute URLs). Always runs first.
   AllowedHosts: (o, b) => {
     const allowed = [...(o.hosts as string[] | undefined) ?? b.settings.allowedHosts, ...(b.debug && !b.production ? devHosts(b.settings) : [])]
     return {
@@ -145,7 +145,7 @@ export const CATALOG: Record<string, Factory> = {
         // check) always passes; DNS rebinding carries the attacker's name in Host
         if (h !== undefined && (hostAllowed(h, allowed) || isLocalRequest(req, b.settings))) { req.tvine.host = h; return }
         securityEvent('host_refused', { host: String(hdr(req, 'host') ?? '').slice(0, 100), ip: req.tvine.ip, requestId: req.tvine.id, path: req.tvine.path }, { settings: b.settings, audit: false })
-        // dev: say which host and how to allow it (Django DEBUG's "You may need to add … to ALLOWED_HOSTS"); production: bare
+        // dev: say which host and how to allow it (the line to add to allowedHosts); production: bare
         if (b.debug && !b.production && h) {
           const p = h.split('.'), wild = p.length > 2 && !/^[\d.]+$/.test(h) ? `*.${p.slice(1).join('.')}` : h
           return send(res, 400, `Bad Request (invalid host): '${h}' is not in allowedHosts.\nDev / port forwarding: add it in config/settings/dev.ts\n  dev: { allowedHosts: ['${wild}'] },\nor set TVINE_DEV_ALLOWED_HOSTS=${wild} (then restart tvine dev). Production: list it in allowedHosts / TVINE_ALLOWED_HOSTS.`)
@@ -155,7 +155,7 @@ export const CATALOG: Record<string, Factory> = {
     }
   },
 
-  // Django SECURE_SSL_REDIRECT: plain http → 301 https (behind a proxy: settings.trustProxy reads X-Forwarded-Proto)
+  // SSL redirect: plain http → 301 https (behind a proxy: settings.trustProxy reads X-Forwarded-Proto)
   SslRedirect: (o, b) => ({
     name: 'SslRedirect',
     processRequest(req, res) {

@@ -1,4 +1,4 @@
-// Django admin.py: what /admin shows for notes.
+// admin.ts: what /admin shows for notes.
 import { admin, ModelAdmin } from 'tvine/contrib/admin'
 import { Note } from './models.ts'
 

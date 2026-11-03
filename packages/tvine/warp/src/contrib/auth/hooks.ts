@@ -1,5 +1,5 @@
 // tvine.auth lifecycle: ready() installs request.user resolution; postMigrate() creates permission rows
-// (Django create_permissions on post_migrate): add/change/delete/view for every model of every installed app.
+// (on postMigrate): add/change/delete/view for every model of every installed app.
 import { setAuthBackend } from '../../core/auth.js'
 import type { ServerCtx } from '../../core/dispatch.js'
 import type { PostMigrate } from '../../data/migrate.js'

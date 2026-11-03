@@ -1,6 +1,6 @@
 # Settings and environment
 
-One file, `settings.ts` at the app root, configures everything. It is Django's `settings.py`: zod-validated at
+One file, `settings.ts` at the app root, configures everything. It is zod-validated at
 boot, with defaults for every key you leave out.
 
 ## Minimal
@@ -40,22 +40,22 @@ and which backend each subsystem uses.
 | `site` | `{ name, description }`: shown to agents (`/llms.txt`, MCP) and in the admin | — |
 | `installedApps` | built-in apps: `tvine.auth`, `tvine.tasks`, `tvine.admin`, `tvine.audit` | `[]` |
 | `secret` | HMAC key, 32+ chars; an array (or `TVINE_SECRET=new,old`) rotates keys | dev: random; prod: required |
-| `debug` | Django `DEBUG` | on under `tvine dev` and `NODE_ENV=development` |
-| `allowedHosts` | Django `ALLOWED_HOSTS` | dev: localhost; prod: required |
+| `debug` | debug mode: dev CSP, inspector feed, helpful errors | on under `tvine dev` and `NODE_ENV=development` |
+| `allowedHosts` | allowed `Host` names (`*`, `.example.com`); others get a 400 | dev: localhost; prod: required |
 | `dev.allowedHosts` | dev only, added on top: port forwarding / tunnel hosts (`'*.ngrok-free.app'`, `'*.devtunnels.ms'`); also `TVINE_DEV_ALLOWED_HOSTS`. In dev a refused host's 400 names the line to add | `[]` |
 | `db` | `{ url, pool: { max, acquireMs, idleMs }, atomicRequests, slowQueryMs }` | `file:./tvine.db`, one transaction per request |
 | `session` | `{ ttlMs, maxAgeMs, cookieName, secure, sameSite, max, backend }` | 24 h idle, 14 days max, `lax` |
 | `limits` | `{ bodyBytes, handlerMs, rate: { limit, windowMs, by }, sseConnPerIp, backend }` (`rate.by: 'shield'` lets Shield's rules be the only general rate limit, see [shield.md](shield.md#rate-limits-shield-and-the-framework)) | 64 KB, 10 s, 60/min, `'framework'` |
 | `trustProxy` | how many `X-Forwarded-For` hops to trust (drives `request.ip`) | `0` |
-| `middleware` / `actionMiddleware` | HTTP middleware (Django `MIDDLEWARE`) / around each action | RequestId, AllowedHosts, Security, Cors, GZip |
+| `middleware` / `actionMiddleware` | HTTP middleware / around each action | RequestId, AllowedHosts, Security, Cors, GZip |
 | `security.headers` | HSTS, CSP, COOP, CORP, Referrer-Policy, Permissions-Policy | on |
 | `cors` | `{ origins, methods, credentials, maxAge, routes }` | closed |
 | `compression` | gzip / brotli | on, 1 KB threshold |
 | `mcp` | `{ tools: 'both', exclude, maxTools }` | 40 typed tools |
 | `agent` | `{ shape, budget, rowsL1, inTab }`: the agent snapshot and tab control | `inTab: 'on'` |
-| `logging` | `'json' \| 'pretty' \| 'none'` or a Django `LOGGING` object | pretty in dev, json in prod |
+| `logging` | `'json' \| 'pretty' \| 'none'` or a logging config object | pretty in dev, json in prod |
 | `tasks` | worker lease, poll, grace, result TTL | see [tasks-cache-email.md](tasks-cache-email.md) |
-| `caches`, `email` | Django `CACHES`, `EMAIL_*` | memory cache, console mail in dev |
+| `caches`, `email` | named caches, mail backend and addresses | memory cache, console mail in dev |
 | `redis`, `channels` | shared backends for multi-process deploys | memory |
 | `media` | `{ dir, route }` for uploads | `./media`, `/media` |
 | `metrics` | Prometheus text at `/tvine/metrics` | off |
@@ -70,7 +70,7 @@ Backends (memory vs redis) for production: [deploy.md](deploy.md).
 
 ## Middleware
 
-`settings.middleware` is Django's `MIDDLEWARE`. Leave it out and you get the safe default list (the first five
+`settings.middleware` is the HTTP middleware list. Leave it out and you get the safe default list (the first five
 below). Only listed entries run; `middleware: []` turns every one off, security headers included.
 
 ```ts
@@ -130,7 +130,7 @@ export const timing = defineMiddleware({
     await next()
   },
 })
-// or Django-style hooks: processRequest(req, res), processResponse(req, res), processException(req, res, err)
+// or hooks: processRequest(req, res), processResponse(req, res), processException(req, res, err)
 ```
 
 `req.tvine` has `path`, `ip`, `https`, `host`, `id`, `locale`, `log`.
@@ -154,7 +154,7 @@ cannot skip them. Use it for things like a "shop closed" switch.
 
 ```ts
 logging: 'json'          // or 'pretty' | 'none'. Default: pretty in dev, json in production
-logging: {               // or Django LOGGING
+logging: {               // or a config object
   level: 'info',
   handlers: [
     { type: 'console' },
@@ -178,7 +178,7 @@ Built-in loggers: `tvine` (runtime errors), `tvine.request`, `tvine.security` (l
 
 ## Environment variables
 
-Read typed values with `env`, like django-environ:
+Read typed values with `env`:
 
 ```ts
 import { defineSettings, env } from 'tvine'
@@ -268,9 +268,9 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `site.name` / `site.description` | `'tvine app'` / `''` | shown to agents (`/llms.txt`, MCP) and in the admin |
 | `siteUrl` | unset (the request's Host) | public origin like `https://shop.example` for links the server builds (approve links, sitemap) |
 | `secret` | dev: random per boot; prod: `TVINE_SECRET`, required | HMAC key, 32+ chars; an array rotates (newest first) |
-| `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | Django `DEBUG`: dev CSP, inspector feed, `ServerTiming` |
+| `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | dev CSP, inspector feed, `ServerTiming` |
 | `installedApps` | `[]` | project apps by folder (`'blog'`) and built-ins `'tvine.auth'`, `'tvine.tasks'`, `'tvine.admin'`, `'tvine.audit'`, `'tvine.shield'` |
-| `rootUrlconf` | `config/urls`, else `urls` | Django `ROOT_URLCONF`, a path from the project root without extension |
+| `rootUrlconf` | `config/urls`, else `urls` | the root URL table, a path from the project root without extension |
 | `tasksModule` | `config/tasks` | where `tvine worker` finds queues and `beatSchedule` |
 | `allowedHosts` | dev: localhost, LAN IPs, hostname; prod: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`, `'*'` |
 | `dev.allowedHosts` | `[]` | dev only, extra hosts such as `'*.ngrok-free.app'` |
@@ -359,7 +359,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 
 | Key | Default | Meaning |
 |---|---|---|
-| `auth.userModel` | `'auth.User'` | Django `AUTH_USER_MODEL`; set before the first migrate |
+| `auth.userModel` | `'auth.User'` | the user model; set before the first migrate |
 | `auth.backends` | `['tvine.auth.ModelBackend']` | tried in order; also `'tvine.auth.EmailBackend'` or a dotted path |
 | `auth.user` | unset | your own `(req) => user \| null` resolver; overrides everything |
 | `auth.hashers` / `validators` | built-in | password hashers (first = preferred) and validators |
@@ -384,5 +384,5 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `admin.stats.pages.enabled` / `keepParams` | `true` / `[]` | page stats; query params kept in the path |
 | `email.backend` | console (dev), memory (tests), smtp (prod) | also `'file'`, `'dummy'` ([tasks-cache-email.md](tasks-cache-email.md)) |
 | `email.host` / `port` / `user` / `password` / `useTls` / `useSsl` / `allowPlainAuth` / `timeoutMs` | `localhost` / `25` / `''` / `''` / `false` / `false` / `false` / `10000` | SMTP |
-| `email.defaultFrom` / `serverEmail` / `admins` / `subjectPrefix` / `filePath` | `webmaster@localhost` / `root@localhost` / `[]` / `'[Tvine] '` / `'./mail'` | Django `EMAIL_*` |
+| `email.defaultFrom` / `serverEmail` / `admins` / `subjectPrefix` / `filePath` | `webmaster@localhost` / `root@localhost` / `[]` / `'[Tvine] '` / `'./mail'` | sender addresses, admin list, subject prefix, file backend folder |
 | `logging` | pretty (dev), json (prod) | string or `{ level, format, handlers, loggers, redact }`; handler types `console` (`stream`), `file` (`path`, `maxBytes`, `daily`, `keep`), `custom` (`write`), `memory` (`size`) |

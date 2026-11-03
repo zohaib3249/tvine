@@ -1,5 +1,5 @@
 'use client'
-// <ModelForm form={ModelMeta.form} values onSubmit errors />: Django ModelForm/admin change form from field meta.
+// <ModelForm form={ModelMeta.form} values onSubmit errors />: a model / admin change form from field meta.
 // Weft widget `form:<name>`; fields are `form:<name> > field:<f>`, inline rows `form:<name> > inline:<i> > row:<key> > field:<f>`.
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useWidget } from '../widget/useWidget.js'
@@ -20,7 +20,7 @@ export type ModelFormProps = {
   onSubmit: FormSubmit                                           // a rejection is mapped like `errors`
   errors?: unknown                                               // server errors (see mapServerErrors)
   readOnly?: boolean
-  layout?: 'stacked' | 'aligned'                                 // aligned = label beside input (Django admin) on wide screens
+  layout?: 'stacked' | 'aligned'                                 // aligned = label beside input on wide screens
   name?: string; label?: string; model?: string                  // widget id form:<name>; model 'app.model' for overrides/search
   search?: FormSearch
   uploadImage?: (file: File, field: string) => Promise<string>    // rich text image button: upload, return the URL
@@ -46,11 +46,11 @@ function initialRows(im: InlineMeta, given?: Row[] | { rows: Row[] }): Row[] {
   while (rows.length < im.min) rows.push(newRow(im))
   return rows
 }
-// Django ignores an untouched extra form; a deleted new row is simply dropped.
+// an untouched extra form is ignored; a deleted new row is simply dropped.
 const live = (rows: Row[]) => rows.filter((r) => !(r._new && (!r._touched || r.DELETE)))
 
 export const slugify = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9\s_-]/g, '').trim().replace(/[\s_-]+/g, '-').slice(0, 50)
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // Django capfirst
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // capitalize the first letter
 
 export function ModelForm(props: ModelFormProps) {
   const { form, onSubmit, readOnly, layout = 'stacked', name = 'model', model, search, call, actions, top, className, slots } = props
@@ -80,7 +80,7 @@ export function ModelForm(props: ModelFormProps) {
   const setField = (n: string, v: unknown) => {
     setValues((s) => {
       const next = { ...s, [n]: v }
-      // Django prepopulated_fields: a slugAuto field follows its source until someone edits it away from the generated slug
+      // a slugAuto field follows its source until someone edits it away from the generated slug
       for (const [k, f] of Object.entries(form.fields)) if (f.kind === 'slugAuto' && f.from === n && (!s[k] || s[k] === slugify(String(s[n] ?? '')))) next[k] = slugify(String(v ?? ''))
       return next
     })
@@ -162,7 +162,7 @@ export function ModelForm(props: ModelFormProps) {
   </w.Scope>
 }
 
-// Django fieldset; classes ['collapse'] → native <details> (opens itself when it holds an error).
+// fieldset; classes ['collapse'] → native <details> (opens itself when it holds an error).
 export function Fieldset(p: { title?: string | null; classes?: string[]; invalid?: boolean; children: ReactNode; slots?: ModelFormProps['slots']; st?: ModelFormState; description?: string }) {
   const collapse = p.classes?.includes('collapse'), cls = ['tf-fieldset', ...(p.classes ?? []).map((c) => `tf-fs-${c}`)].join(' ')
   const st = p.st ?? ({} as ModelFormState)

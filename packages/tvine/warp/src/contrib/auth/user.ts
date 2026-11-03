@@ -1,4 +1,4 @@
-// Django's user API in one place: permission sets (ModelBackend.get_*_permissions), the instance methods every
+// The user API in one place: permission sets (ModelBackend permission lookups), the instance methods every
 // user-model row carries (checkPassword, hasPerm, getFullName…), and authenticate() over settings.auth.backends.
 // models.ts imports this module for userMethods, so the models are only reached lazily (import()) from here.
 import { existsSync } from 'node:fs'
@@ -31,7 +31,7 @@ const inChunks = async <R>(ids: unknown[], fn: (chunk: unknown[]) => Promise<R[]
 const inList = (field: string, value: unknown[]): Where[] => [{ field, op: 'in', value }]
 
 export interface PermUser { id: string | number; isActive: boolean; isSuperuser: boolean }
-// Django get_group_permissions / get_all_permissions: codenames; inactive → none; active superuser → every one
+// group / all permissions: codenames; inactive → none; active superuser → every one
 export async function permissionsOf(u: PermUser, groupsOnly = false): Promise<Set<string>> {
   const { Permission, UserPermission, UserGroup, GroupPermission } = await M()
   if (!u.isActive) return new Set()
@@ -44,7 +44,7 @@ export async function permissionsOf(u: PermUser, groupsOnly = false): Promise<Se
   return new Set((await inChunks(ids, (c) => Permission.objects.filter(inList('id', c)).all())).map((p) => p.codename))
 }
 
-// Django semantics: active superuser → everything; with an object only settings.auth.objectPermission answers
+// active superuser → everything; with an object only settings.auth.objectPermission answers
 export async function userHasPerm(u: PermUser, perms: () => Promise<Set<string>>, perm: string, obj: unknown, s: Settings): Promise<boolean> {
   if (!u.isActive) return false
   if (obj !== undefined) {
@@ -67,7 +67,7 @@ export const userMethods = {
   hasUsablePassword(this: Row): boolean { return isUsable(this.password) },
   async checkPassword(this: Row, raw: string): Promise<boolean> {
     const r = await checkPassword(raw, this.password, current)
-    if (r.ok && r.upgrade) await this.setPassword(raw)   // Django check_password's setter: rehash on the preferred hasher
+    if (r.ok && r.upgrade) await this.setPassword(raw)   // checkPassword: rehash on the preferred hasher
     return r.ok
   },
   // hashes, saves, and revokes the user's tokens (every session bound to the old hash is already dead)
@@ -105,7 +105,7 @@ async function saved(row: Row): Promise<void> {
   await revokeTokens(row.id)
 }
 
-// ---- authentication backends (Django AUTHENTICATION_BACKENDS) ---------------------------------------
+// ---- authentication backends (settings.auth.backends) ----------------------------------------------
 export type Credentials = Record<string, unknown> & { password?: string }
 export interface AuthBackendClass {
   authenticate(ctx: AuthCtx, credentials: Credentials): Promise<Row | null | undefined> | Row | null | undefined
@@ -113,7 +113,7 @@ export interface AuthBackendClass {
 }
 export type AuthCtx = Partial<Pick<ActionCtx, 'request' | 'sid'>> & { settings: Settings }
 
-// Django ModelBackend: the user model's usernameField (or `username`) + password. Unknown or inactive users cost
+// ModelBackend: the user model's usernameField (or `username`) + password. Unknown or inactive users cost
 // the same hashing as a real check (timing-safe); a hash on an older hasher is upgraded.
 export const ModelBackend: AuthBackendClass = {
   async authenticate(ctx, c) {
@@ -126,7 +126,7 @@ export const ModelBackend: AuthBackendClass = {
   async getUser(id) { const { getUserModel } = await M(); return (await getUserModel().get(id)) ?? null },
 }
 
-// login by email (case-insensitive, Django email__iexact); two accounts on one address → no match
+// login by email (case-insensitive, email__iexact); two accounts on one address → no match
 export const EmailBackend: AuthBackendClass = {
   async authenticate(ctx, c) {
     const { getUserModel, userMeta } = await M()
@@ -174,7 +174,7 @@ export async function resolveBackend(e: unknown, i: number, root = process.cwd()
 }
 export const backendsOf = (s: Settings): AuthBackendClass[] => (s.auth?.backends as AuthBackendClass[] | undefined) ?? [ModelBackend]
 
-// Django authenticate(): each backend in order; the first user wins. Bad credentials → null, never a throw (a
+// authenticate(): each backend in order; the first user wins. Bad credentials → null, never a throw (a
 // locked account / ip still throws `locked`). Throttled per (identifier, ip) like the login action.
 export async function authenticate(ctx: AuthCtx, credentials: Credentials): Promise<Row | null> {
   const s = ctx.settings, t = throttleOf(s), ip = ctx.request?.ip ?? ''

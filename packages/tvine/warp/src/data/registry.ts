@@ -20,7 +20,7 @@ export function defineChecked(def: ModelDef, model: unknown): void {
   }
 }
 
-// Django's reverse-accessor clash checks (fields.E304 / E302): every reverse name on a model is unique
+// reverse-accessor clash checks: every reverse name on a model is unique
 // and does not shadow one of its fields. Run at boot (discoverModels) and before the first relation lookup.
 export function checkRelations(): void {
   if (checked) return

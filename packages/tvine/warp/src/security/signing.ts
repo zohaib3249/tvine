@@ -1,4 +1,4 @@
-// Django django.core.signing (docs/design/conventions/security-features.md): tamper-proof, optionally
+// Signing (docs/design/conventions/security-features.md): tamper-proof, optionally
 // expiring tokens for links, cookies and one-time values. Signs with the first settings.secret key and
 // verifies against every key (rotation), constant-time. Values are readable (base64), not encrypted.
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -34,7 +34,7 @@ export class Signer {
     if (/^[A-Za-z0-9_-]*$/.test(this.sep)) throw new Error('Signer: sep may not be a base64url character')
   }
   private keys(): string[] { return this.opts.key === undefined ? secretKeys() : [this.opts.key].flat() }
-  // Django salted_hmac: a per-salt key, so a token for one purpose never verifies for another
+  // salted HMAC: a per-salt key, so a token for one purpose never verifies for another
   private mac(value: string, key: string): Buffer {
     const k = createHmac('sha256', `${this.salt}signer`).update(key).digest()
     return createHmac('sha256', k).update(value).digest()
@@ -52,7 +52,7 @@ export class Signer {
   }
 }
 
-// value:timestamp:signature; the timestamp (seconds, base36) is covered by the MAC. maxAge in seconds (Django).
+// value:timestamp:signature; the timestamp (seconds, base36) is covered by the MAC. maxAge in seconds.
 export class TimestampSigner extends Signer {
   constructor(opts: SignerOpts = {}) { super({ salt: 'tvine.signing.TimestampSigner', ...opts }) }
   timestamp(): string { return Math.floor(Date.now() / 1000).toString(36) }
@@ -69,7 +69,7 @@ export class TimestampSigner extends Signer {
 }
 
 export interface DumpsOpts { salt?: string; compress?: boolean; key?: string | string[] }
-// Django signing.dumps: JSON → base64url (deflated when shorter, marked by a leading ".") → TimestampSigner
+// dumps: JSON → base64url (deflated when shorter, marked by a leading ".") → TimestampSigner
 export function dumps(obj: unknown, opts: DumpsOpts = {}): string {
   const json = Buffer.from(JSON.stringify(obj))
   let data = b64(json)

@@ -24,7 +24,7 @@ export type AdminConfig = {
 let config: AdminConfig = {}
 export function configureAdmin(c: AdminConfig): void { config = { ...config, ...c, components: { ...config.components, ...c.components }, fieldWidgets: { ...config.fieldWidgets, ...c.fieldWidgets } } }
 export const getConfig = () => config
-export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // Django capfirst
+export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)   // capitalize the first letter
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 export const slotClass = (s: Slot) => config.classNames?.[s]
 

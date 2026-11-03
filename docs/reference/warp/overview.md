@@ -1,6 +1,6 @@
 # Warp overview
 
-Warp is the backend half of Tvine: a Django-style TypeScript server. You define models (`defineModel`), write actions and views in each app, list the apps in settings, and run `tvine dev`. Every action is reachable four ways from one definition: a human `<Form>` on a Next.js page, plain HTTP at `/tvine/api/<app>.<name>`, optional REST paths from `urls.ts`, and an MCP tool at `/mcp` for AI agents. The data layer (ORM, migrations, fixtures, database drivers) lives in `warp/src/data/`; this folder documents all of it.
+Warp is the backend half of Tvine: a TypeScript server with models, migrations, auth and admin. You define models (`defineModel`), write actions and views in each app, list the apps in settings, and run `tvine dev`. Every action is reachable four ways from one definition: a human `<Form>` on a Next.js page, plain HTTP at `/tvine/api/<app>.<name>`, optional REST paths from `urls.ts`, and an MCP tool at `/mcp` for AI agents. The data layer (ORM, migrations, fixtures, database drivers) lives in `warp/src/data/`; this folder documents all of it.
 
 ## Import
 
@@ -15,18 +15,18 @@ The npm package is `tvinejs`; projects install it under the name `tvine` (`"tvin
 
 `tvine startproject shop` writes this (from `warp/src/cli/scaffold.ts`):
 
-| Path | What it is | Django equivalent |
-|---|---|---|
-| `config/settings/base.ts` | Shared settings object (`satisfies SettingsInput`) | `settings/base.py` |
-| `config/settings/dev.ts` | `defineSettings({ ...base, debug: true, ... })`, used by `tvine dev / migrate / shell` | `settings/dev.py` |
-| `config/settings/prod.ts` | Production settings; throws if `TVINE_SECRET`, `TVINE_ALLOWED_HOSTS`, `DATABASE_URL` are missing | `settings/prod.py` |
-| `config/settings/local.ts` | Optional, git-ignored; merged over `dev.ts` (copy `local.example.ts`) | `local_settings.py` |
-| `config/urls.ts` | Root URL table (`urlpatterns`) | `ROOT_URLCONF` |
-| `config/tasks.ts` | Worker queues and beat schedule | Celery config |
-| `config/middleware/` | Your own HTTP middleware | custom `MIDDLEWARE` entries |
-| `apps/<app>/` | One app, listed in `installedApps` | a Django app |
-| `app/` | Next.js pages (the Weft frontend) | templates |
-| `.env` | `TVINE_SECRET`, `DATABASE_URL` for development | |
+| Path | What it is |
+|---|---|
+| `config/settings/base.ts` | Shared settings object (`satisfies SettingsInput`) |
+| `config/settings/dev.ts` | `defineSettings({ ...base, debug: true, ... })`, used by `tvine dev / migrate / shell` |
+| `config/settings/prod.ts` | Production settings; throws if `TVINE_SECRET`, `TVINE_ALLOWED_HOSTS`, `DATABASE_URL` are missing |
+| `config/settings/local.ts` | Optional, git-ignored; merged over `dev.ts` (copy `local.example.ts`) |
+| `config/urls.ts` | Root URL table (`urlpatterns`) |
+| `config/tasks.ts` | Worker queues and beat schedule |
+| `config/middleware/` | Your own HTTP middleware |
+| `apps/<app>/` | One app, listed in `installedApps` |
+| `app/` | Next.js pages (the Weft frontend) |
+| `.env` | `TVINE_SECRET`, `DATABASE_URL` for development |
 
 Which settings file loads: `TVINE_SETTINGS` (or `tvine --settings config/settings/prod`) names it. Unset: `config/settings/prod` when `NODE_ENV=production`, else `config/settings/dev` plus `config/settings/local` if present. A project without `config/settings/` uses `./settings.ts` (the `examples/notes` project does this).
 

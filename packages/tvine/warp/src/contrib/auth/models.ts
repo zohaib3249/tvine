@@ -6,7 +6,7 @@ import { setRowProto } from '../../data/table.js'
 import { userModelLabel, userSwapped, userTable } from '../../data/swappable.js'
 import { userMethods } from './user.js'
 
-// Django AbstractBaseUser + PermissionsMixin: what every user model has (defineUserModel adds the missing ones)
+// What every user model has (defineUserModel adds the missing ones)
 const BASE_USER = {
   id: field.id(),
   password: field.text({ hidden: true }),            // encoded hash (hashers.ts); '!…' = unusable
@@ -15,7 +15,7 @@ const BASE_USER = {
   isSuperuser: field.bool({ default: false }),
   lastLogin: field.datetime({ optional: true }),
 }
-// Django AbstractUser: the built-in auth.User's fields (extendUser starts from these)
+// The built-in auth.User's fields (extendUser starts from these)
 export const USER_FIELDS = {
   ...BASE_USER,
   username: field.text({ unique: true, searchable: true }),
@@ -25,13 +25,13 @@ export const USER_FIELDS = {
   dateJoined: field.datetime({ auto: true }),
 }
 
-// Django USERNAME_FIELD / REQUIRED_FIELDS / EMAIL_FIELD, per user model
+// USERNAME_FIELD / REQUIRED_FIELDS / EMAIL_FIELD, per user model
 export interface UserOptions { name?: string; usernameField?: string; requiredFields?: string[]; emailField?: string | null; meta?: ModelMeta }
 export interface UserMeta { usernameField: string; requiredFields: string[]; emailField: string | null }
 const metas = new WeakMap<object, UserMeta>()
 export const userMeta = (m: object = getUserModel()): UserMeta => metas.get(m) ?? { usernameField: 'username', requiredFields: ['email'], emailField: 'email' }
 
-// Django AbstractBaseUser: a fully custom user model. `fields` + the base ones (id, password, isActive, isStaff,
+// A fully custom user model. `fields` + the base ones (id, password, isActive, isStaff,
 // isSuperuser, lastLogin). Its table is the configured settings.auth.userModel's ('accounts.User' → accounts_user).
 export function defineUserModel<const F extends Fields>(fields: F, o: UserOptions = {}) {
   const name = o.name ?? (userSwapped() ? userTable() : undefined)
@@ -47,17 +47,17 @@ export function defineUserModel<const F extends Fields>(fields: F, o: UserOption
   const emailField = o.emailField === undefined ? ('email' in all ? 'email' : null) : o.emailField
   const model = defineModel(name, all as typeof BASE_USER & F, o.meta)
   metas.set(model, { usernameField, requiredFields, emailField })
-  setRowProto(model.fields, Object.create(userMethods, { USERNAME_FIELD: { value: usernameField } }))   // Django's class attribute
+  setRowProto(model.fields, Object.create(userMethods, { USERNAME_FIELD: { value: usernameField } }))   // a class-level attribute
   return model
 }
 
-// Django AbstractUser subclass: every built-in field (username, email, names, flags, dates) plus `extra`
+// The built-in user, extended: every built-in field (username, email, names, flags, dates) plus `extra`
 export const extendUser = <const F extends Fields>(extra: F, o: UserOptions = {}) =>
   defineUserModel({ ...USER_FIELDS, ...extra } as typeof USER_FIELDS & F, { usernameField: 'username', requiredFields: ['email'], ...o })
 
 export const User = defineUserModel(USER_FIELDS, { name: 'auth_user', usernameField: 'username', requiredFields: ['email'] })
 
-// Django get_user_model(): settings.auth.userModel's model (the built-in User by default). A custom one must be
+// getUserModel(): settings.auth.userModel's model (the built-in User by default). A custom one must be
 // loaded (its app's models.ts imported) first; boot and every management command do that.
 export function getUserModel(): Model<typeof USER_FIELDS> {
   if (!userSwapped()) return User

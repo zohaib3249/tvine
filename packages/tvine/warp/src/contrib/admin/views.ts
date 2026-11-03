@@ -81,7 +81,7 @@ export async function logAction(ctx: Ctx, key: string, pk: unknown, objectRepr: 
 }
 
 // ---- form fields ------------------------------------------------------------------------------------
-// the editable + read-only fields of the form (Django get_fields): hidden fields only when a password
+// the editable + read-only fields of the form : hidden fields only when a password
 function formFields(a: Base): string[] {
   const all = Object.entries(a.model.fields as Fields).filter(([n, f]) => f.kind !== 'id' && (!f.opts.hidden || isPassword(n, f)) && !(f.opts.auto && !a.readonlyFields.includes(n)))
   const fs = (a as ModelAdmin).fieldsets?.flatMap(([, f]) => f.fields) ?? a.fields ?? all.map(([n]) => n)
@@ -98,8 +98,8 @@ function formMeta(a: Base): Record<string, FieldMeta> {
   return out
 }
 
-// Django ModelChoiceField: an fk / m2m that is neither autocomplete nor raw-id is a <select> of the related rows
-// ponytail: first 500 rows; use autocompleteFields for a big related table (Django loads them all)
+// an fk / m2m that is neither autocomplete nor raw-id is a <select> of the related rows
+// ponytail: first 500 rows; use autocompleteFields for a big related table
 const RELATED_CHOICES = 500
 async function withChoices(a: Base, ctx: Ctx, fields: Record<string, FieldMeta>): Promise<Record<string, FieldMeta>> {
   for (const m of Object.values(fields)) {
@@ -140,7 +140,7 @@ async function valuesOf(a: Base, ctx: Ctx, obj: Row): Promise<Row> {
 }
 
 // input values → { data (row keys), m2m, errors }; only form fields that are not read-only
-// `changed` (the LogEntry message) lists only fields whose value differs from `old` (Django form.changed_data)
+// `changed` (the LogEntry message) lists only fields whose value differs from `old`
 function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: Row, agent = false) {
   const errors: Record<string, string> = {}
   const data: Row = {}, m2m: Record<string, unknown[]> = {}, changed: string[] = []
@@ -164,12 +164,12 @@ function clean(a: Base, values: Row, creating: boolean, only?: string[], old?: R
   }
   return { data, m2m, errors, changed }
 }
-// Django ModelChoiceField: an fk / m2m pk must be a row that exists and that this user can see (the related admin's
+// an fk / m2m pk must be a row that exists and that this user can see (the related admin's
 // getQueryset, like autocomplete; the model's rows when it has no admin)
 async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clean>>, obj?: Row): Promise<void> {
   for (const [n, f] of Object.entries(a.model.fields as Fields)) {
     // a password field (any model): stored through the auth hasher (settings.auth.hashers[0]), never as typed
-    // and checked by settings.auth.passwordValidators first (Django's admin forms run them too)
+    // and checked by settings.auth.passwordValidators first
     if (isPassword(n, f) && typeof c.data[f.key(n)] === 'string') {
       const problems = validatePassword(c.data[f.key(n)], ctx.settings, { ...obj, ...c.data })
       if (problems.length) c.errors[n] = problems.join(' ')
@@ -185,7 +185,7 @@ async function cleanChoices(a: Base, ctx: Ctx, c: Awaited<ReturnType<typeof clea
     if ((await qs.filter({ id__in: ids }).count()) !== ids.length) c.errors[n] = 'Select a valid choice. That choice is not one of the available choices.'
   }
 }
-// every bad field (Django ValidationError dict): `errors` per input (inline rows `lines.0.qty`), `field` = the first
+// every bad field: `errors` per input (inline rows `lines.0.qty`), `field` = the first
 const fieldErrors = (errors: Record<string, string>, prefix = ''): DomainError => {
   const list = Object.entries(errors).map(([k, message]) => ({ field: prefix + k, message }))
   return new DomainError('invalid_param', list.map((e) => `${e.field}: ${e.message}`).join('; '), list[0]!.field, list)
@@ -214,10 +214,10 @@ export async function choicesOf(a: ModelAdmin, ctx: Ctx, s: Spec): Promise<[stri
   }
   // AllValuesFieldListFilter: the distinct values in use
   const key = f.key(s.field!)
-  const vals = await scoped(a, ctx).values(key).distinct().order(key).all(200)   // Django: model_admin.get_queryset(request)
+  const vals = await scoped(a, ctx).values(key).distinct().order(key).all(200)   // through the admin getQueryset
   return vals.map((r: Row) => r[key]).filter((v: unknown) => v != null).map((v: unknown): [string, string] => [v instanceof Date ? v.toISOString() : String(v), String(v)])
 }
-// Django DateFieldListFilter on calendar days (UTC): __date for a datetime, the value itself for a date
+// date list filter on calendar days (UTC): __date for a datetime, the value itself for a date
 function dateRange(a: ModelAdmin, s: Spec, v: string): Record<string, string> {
   const n = s.field!, f = a.model.fields[n]!, key = f.key(n)
   const day = (d: Date) => d.toISOString().slice(0, 10), t = new Date(), today = day(t)
@@ -227,7 +227,7 @@ function dateRange(a: ModelAdmin, s: Spec, v: string): Record<string, string> {
   return { [`${k}__gte`]: from, [`${k}__lte`]: today }
 }
 // one query per filter: GROUP BY the column (choice / boolean / related / all values), one conditional COUNT per
-// date range; a custom filter's queryset() is opaque, so one COUNT per lookup (Django does the same)
+// date range; a custom filter's queryset() is opaque, so one COUNT per lookup
 async function facetCounts(a: ModelAdmin, ctx: Ctx, base: QuerySet<any>, s: Spec, ch: [string, string][]): Promise<number[]> {
   if (s.cls) return Promise.all(ch.map(async ([v]) => (await applyFilter(a, ctx, base, s, v)).count()))
   const f = a.model.fields[s.field!]!, key = f.key(s.field!)
@@ -268,7 +268,7 @@ function applyHierarchy(a: ModelAdmin, qs: QuerySet<any>, filters: Record<string
   const key = a.model.fields[dh]!.key(dh)   // the ORM's __year/__month/__day lookups (UTC)
   return qs.filter({ [`${key}__year`]: y, ...(m !== undefined && { [`${key}__month`]: m, ...(d !== undefined && { [`${key}__day`]: d }) }) })
 }
-// Django get_search_results: every term matches some field (^ startswith, = exact, @ full text → contains)
+// search: every term matches some field (^ startswith, = exact, @ full text → contains)
 function applySearch(a: ModelAdmin, qs: QuerySet<any>, q: string): QuerySet<any> {
   if (!q.trim() || !a.searchFields.length) return qs
   const terms = q.trim().split(/\s+/).slice(0, 10)
@@ -329,7 +329,7 @@ function orderOf(a: ModelAdmin, qs: QuerySet<any>, ordering: string[] | undefine
       return (desc ? '-' : '') + c.order
     })
   } else keys = a.ordering ?? a.model.meta.ordering ?? ['-id']
-  // display ordering 'rel__count' (Django ordering on an annotation): annotate the count first
+  // display ordering 'rel__count' (ordering on an annotation): annotate the count first
   for (const [i, k] of keys.entries()) {
     const m = /^(-?)(\w+)__count$/.exec(k)
     if (!m) continue
@@ -377,7 +377,7 @@ async function hierarchyFacets(a: ModelAdmin, ctx: Ctx, p: ListParams): Promise<
   return level('day', Array.from({ length: new Date(+y, +m, 0).getDate() }, (_, i) => ({ year: +y, month: +m, day: i + 1 })), (o) => String(o.day), 'day')
 }
 
-// ---- delete collector (Django NestedObjects) --------------------------------------------------------------
+// ---- delete collector -----------------------------------------------------------------------------------
 type Tree = { model: string; pk: string; repr: string; children: Tree[] }
 type Prot = { model: string; pk: string; repr: string; field: string }
 async function collect(def: ModelDef, objs: Row[], depth = 0): Promise<{ tree: Tree[]; protectedRows: Prot[]; counts: Record<string, number> }> {
@@ -391,7 +391,7 @@ async function collect(def: ModelDef, objs: Row[], depth = 0): Promise<{ tree: T
     if (od === 'SET_NULL' || od === 'SET_DEFAULT' || od === 'DO_NOTHING') continue
     const src = modelNamed<AnyModel>(r.source.name)
     if (!src) continue
-    // Django NestedObjects: a cascade sees every row, scoped or not
+    // a cascade sees every row, scoped or not
     const rows = await src.objects.filter({ [`${key}__in`]: objs.map((o) => o.id) }).all(od === 'CASCADE' ? MAX_PKS : 20)   // scope: ok
     if (od !== 'CASCADE') {   // PROTECT / RESTRICT (the fk default): the database refuses, so nothing is deleted
       for (const x of rows) protectedRows.push({ model: site.keyOf(r.source), pk: String(x.id), repr: repr(adminOfDef(r.source), r.source, x), field: r.field })
@@ -447,7 +447,7 @@ async function saveInlines(a: ModelAdmin, ctx: Ctx, parent: Row, given: Record<s
       if (DELETE) {
         if (!existing) continue
         if (!i.canDelete || !(await i.hasDeletePermission(ctx, parent))) throw forbidden()
-        const prot = (await collect(i.model, [existing])).protectedRows   // Django: the formset refuses a protected row
+        const prot = (await collect(i.model, [existing])).protectedRows   // the formset refuses a protected row
         if (prot.length) throw fieldErrors({ DELETE: `Deleting ${i.str(existing)} would require deleting the following protected related objects: ${prot.map((x) => `${x.model} ${x.repr}`).join(', ')}` }, at)
         await i.model.delete(existing.id)
         msg.push({ deleted: { name: i.verboseName ?? labelOf(name), object: i.str(existing) } })
@@ -506,7 +506,7 @@ export const meta = defineAction('meta', z.object({ model: modelKey }), async ({
   for (const i of site.inlinesOf(a)) {
     const fk = fkTo(i, a.model)!
     inlines.push({
-      name: inlineName(i), verboseName: i.verboseName ?? labelOf(i._key.split('.')[1]!), verboseNamePlural: i.verboseNamePlural ?? `${i.verboseName ?? labelOf(i._key.split('.')[1]!)}s`, kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum ?? 1000, min: i.minNum,   // Django's default max_num is 1000
+      name: inlineName(i), verboseName: i.verboseName ?? labelOf(i._key.split('.')[1]!), verboseNamePlural: i.verboseNamePlural ?? `${i.verboseName ?? labelOf(i._key.split('.')[1]!)}s`, kind: i.kind, model: i._key, fk, fields: formFields(i).filter((x) => x !== fk), extra: i.extra, max: i.maxNum ?? 1000, min: i.minNum,   // default max rows: 1000
      
       canDelete: i.canDelete, meta: await withChoices(i, ctx, Object.fromEntries(Object.entries(formMeta(i)).filter(([n]) => n !== fk))), perms: await perms(i, ctx),
     })
@@ -663,7 +663,7 @@ export const remove = defineAction('delete', pksParams, async ({ model, pks }, c
 export const deletePreview = defineAction('deletePreview', pksParams, async ({ model, pks }, ctx) => {
   const a = await gate(ctx, model, 'delete')
   const c = await collect(a.model, await selected(a, ctx, pks))
-  // Django perms_needed: cascaded models (with an admin) this user cannot delete
+  // perms needed: cascaded models (with an admin) this user cannot delete
   const permsNeeded = []
   for (const k of Object.keys(c.counts)) { const x = site.adminFor(k); if (x && !(await x.hasDeletePermission(ctx))) permsNeeded.push(k) }
   return { objects: c.tree, protected: c.protectedRows, summary: c.counts, permsNeeded }
@@ -701,11 +701,11 @@ export const action = defineAction('action', z.object({
 }, write)
 
 export const autocomplete = defineAction('autocomplete', z.object({ model: modelKey, field: z.string().max(100), q: z.string().max(200).default(''), page: z.coerce.number().int().min(1).max(1000).default(1) }), async (p, ctx) => {
-  // the source: the model's admin or an inline of some admin (Django AutocompleteJsonView.process_request)
+  // the source: the model's admin or an inline of some admin
   const src = site.admins().flatMap((a) => [a as Base, ...site.inlinesOf(a)]).find((a) => a._key === p.model)
   const f = src?.model.fields[p.field]
   if (!src || !f || (f.kind !== 'fk' && f.kind !== 'm2m')) throw bad('field', 'not a relation field of a registered model')
-  if (!src.autocompleteFields.includes(p.field)) throw bad('field', 'not in autocompleteFields')   // Django: only those fields get the endpoint
+  if (!src.autocompleteFields.includes(p.field)) throw bad('field', 'not in autocompleteFields')   // only those fields get the endpoint
   const target = adminOfDef(f.target!())
   if (!target) throw bad('field', 'the related model has no admin')
   if (!(await target.hasViewPermission(ctx))) throw forbidden()
@@ -718,7 +718,7 @@ export const autocomplete = defineAction('autocomplete', z.object({ model: model
 
 export const history = defineAction('history', z.object({ model: modelKey, pk: pkParam }), async ({ model, pk }, ctx) => {
   const a = await gate(ctx, model, 'module')
-  // Django history_view: get_object None → not found (a deleted row too: no model-perm fallback that would show
+  // history: getObject undefined → not found (a deleted row too: no model-perm fallback that would show
   // another tenant's LogEntry rows)
   const obj = await objectOf(a, ctx, pk)
   if (!(await a.hasViewPermission(ctx, obj))) throw forbidden()
@@ -747,7 +747,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
     for (const [f, m] of Object.entries(c.errors)) errors[`rows.${i}.${f}`] = m
     if (!Object.keys(c.errors).length) work.push({ obj, c })
   }
-  if (Object.keys(errors).length) throw fieldErrors(errors)   // Django formset: one invalid row saves nothing
+  if (Object.keys(errors).length) throw fieldErrors(errors)   // formset: one invalid row saves nothing
   for (const { obj, c } of work) {
     if (!c.changed.length) continue
     const row = (await a.saveModel(ctx, obj as never, c.data)) as Row
@@ -759,7 +759,7 @@ export const listEdit = defineAction('listEdit', z.object({ model: modelKey, row
 
 // ---- dashboard + palette + per-user prefs ---------------------------------------------------------------
 const FLAGS: Record<number, string> = { 1: 'add', 2: 'change', 3: 'delete' }
-// the current user's recent LogEntry rows (Django admin index "Recent actions")
+// the current user's recent LogEntry rows (the admin index "Recent actions")
 export const recent = defineAction('recent', z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) }), async ({ limit }, ctx) => {
   const rows = await LogEntry.objects.filter({ userId: String(ctx.request.user.id ?? '') }).order('-actionTime', '-id').all(limit)
   return rows.map((r) => ({ id: r.id, actionTime: r.actionTime.toISOString(), model: r.contentType, pk: r.objectId, objectRepr: r.objectRepr, actionFlag: r.actionFlag, action: FLAGS[r.actionFlag], changeMessage: r.changeMessage }))

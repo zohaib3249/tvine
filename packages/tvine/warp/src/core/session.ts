@@ -179,7 +179,7 @@ export class SessionStore {
   // sessions held by THIS process (a shared store: the ones cached here)
   get size(): number { return this.byId.size }
 
-  // Session fixation (Django cycle_key): a NEW Session object (same data, rev) under a fresh sid. The old one is
+  // Session fixation (cycle the key): a NEW Session object (same data, rev) under a fresh sid. The old one is
   // evicted like an expired one (cookies, channel group, snapshots, limiter/idempotency via onEvict) and stays a
   // dead object: anyone still holding it (a command queued on the old sid) must re-check with isLive() and never
   // learns the new sid. The caller hands out the new sid / cookie.

@@ -1,4 +1,4 @@
-// include('tvine.admin.urls'): the admin API as REST routes (Django URLs #38) — every route runs the same
+// include('tvine.admin.urls'): the admin API as REST routes (urls.ts) — every route runs the same
 // action through dispatch as /tvine/api/admin.*. Custom getUrls() views come first, under <app>/<model>/.
 import { path } from '../../urls.js'
 import { site } from './sites.js'

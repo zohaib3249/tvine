@@ -126,7 +126,7 @@ async function fromApp<T>(spec: string): Promise<T> {
   return (await import(url)) as T
 }
 
-// Django DJANGO_SETTINGS_MODULE: TVINE_SETTINGS (or tvine --settings) names the module, e.g. config/settings/prod.
+// TVINE_SETTINGS (or tvine --settings) names the module, e.g. config/settings/prod.
 // Default: config/settings/prod when NODE_ENV=production, else config/settings/dev + config/settings/local (if
 // present, git-ignored); a project without config/settings/ uses ./settings. Paths are from cwd, no extension.
 export function settingsFiles(cwd = process.cwd()): string[] {
@@ -148,7 +148,7 @@ export function settingsFiles(cwd = process.cwd()): string[] {
 }
 
 // settings.middleware 'config.middleware.example' (any dotted path not under tvine.) → the default export of
-// config/middleware/example.ts under the project root (cwd), like Django's dotted MIDDLEWARE paths.
+// config/middleware/example.ts under the project root (cwd), named by dotted path.
 async function projectMiddleware(e: unknown, i: number): Promise<unknown> {
   const [what, opts] = Array.isArray(e) ? [e[0], e[1]] : [e, undefined]
   if (typeof what !== 'string' || what.startsWith('tvine.')) return e
@@ -172,7 +172,7 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
     configureAuth(settings)   // AUTH_USER_MODEL: before any model / migration loads
   }
   void settings.secret   // boot is where a missing/short secret fails (defineSettings defers it past import)
-  configureLogging(settings.logging)   // Django LOGGING: getLogger(name) everywhere from here on
+  configureLogging(settings.logging)   // logging: getLogger(name) everywhere from here on
   checkBackends(settings)   // a 'redis' backend without its settings.redis connection fails here, naming the key
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
   configureMail(settings)
@@ -308,7 +308,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // security/headers + transport/cors + transport/compress (server/security-headers.md): boot-checked here
   const sec = securityHeaders(settings, { isDev })
   const cors = corsLayer(settings)
-  // settings.middleware (Django MIDDLEWARE): only the listed ones run, around every request, outermost first
+  // settings.middleware: only the listed ones run, around every request, outermost first
   const userOf = async (req: IncomingMessage) => {
     const cookie = String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
     const session = cookie === undefined ? undefined : await ctx.sessions.peek({ cookie })
@@ -530,7 +530,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   }
 }
 
-// tvine.admin installed → the panel at settings.admin.path, served by Warp before Next (Django's admin.site.urls):
+// tvine.admin installed → the panel at settings.admin.path, served by Warp before Next:
 // tvine/admin's prebuilt shell + bundle, so the app needs no admin page. An app page whose route sits at that path
 // (app/admin/[[...path]]/page.tsx) wins: the request passes on to Next.
 async function adminMount(settings: Settings, route: (p: string) => string | undefined): Promise<Handler> {

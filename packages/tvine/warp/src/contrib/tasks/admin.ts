@@ -1,5 +1,5 @@
 // tvine.tasks in tvine.admin: jobs read-only, listed from the broker (any broker: file / memory / redis / db),
-// with retry and revoke actions (Django allowed_permissions → hasRetryPermission / hasRevokePermission).
+// with retry and revoke actions (permissions → hasRetryPermission / hasRevokePermission).
 import { DomainError } from '../../core/errors.js'
 import { adminAction, ModelAdmin, type Ctx, type ListParams } from '../admin/options.js'
 import { site } from '../admin/sites.js'

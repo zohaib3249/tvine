@@ -1,7 +1,7 @@
 import type { ErrCode, FieldError } from './types.js'
 
 // Domain failures thrown by handlers; dispatch maps them to err domain. `errors` lists every bad field
-// (Django ValidationError({field: [...]})); `field` stays the first one for older clients.
+// (`errors: [{ field, message }]`); `field` stays the first one for older clients.
 export class DomainError extends Error {
   constructor(public code: string, message: string, public field?: string, public errors?: FieldError[]) {
     super(message)

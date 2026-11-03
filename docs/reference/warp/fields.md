@@ -55,18 +55,18 @@ Every builder takes an optional `Opts` object. Options a kind does not use are i
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `optional` | `boolean` | `false` | Column is nullable; the value type becomes `V \| null`; may be left out on create (stored as NULL). Django `null=True, blank=True`. |
+| `optional` | `boolean` | `false` | Column is nullable; the value type becomes `V \| null`; may be left out on create (stored as NULL). |
 | `default` | constant | none | Value used when create leaves the field out. Also written as the column `DEFAULT` (must be a literal: string, number, boolean, null, or what the field converts to one). |
 | `unique` | `boolean` | `false` | `UNIQUE` on the (first) column. Violations → `DomainError('domain', '<model>.<field> must be unique')`. |
-| `index` | `boolean` | `false` | Creates index `<model>_<field>_idx` (in migrations). Django `db_index`. |
+| `index` | `boolean` | `false` | Creates index `<model>_<field>_idx` (in migrations). |
 | `searchable` | `boolean` | `false` | Field joins the model's default `.search(term)` fields. Not allowed on money. |
 | `hidden` | `boolean` | `false` (`true` for encrypted) | Left out of generic views' default serializer output. No DDL. |
 | `readOnly` | `boolean` | `false` | Generic views never accept it as create / update input. No DDL. |
 | `writeOnly` | `boolean` | `false` | Generic views accept it as input but never output it. No DDL. |
 | `humanOnly` | `boolean \| string` | `false` | An agent-marked request that changes this field (admin save, generic views) is refused with `human_only`. A string is the reason shown. No DDL. |
 | `auto` | `boolean` | `false` | datetime: set to now on create (same as `autoNowAdd`; legacy name). |
-| `autoNowAdd` | `boolean` | `false` | date / datetime: set to now on create. Django `auto_now_add`. |
-| `autoNow` | `boolean` | `false` | date / datetime: set to now on create and on every `Model.update()`. Django `auto_now`. |
+| `autoNowAdd` | `boolean` | `false` | date / datetime: set to now on create. |
+| `autoNow` | `boolean` | `false` | date / datetime: set to now on create and on every `Model.update()`. |
 | `maxLength` | `number` | per kind | email / url / slug / markdown / code / richText / tags (per tag). See each kind. Not enforced on `text`. |
 | `maxDigits` | `number` | `12` | decimal: total digits. |
 | `decimalPlaces` | `number` | `2` | decimal: digits after the point. |

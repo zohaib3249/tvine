@@ -1,7 +1,6 @@
 # Background tasks, cache and email
 
-Three Django-style subsystems: `tvine.tasks` (Celery-like jobs), the cache (`django.core.cache`) and mail
-(`django.core.mail`). None needs a third-party service to start; Redis is optional for several machines.
+Three built-in subsystems: `tvine.tasks` (background jobs), the cache and mail. None needs a third-party service to start; Redis is optional for several machines.
 
 Settings keys: [settings-and-env.md](settings-and-env.md). Redis for several processes: [deploy.md](deploy.md).
 
@@ -134,7 +133,7 @@ caches: {
 },
 ```
 
-Cache an action's result (Django `cache_page`), read-only actions only:
+Cache an action's result, read-only actions only:
 
 ```ts
 defineAction('list', schema, run, { readOnly: true, cache: { timeout: 60, varyOn: ['user', 'query'], tags: ['products'] } })

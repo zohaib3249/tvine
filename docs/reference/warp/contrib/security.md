@@ -2,7 +2,7 @@
 
 ## What it is
 
-The security toolbox that ships in the `tvine` package: signed tokens (`signing`, Django's `django.core.signing`),
+The security toolbox that ships in the `tvine` package: signed tokens (`signing`),
 encrypted model fields with key rotation, `safeFetch` (outbound HTTP that cannot reach private networks), the
 response headers and CSP, rate limits, and the agent controls `humanOnly`, `confirm` and `denyAgents`. Bot
 protection is a separate app, Shield: see [../../../shield.md](../../../shield.md). Source:

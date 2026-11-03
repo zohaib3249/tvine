@@ -2,7 +2,7 @@
 
 ## What it is
 
-`tvine.admin` is the built-in staff panel, modelled on Django's `django.contrib.admin`. You register models with a
+`tvine.admin` is the built-in staff panel. You register models with a
 `ModelAdmin` class in `apps/<app>/admin.ts`; Warp serves the panel at `settings.admin.path` (default `/admin`) with
 changelists (filters, search, sorting, bulk actions, inline edits, charts), change forms with inlines, a dashboard,
 an audit history per object, and a System section (health, traffic, agents, queries, jobs, logs, security). Every

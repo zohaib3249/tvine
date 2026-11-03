@@ -32,8 +32,8 @@ const extraFields = (): string[] => {
   return concrete(m.fields).filter(([n, f]) => !(n in USER_FIELDS) && !f.opts.hidden).map(([n, f]) => keyOf(n, f))
 }
 
-// Django's User on request.user. Never holds the password hash. Permission/group sets load once per object
-// (= per request), like Django's _perm_cache. `username` is the model's usernameField value.
+// The User on request.user. Never holds the password hash. Permission/group sets load once per object
+// (= per request). `username` is the model's usernameField value.
 export class AuthUser implements TvineUser {
   readonly isAuthenticated = true
   readonly isAnonymous = false
@@ -71,7 +71,7 @@ export class AuthUser implements TvineUser {
     })())
   }
 
-  // every codename granted through the user or its groups (Django get_all_permissions); inactive → none
+  // every codename granted through the user or its groups; inactive → none
   allPermissions(): Promise<Set<string>> { return (this.#perms ??= permissionsOf(this)) }
   getAllPermissions(): Promise<Set<string>> { return this.allPermissions() }
   getGroupPermissions(): Promise<Set<string>> { return permissionsOf(this, true) }
@@ -105,7 +105,7 @@ export const safeUser = (u: AuthUser | UserRow): SafeUser => {
 }
 
 // ---- session binding ---------------------------------------------------------------------------------
-// Django HASH_SESSION_KEY: bound to the password hash, so a password change logs out every other session.
+// session hash: bound to the password hash, so a password change logs out every other session.
 export const sessionHash = (s: Settings, passwordHash: string) => mac(s, 'session', passwordHash)
 
 export async function sessionUser(settings: Settings, session: Session): Promise<UserRow | undefined> {
@@ -113,13 +113,13 @@ export async function sessionUser(settings: Settings, session: Session): Promise
   if (id === undefined) return undefined
   const row = typeof id === 'string' && /^\d+$/.test(id) ? await getUserModel().get(Number(id)) : undefined
   if (row && row.isActive && typeof hash === 'string' && macOk(settings, 'session', row.password, hash) && await sessionAlive(session, row.id)) return row
-  session.data.delete(SESSION_USER); session.data.delete(SESSION_HASH)   // stale binding: flushed like Django
+  session.data.delete(SESSION_USER); session.data.delete(SESSION_HASH)   // stale binding: flushed
   return undefined
 }
 
 // After a successful credential check, in the handler: bind, rotate (fixation), stamp lastLogin.
 export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
-  // Django login(): another user's session data (a cart, a draft) never carries over to this user
+  // login(): another user's session data (a cart, a draft) never carries over to this user
   const prev = ctx.session.data.get(SESSION_USER)
   if (prev !== undefined && prev !== String(row.id)) ctx.session.data.clear()
   ctx.session.data.set(SESSION_USER, String(row.id))
@@ -133,7 +133,7 @@ export async function login(ctx: ActionCtx, row: UserRow): Promise<AuthUser> {
   return user
 }
 
-// Django logout(): flush everything, new sid
+// logout(): flush everything, new sid
 // sudo mode: a password typed in this session within RECENT_MS (login, change, or the action's own `password` param)
 export const RECENT_MS = 10 * 60_000
 export const recentlyAuthenticated = (ctx: ActionCtx, now = Date.now()) => {
@@ -141,7 +141,7 @@ export const recentlyAuthenticated = (ctx: ActionCtx, now = Date.now()) => {
   return typeof at === 'number' && now - at <= RECENT_MS && now >= at
 }
 
-// Django update_session_auth_hash: after this session's own user changed the password, keep this session (new sid);
+// updateSessionAuthHash: after this session's own user changed the password, keep this session (new sid);
 // every other session of the user is already stale (bound to the old hash)
 export function updateSessionAuthHash(ctx: Pick<ActionCtx, 'session' | 'settings'>, row: { id: number; password: string }): void {
   if (ctx.session?.data.get(SESSION_USER) !== String(row.id)) return

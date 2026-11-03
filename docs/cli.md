@@ -1,6 +1,6 @@
 # CLI: `tvine`
 
-`tvine` is Django's `manage.py`. It comes with `tvine`; run it from your app folder (the one with
+`tvine` is the management command. It comes with `tvine`; run it from your app folder (the one with
 `settings.ts`):
 
 ```bash
@@ -28,7 +28,7 @@ A bare `tvine` in a shell says "command not found" until you pick one:
 | `tvine startapp <name>` | `apps/<name>/` empty stubs; adds it to `installedApps` and its `include()` to `config/urls.ts` |
 | `tvine shell` | REPL with settings and models loaded |
 
-Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`), like Django's `--settings`.
+Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`).
 
 ```
 mysite/
@@ -39,19 +39,19 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -75,7 +75,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -84,7 +84,7 @@ Optional app files (create them when you need them):
 | Command | What it does |
 |---|---|
 | `start [--port 3000] [--host h] [--api-only]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s |
-| `dev [--port 3000] [--host h] [--noreload]` | Django `runserver`: Next dev server with hot reload, `tvine-api.d.ts` regenerated on save; the server restarts (same port) when `apps/`, `config/`, `.env*` or `tvine.config.*` change, and waits for the next save after a crash. `--noreload`: one process, no restart |
+| `dev [--port 3000] [--host h] [--noreload]` | Development server: Next dev server with hot reload, `tvine-api.d.ts` regenerated on save; the server restarts (same port) when `apps/`, `config/`, `.env*` or `tvine.config.*` change, and waits for the next save after a crash. `--noreload`: one process, no restart |
 | `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed |
 
 ```bash

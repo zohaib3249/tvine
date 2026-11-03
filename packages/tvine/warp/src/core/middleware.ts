@@ -53,7 +53,7 @@ export async function discoverMiddleware(appsDir: string, installed?: readonly s
 }
 
 // apps/<app>/hooks.ts: every exported function is a receiver named after its hook (`export function command(e) {…}`),
-// registered at boot like Django signal receivers connected in AppConfig.ready(). Two more names are app
+// registered at boot, once per app. Two more names are app
 // lifecycle receivers, collected by appSignals(): `ready(server)` (AppConfig.ready) and `postMigrate(e)`.
 export async function discoverHooks(appsDir: string, installed?: readonly string[]): Promise<[HookName, (e: never) => unknown][]> {
   const out: [HookName, (e: never) => unknown][] = []

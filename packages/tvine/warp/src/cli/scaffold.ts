@@ -1,4 +1,4 @@
-// tvine startproject / startapp (Django django-admin startproject / manage.py startapp).
+// tvine startproject / startapp: a new project, a new app.
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -63,7 +63,7 @@ export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
       engines: { node: '>=22.15' },
       ...(pm === 'pnpm' ? { pnpm: { onlyBuiltDependencies: ['better-sqlite3', 'esbuild'] } } : {}),
     }),
-    'config/settings/base.ts': `// Shared settings (Django settings/base.py). dev.ts and prod.ts build on it; pick one with
+    'config/settings/base.ts': `// Shared settings. dev.ts and prod.ts build on it; pick one with
 // TVINE_SETTINGS=config/settings/prod or tvine --settings (default: prod when NODE_ENV=production, else dev).
 // Environment: DATABASE_URL, TVINE_SECRET, TVINE_ALLOWED_HOSTS, TVINE_DEBUG (.env in development).
 import type { SettingsInput } from 'tvine'
@@ -71,7 +71,7 @@ import type { SettingsInput } from 'tvine'
 export const base = {
   site: { name: '${title}', description: 'A Tvine project.' },
   installedApps: ${JSON.stringify(installed).replace(/,/g, ', ').replace(/"/g, "'")},
-${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}  // Django MIDDLEWARE, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
+${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}  // HTTP middleware, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
   middleware: [
     'tvine.middleware.RequestId',          // x-request-id on every request and log line
     'tvine.middleware.AllowedHosts',       // refuses a Host header not in allowedHosts
@@ -145,7 +145,7 @@ export default {
   // db: { url: 'postgres://me@localhost/${o.name.replace(/-/g, '_')}' },
 } satisfies SettingsInput
 `,
-    'config/urls.ts': `// Django ROOT_URLCONF (settings.rootUrlconf). Every action also answers at /tvine/api/<app>.<name> and as an MCP tool at /mcp.
+    'config/urls.ts': `// Root URL table (settings.rootUrlconf). Every action also answers at /tvine/api/<app>.<name> and as an MCP tool at /mcp.
 ${admin ? '// /admin is served by tvine.admin itself (settings.admin.path); no route needed.\n' : ''}import { include, path } from 'tvine'
 
 export const urlpatterns = [
@@ -210,7 +210,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     '.mcp.json': json({ mcpServers: { [o.name]: { type: 'http', url: 'http://localhost:3000/mcp' } } }),
     'README.md': `# ${title}
 
-A [Tvine](${DOCS}) project: Django-style backend (Warp) + Next.js pages (Weft); every action is also an MCP tool.
+A [Tvine](${DOCS}) project: a TypeScript backend with models, migrations, auth and admin (Warp) + Next.js pages (Weft); every action is also an MCP tool.
 
 \`\`\`bash
 ${pm} install
@@ -220,10 +220,10 @@ ${run} tvine dev            # http://localhost:3000${admin ? ' · /admin' : ''} 
 ${run} tvine startapp blog     # apps/blog + installedApps + config/urls.ts
 \`\`\`
 
-| File | Django |
+| File | What it is |
 |---|---|
-| config/settings/base.ts, dev.ts, prod.ts | settings.py split per environment (TVINE_SETTINGS = DJANGO_SETTINGS_MODULE) |
-| config/urls.ts | ROOT_URLCONF |
+| config/settings/base.ts, dev.ts, prod.ts | settings split per environment (TVINE_SETTINGS picks one) |
+| config/urls.ts | root URL table |
 | config/tasks.ts | Celery config: queues, beat schedule |
 | apps/<name>/ | an app (listed in installedApps): models, views, urls, admin, migrations |
 | app/ | Next.js pages (call the backend through \`api.*\`) |
@@ -244,7 +244,7 @@ Claude Code: \`.mcp.json\` points at \`http://localhost:3000/mcp\`; start \`tvin
 
 function welcomePage(title: string, admin: boolean): string {
   const card = (href: string, h: string, p: string) => `        <a className="tv-card" href="${href}"><strong>${h}</strong><span>${p}</span></a>`
-  return `// The Tvine welcome page (Django's "The install worked successfully!"). Replace it with your own.
+  return `// The Tvine welcome page. Replace it with your own.
 const css = \`
 .tv{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:48px 16px;box-sizing:border-box;
   font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;color:#e7e9f3;
@@ -279,7 +279,7 @@ export default function Welcome() {
 ${[
   admin ? card('/admin', 'Admin', 'Manage your data. Create a login with tvine createsuperuser.') : '',
   card('/mcp', 'MCP endpoint', 'Your actions as tools for Claude and other agents at /mcp.'),
-  card(`${DOCS}/blob/main/docs/getting-started.md`, 'Docs', 'Models, views, urls, admin, tasks: Django, in TypeScript.'),
+  card(`${DOCS}/blob/main/docs/getting-started.md`, 'Docs', 'Models, views, urls, admin, tasks, in TypeScript.'),
   card('/tvine/health', 'Health', 'Is the server up? /tvine/health'),
 ].filter(Boolean).join('\n')}
         </div>
@@ -298,7 +298,7 @@ claude                              \`}<span className="c"># Claude Code reads .
 `
 }
 
-// tvine startapp <name>: apps/<name>/ with empty Django-style stubs, then '<name>' in installedApps and its
+// tvine startapp <name>: apps/<name>/ with empty app stubs, then '<name>' in installedApps and its
 // include() in the root urls. Each edit goes into the existing array literal; a file of an unexpected shape is
 // left alone and the caller prints the line to add instead.
 export interface StartAppResult { dir: string; files: string[]; settings: Edit; urls: Edit }

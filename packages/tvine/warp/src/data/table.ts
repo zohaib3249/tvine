@@ -53,7 +53,7 @@ export class Table {
     return d.render({ t: 'insert', into: this.name, cols: all[0].map(([c]) => c), values: [], rows: all.map(a => a.map(([, v]) => param(v))), returning: true })
   }
 
-  // UPDATE t SET col = CASE WHEN pk = ? THEN ? … ELSE col END … WHERE pk IN (…) (Django's bulk_update).
+  // UPDATE t SET col = CASE WHEN pk = ? THEN ? … ELSE col END … WHERE pk IN (…) (bulk update).
   // postgres types every param: the THEN values are CAST to the column type.
   bulkUpdate(rows: Record<string, unknown>[], fields: string[], d: Dialect): Statement {
     const [pk, pf] = pkField(this)

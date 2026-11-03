@@ -1,4 +1,4 @@
-// makemigrations / migrate / migrateCheck / sqlmigrate / showmigrations — exactly Django's model:
+// makemigrations / migrate / migrateCheck / sqlmigrate / showmigrations — the model:
 // per-app code files apps/<app>/migrations/NNNN_name.ts (dependencies + operations), no state
 // file: ProjectState is rebuilt by replaying the files; makemigrations diffs it against models.ts.
 // migrate renders each operation for the CONNECTED dialect at apply time and records
@@ -75,7 +75,7 @@ const FRAGMENT: Partial<Record<Operation['kind'], (o: any) => string>> = {
   removeField: o => `remove_${o.model}_${o.name}`,
   alterField: o => `alter_${o.model}_${o.name}`,
 }
-// Django-style: 0001_initial, 0002_product_stock, 0003_auto when there is no short description
+// names: 0001_initial, 0002_product_stock, 0003_auto when there is no short description
 function autoName(initial: boolean, list: Operation[]): string {
   if (initial) return 'initial'
   const parts = list.map(o => FRAGMENT[o.kind]?.(o))
@@ -148,7 +148,7 @@ export async function makeMigrations(appsDir: string, opts: MakeOpts = {}): Prom
   if (drops.length && !opts.allowDrop) {
     throw new Error(`refusing to write a migration that drops ${drops.join(', ')} (models removed or changed?); pass allowDrop to confirm${renameHint(changes)}`)
   }
-  // Django --noinput: existing rows would have no value (auto datetimes are backfilled at migrate time)
+  // non-interactive: existing rows would have no value (auto datetimes are backfilled at migrate time)
   for (const o of Object.values(changes).flat()) {
     if (o.kind === 'addField' && o.field.kind !== 'm2m' && !o.field.opts.optional && o.field.opts.default === undefined && !isAuto(o.field.opts)) {
       throw new Error(`field ${o.model}.${o.name} is required and has no default: add default:, make it optional, or add it in two steps`)
@@ -293,8 +293,8 @@ async function withConn<R>(db: string | Connection, fn: (c: Connection) => Promi
   try { return await fn(conn) } finally { if (typeof db === 'string') await conn.driver.close() }
 }
 
-// plan: list what would apply, touch nothing. fake: journal as applied without running SQL (Django --fake).
-// app / target (Django `migrate <app> [<target>|zero]`): forward to the app's leaf, or to / back to
+// plan: list what would apply, touch nothing. fake: journal as applied without running SQL.
+// app / target (`migrate <app> [<target>|zero]`): forward to the app's leaf, or to / back to
 // `target` — rolling back every applied migration of the app after it plus everything that depends on them.
 export interface MigrateOpts extends LoadOpts { plan?: boolean; fake?: boolean; app?: string; target?: string }
 
@@ -377,7 +377,7 @@ export async function migrate(db: string | Connection, appsDir: string, opts: Mi
   // (runSQL without reverse, a lossy alter) refuses with nothing touched.
   async function rollback(conn: Connection, nodes: MigrationNode[], done: Map<string, string>, partlyForward: (n: MigrationNode) => boolean): Promise<string[]> {
     for (const n of nodes) if (partlyForward(n)) throw new Error(`migration ${n.key} is only partly applied: finish it with migrate first, then roll back`)
-    // the state before each migration, replaying the full plan (Django: states come from the graph)
+    // the state before each migration, replaying the full plan (states come from the graph)
     const before = new Map<string, ProjectState>()
     let state = emptyState()
     for (const n of plan) { before.set(n.key, state); state = step(n, state).state }
@@ -468,9 +468,9 @@ async function mysqlLocked<R>(conn: Connection, fn: (c: Connection) => Promise<R
 }
 
 // true = clean. false = migrations pending / edited / conflicting, or models.ts drifted from the files.
-// Django: AUTH_USER_MODEL is chosen before the first migrate. tvine.auth's applied migrations were rendered for one
+// settings.auth.userModel is chosen before the first migrate. tvine.auth's applied migrations were rendered for one
 // user model; any other one now (changed either way) shows as their checksum changing.
-const userModelMsg = () => `settings.auth.userModel changed after tvine.auth was migrated (it is now '${userModelLabel()}'). Like Django's AUTH_USER_MODEL it must be chosen before the first migrate: put it back, or start from a fresh database (drop it, then tvine migrate). Moving existing users to a new model is a data migration you write by hand.`
+const userModelMsg = () => `settings.auth.userModel changed after tvine.auth was migrated (it is now '${userModelLabel()}'). It must be chosen before the first migrate: put it back, or start from a fresh database (drop it, then tvine migrate). Moving existing users to a new model is a data migration you write by hand.`
 export async function userModelChanged(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<string | undefined> {
   const graph = await MigrationGraph.load(appsDir, opts)
   const done = await withConn(db, c => readJournal(c, false))
@@ -493,7 +493,7 @@ function withoutContrib<T>(changes: Record<string, T>, builtIn: Set<string>): Re
   return Object.fromEntries(Object.entries(changes).filter(([app]) => !builtIn.has(app)))
 }
 
-// Django's sqlmigrate: the SQL one migration runs on `dialect` (name may be a prefix: '0002')
+// sqlmigrate: the SQL one migration runs on `dialect` (name may be a prefix: '0002')
 export async function sqlMigrate(appsDir: string, app: string, name: string, dialect: Dialect = sqlite, opts: LoadOpts & { backwards?: boolean } = {}): Promise<string> {
   const plan = (await MigrationGraph.load(appsDir, opts)).order()
   const hits = plan.filter(n => n.app === app && (n.name === name || n.name.startsWith(name)))
@@ -513,7 +513,7 @@ export async function sqlMigrate(appsDir: string, app: string, name: string, dia
   throw new Error('unreachable')
 }
 
-// Django's showmigrations: every migration per app, in plan order, applied or not
+// showmigrations: every migration per app, in plan order, applied or not
 export async function showMigrations(db: string | Connection, appsDir: string, opts: LoadOpts = {}): Promise<{ app: string; name: string; applied: boolean }[]> {
   const plan = (await MigrationGraph.load(appsDir, opts)).order()
   const done = await withConn(db, c => readJournal(c, false))
@@ -521,7 +521,7 @@ export async function showMigrations(db: string | Connection, appsDir: string, o
     .sort((a, b) => (a.app < b.app ? -1 : a.app > b.app ? 1 : 0))
 }
 
-// Django's post_migrate signal: every installed app's hooks.ts `postMigrate({ app, models, applied })`, in
+// the postMigrate hook: every installed app's hooks.ts `postMigrate({ app, models, applied })`, in
 // installed-app order, after a migrate run (tvine.auth creates its permission rows here). Receivers use the
 // ORM, so the caller configures `connections` for the migrated database first.
 export interface PostMigrate { app: string; models: Record<string, Model<any, any>[]>; applied: string[] }

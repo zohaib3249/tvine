@@ -1,6 +1,6 @@
 # Testing
 
-Tvine's own tests use [Vitest](https://vitest.dev). `tvine/testing` is Django's test client:
+Tvine's own tests use [Vitest](https://vitest.dev). `tvine/testing` is the test client:
 it drives your app the way an agent does, in-process, with no port.
 
 ## Run the repo's tests

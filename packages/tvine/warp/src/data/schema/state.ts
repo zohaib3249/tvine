@@ -1,9 +1,9 @@
-// ProjectState (Django's ProjectState): pure data, never stored. It is REBUILT by replaying every
+// ProjectState: pure data, never stored. It is REBUILT by replaying every
 // migration's operations in dependency order; makemigrations diffs it against models.ts.
 //   apps → models → { fields: name → FieldSpec, indexes: name → Meta / ops.addIndex index,
 //                     unique?: unique_together sets, constraints?: name → CHECK / UNIQUE constraint }
 // fks live on their field (kind 'fk', `to` = target model name); field-level `index: true` stays
-// a field option (Django's db_index). Field instances are rebuilt from specs only to render DDL.
+// a field option (index). Field instances are rebuilt from specs only to render DDL.
 import { field } from '../fields.js'
 import { FkField, M2MField, pkField, type Field, type Kind, type ModelDef, type Opts } from '../fields/index.js'
 import type { Model } from '../model.js'
@@ -25,7 +25,7 @@ const FLAGS = new Set(['optional', 'unique', 'searchable', 'index', 'auto', 'aut
 // enter state or migrations
 const VIEW_ONLY = new Set(['hidden', 'readOnly', 'writeOnly', 'relatedName', 'humanOnly', 'allowRemoteImages'])
 
-// Field → spec (Django's deconstruct). Opts sorted so specs and generated code are deterministic.
+// Field → spec (deconstruct). Opts sorted so specs and generated code are deterministic.
 export function specOf(f: AnyField): FieldSpec {
   const opts: Record<string, unknown> = {}
   for (const k of Object.keys(f.opts).sort()) {
@@ -108,7 +108,7 @@ export function replay(plan: { app: string; migration: { operations: { stateForw
   return s
 }
 
-// key-sorted JSON: equality that ignores field / model order (Django ignores field order too)
+// key-sorted JSON: equality that ignores field / model order
 export function canon(v: unknown): string {
   return JSON.stringify(v, (_, x) => x && typeof x === 'object' && !Array.isArray(x)
     ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x)

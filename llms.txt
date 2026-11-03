@@ -1,6 +1,6 @@
 # Tvine
 
-> Tvine is an agent-native, full-stack TypeScript web framework: Django for TypeScript (Warp backend: models, ORM,
+> Tvine is an agent-native, full-stack TypeScript web framework (Warp backend: models, ORM,
 > migrations, auth, admin, middleware, tasks, bot protection) plus Next.js pages (Weft UI) in one process. Every backend
 > action is at once a typed `api.*` call, an HTTP endpoint and an MCP tool, so AI agents can read and drive the app.
 > npm package `tvinejs`; code imports `tvine` and the CLI runs as `tvine` (`npx tvinejs startproject mysite`, then `pnpm tvine dev`).

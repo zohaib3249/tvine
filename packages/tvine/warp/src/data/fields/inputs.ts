@@ -26,7 +26,7 @@ export class PhoneField extends Field<string, boolean, 'phone', boolean> {
   zod() { return z.string().regex(E164, 'Enter a valid phone number in international format (+15551234567).') }
 }
 
-export class IpField extends Field<string, boolean, 'ip', boolean> {   // Django GenericIPAddressField
+export class IpField extends Field<string, boolean, 'ip', boolean> {   // IPv4 / IPv6 address
   readonly kind = 'ip' as const
   dbType(d: Dialect) { return [varchar(d, 45)] }
   zod() { return z.string().refine((s) => isIp(s), 'Enter a valid IPv4 or IPv6 address.').transform((s) => s.toLowerCase()) }
@@ -112,7 +112,7 @@ export class AddressField extends JsonStored<Address, 'address'> {
 
 const day = z.string().refine(realDay, 'Enter a valid date.')
 export interface DateRange { start: string; end: string }
-export class DateRangeField extends JsonStored<DateRange, 'dateRange'> {   // Django DateRangeField (inclusive)
+export class DateRangeField extends JsonStored<DateRange, 'dateRange'> {   // date range (inclusive)
   readonly kind = 'dateRange' as const
   zod() { return z.object({ start: day, end: day }).strict().refine((r) => r.start <= r.end, 'The end date must be on or after the start date.') }
 }

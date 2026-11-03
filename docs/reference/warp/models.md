@@ -28,7 +28,7 @@ function defineModel<const F extends Fields>(name: string, fields: F, meta?: Mod
 |---|---|---|---|
 | `ordering` | `string[]` | none | Default order when a query has no `.order()`. `'field'` ascending, `'-field'` descending. The primary key is always added last as a tie-breaker. |
 | `indexes` | `(string[] \| { fields: string[]; name?: string; unique?: boolean })[]` | `[]` | Extra indexes. A bare array is the field list. The name defaults to `<model>_<fields joined by _>_idx` (`_uniq` when `unique: true`), shortened with a hash when over 63 characters. |
-| `unique` | `string[][]` | `[]` | Unique-together sets (Django `unique_together`). Each entry is a list of field names. |
+| `unique` | `string[][]` | `[]` | Unique-together sets. Each entry is a list of field names. |
 | `constraints` | `ConstraintSpec[]` | `[]` | `CheckConstraint(...)` / `UniqueConstraint(...)` results. |
 | `personalData` | `string[]` | none | Fields that `privacy.export(user)` collects from rows that reference a user (tvine.auth). |
 | `onErase` | `'delete' \| 'anonymize' \| (userId: number) => Promise<void> \| void` | `'anonymize'` | What `privacy.erase(user)` does with these rows. `'anonymize'` blanks the `personalData` fields; each must then be `optional`, or of kind `text`, `email`, `slug`, `url`, `encrypted`. |
@@ -160,7 +160,7 @@ interface RelatedManager<T> {
 
 ## Swappable user model
 
-`settings.auth.userModel` (Django `AUTH_USER_MODEL`), default `'auth.User'` (table `auth_user`). A custom value `'accounts.User'` means table `accounts_user`, defined with `defineUserModel` / `extendUser` from `tvine/auth` in `apps/accounts/models.ts`. It must be chosen before the first `tvine migrate`; changing it later makes `migrate` fail with a checksum message. Details: [contrib/auth.md](contrib/auth.md).
+`settings.auth.userModel`, default `'auth.User'` (table `auth_user`). A custom value `'accounts.User'` means table `accounts_user`, defined with `defineUserModel` / `extendUser` from `tvine/auth` in `apps/accounts/models.ts`. It must be chosen before the first `tvine migrate`; changing it later makes `migrate` fail with a checksum message. Details: [contrib/auth.md](contrib/auth.md).
 
 ## Examples
 
@@ -247,7 +247,7 @@ const adasOrders = await Customer.related('orders', ada.id).all().filter({ statu
 
 - The fk key differs between definition and data: define `customer: field.fk(...)`, write and read `customerId`. Filters and `update()` accept both `customer` and `customerId`.
 - `create()` refuses unknown keys, including m2m field names. Set m2m links with `related(...).add()` after creating.
-- `Model.update()` sets `autoNow` fields; `Model.objects.filter(...).update()` does not (Django parity).
+- `Model.update()` sets `autoNow` fields; `Model.objects.filter(...).update()` does not.
 - `get()` returns `undefined`, it does not throw. `update()` throws when the row is missing. `delete()` is silent.
 - Rows are plain objects. There are no instance methods and no `save()`. (The user model gets methods such as `checkPassword` through an internal row prototype; app models cannot.)
 - `default` must be a constant (it is written into the table DDL). There is no callable default; use `auto` / `autoNow` / `autoNowAdd` for timestamps, and a `uuid` pk is generated automatically.

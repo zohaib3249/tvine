@@ -39,7 +39,7 @@ export function pgObjectName(a: string, b: string, label: string): string {
 export function shortName(full: string, max = 63): string {
   return full.length <= max ? full : `${full.slice(0, max - 9)}_${createHash('sha1').update(full).digest('hex').slice(0, 8)}`
 }
-// `<model>_<cols>_<suffix>` (Django's create_index_name, minus its always-on hash)
+// `<model>_<cols>_<suffix>` (no hash suffix)
 export const objectName = (model: string, cols: string[], suffix: string) => {
   const full = `${model}_${cols.join('_')}_${suffix}`
   return full.length <= 63 ? full : `${shortName(`${model}_${cols.join('_')}`, 63 - suffix.length - 1)}_${suffix}`

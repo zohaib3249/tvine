@@ -1,4 +1,4 @@
-// ModelAdmin and friends (Django django.contrib.admin.options, camelCased). docs/design/contrib/admin.md §1.
+// ModelAdmin and friends. docs/design/contrib/admin.md §1.
 // Option values are developer config (trusted); request params are checked against them (views.ts).
 import { z } from 'zod'
 import { defineAction } from '../../core/actions.js'
@@ -33,7 +33,7 @@ export const displayOf = (fn: unknown): DisplayOpts | undefined => (fn as Displa
 export interface ActionResult { message?: string; level?: 'info' | 'success' | 'warning' | 'error'; download?: string | { url?: string; data?: string; filename: string; contentType: string } }   // a url, or inline data (text / base64)
 // queryset = the selected rows (getQueryset-scoped); pks = their primary keys as strings
 export type AdminActionFn = (admin: ModelAdmin, ctx: Ctx, queryset: QuerySet<any>, pks: string[]) => Promise<void | ActionResult>
-// permissions: 'view' | 'add' | 'change' | 'delete' or any name X → ModelAdmin.hasXPermission(ctx) (Django allowed_permissions)
+// permissions: 'view' | 'add' | 'change' | 'delete' or any name X → ModelAdmin.hasXPermission(ctx)
 export interface AdminActionOpts { name?: string; description?: string; permissions?: string[]; confirm?: boolean | string; humanOnly?: boolean }
 export interface AdminAction extends AdminActionOpts { name: string; fn: AdminActionFn }
 
@@ -46,7 +46,7 @@ export function adminAction(o: AdminActionOpts, fn: AdminActionFn): AdminAction 
 export const isAdminAction = (v: unknown): v is AdminAction => !!v && typeof v === 'object' && typeof (v as AdminAction).fn === 'function' && typeof (v as AdminAction).name === 'string'
 
 // ---- list filters -------------------------------------------------------------------------------------
-// Django SimpleListFilter: lookups() → [value, label] pairs; queryset() narrows for this.value().
+// a custom list filter: lookups() → [value, label] pairs; queryset() narrows for this.value().
 export abstract class SimpleListFilter {
   title = ''
   parameterName = ''
@@ -58,7 +58,7 @@ export abstract class SimpleListFilter {
 export type ListFilterClass = new (value?: string | null) => SimpleListFilter
 export const isFilterClass = (v: unknown): v is ListFilterClass => typeof v === 'function' && v.prototype instanceof SimpleListFilter
 
-// ---- shared permission defaults (Django has_*_permission) -------------------------------------------
+// ---- shared permission defaults (has*Permission) ----------------------------------------------------
 export interface Labelled { model: AnyModel; key(): string; app(): string }
 async function modelPerm(ctx: Ctx, admin: Labelled, p: Perm): Promise<boolean> {
   const u = ctx.request.user
@@ -85,12 +85,12 @@ abstract class BaseAdmin implements Labelled {
   key(): string { return this._key }
   app(): string { return this._key.split('.')[0]! }
 
-  // Django __str__ of a row
+  // the display string of a row
   str(obj: Record<string, unknown>): string {
     for (const k of ['name', 'title', 'username', 'email', 'label']) if (typeof obj[k] === 'string' && obj[k]) return obj[k] as string
     return `${this.verboseName ?? this.key().split('.')[1]} object (${String(obj.id)})`
   }
-  // Django get_queryset (ModelAdmin and InlineModelAdmin): every read and write of the admin goes through it
+  // getQueryset (ModelAdmin and InlineModelAdmin): every read and write of the admin goes through it
   // (scope rows per user here)
   getQueryset(_ctx: Ctx): QuerySet<any> { return this.model.objects }
   getReadonlyFields(_ctx: Ctx, _obj?: object): string[] { return this.readonlyFields }
@@ -153,11 +153,11 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
   // dashboard + changelist charts (charts.ts): null = the automatic ones from the fields, false = none, or your own list
   charts: ChartSpec[] | false | null = null
 
-  // Django get_object: undefined = not found (or outside getQueryset)
+  // getObject: undefined = not found (or outside getQueryset)
   async getObject(ctx: Ctx, pk: string | number): Promise<T | undefined> {
     return (await this.getQueryset(ctx).filter({ id: pk }).first()) as T | undefined
   }
-  // Django changelist override point (the tasks Job admin lists from the broker); undefined = the ORM changelist
+  // changelist override point (the tasks Job admin lists from the broker); undefined = the ORM changelist
   changelist?(ctx: Ctx, p: ListParams): Promise<{ rows: T[]; count: number }>
   hasModulePermission(ctx: Ctx): boolean | Promise<boolean> {
     return (async () => {
@@ -165,7 +165,7 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
       return false
     })()
   }
-  // Django save_model / delete_model: values are validated, keyed by row property (fk → `<name>Id`)
+  // saveModel / deleteModel: values are validated, keyed by row property (fk → `<name>Id`)
   async saveModel(_ctx: Ctx, obj: T | undefined, values: Record<string, unknown>): Promise<T> {
     const m = this.model as AnyModel
     return (obj ? await m.update((obj as { id: string | number }).id, values) : await m.create(values)) as T
@@ -181,9 +181,9 @@ export class ModelAdmin<T extends object = any> extends BaseAdmin {
     }
     return out
   }
-  // Django get_urls: custom admin views under <admin urls>/<app>/<model>/ (contrib/admin/urls.ts)
+  // getUrls: custom admin views under <admin urls>/<app>/<model>/ (contrib/admin/urls.ts)
   getUrls(): UrlEntry[] { return [] }
-  // Django admin_site.admin_view(): a staff-only action around fn(params, ctx); needs view permission on the
+  // adminView(): a staff-only action around fn(params, ctx); needs view permission on the
   // model unless opts.permission names another (or a hasXPermission method)
   view(fn: (params: Record<string, unknown>, ctx: Ctx) => Promise<unknown>, opts: { readOnly?: boolean; permission?: string; title?: string } = {}): ActionDef {
     const admin = this

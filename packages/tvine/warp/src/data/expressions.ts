@@ -1,4 +1,4 @@
-// Query expressions (Django's F / Q / Value / Case / Func / Aggregate / Subquery). Pure data: they
+// Query expressions (F / Q / Value / Case / Func / Aggregate / Subquery). Pure data: they
 // hold names and values, never SQL. sql/compile.ts resolves every name against the model and turns
 // every value into a Param. Spec: docs/design/conventions/orm-advanced.md §1–2.
 import type { ModelDef } from './fields/index.js'
@@ -48,7 +48,7 @@ export class OrderBy {
 }
 
 // A QNode node: lookups ANDed / ORed, optionally negated. Children: QNode, [lookup, value], or a boolean
-// expression (Exists). TS has no operator overloading: .and / .or / .not are Django's & | ~.
+// expression (Exists). TS has no operator overloading: .and / .or / .not stand for & | ~.
 export type QChild = QNode | [string, unknown] | Expression
 export class QNode {
   constructor(readonly conn: 'and' | 'or', readonly children: QChild[], readonly negated = false) {}
@@ -74,7 +74,7 @@ export function toQ(x: QNode | Lookups | Expression): QNode {
 export const wrap = (x: unknown): Expression => (x instanceof Expression ? x : new ValueExpr(x))
 const ref = (x: string | Expression): Expression => (typeof x === 'string' ? new FExpr(x) : x)
 
-// ---- builders (Django names) ----------------------------------------------------------------------
+// ---- builders ------------------------------------------------------------------------------------
 export const F = (name: string) => new FExpr(name)
 export function Q(x: Lookups | Expression = {}): QNode { return toQ(x) }
 export const Value = (v: unknown) => new ValueExpr(v)

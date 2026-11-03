@@ -109,7 +109,7 @@ call), `sum` (one-line summary), `hidden`, `sensitive`. `defineWidget(def)` make
 
 ## Forms (`tvine/forms`)
 
-Django `ModelForm`-style forms built from field metadata. The admin uses them; any page can too.
+Model forms built from field metadata. The admin uses them; any page can too.
 
 ```tsx
 import { ModelForm } from 'tvine/forms'
@@ -117,8 +117,8 @@ import 'tvine/forms/forms.css'   // optional default look
 ```
 
 Parts: `ModelForm` (fieldsets, client validation, server errors per field, dirty state), `Field`, `Fieldset`,
-`InlineFormset` (tabular or stacked), `registerFieldWidget(kind | 'app.model.field', Component)` (Django
-`formfield_overrides`).
+`InlineFormset` (tabular or stacked), `registerFieldWidget(kind | 'app.model.field', Component)` (your own widget
+for a field kind or one field).
 
 ### Input kinds
 
@@ -151,7 +151,7 @@ Extra kinds. Every kind is one agent target `field:<name>` with `set({value})` a
 | `percent`, `ip`, `slugAuto` | number + %, IPv4/6, slug built from another field | |
 | `signature` | canvas → PNG | none: human only |
 
-Agents are validated by the same rules as people and get the same error messages. Built-in checks (Django messages): required, min/max, maxLength, decimals, email/url/slug/uuid/json/date,
+Agents are validated by the same rules as people and get the same error messages. Built-in checks: required, min/max, maxLength, decimals, email/url/slug/uuid/json/date,
 choices, upload `accept` / `maxBytes`.
 
 ### ORM fields that pick a kind

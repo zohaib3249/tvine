@@ -1,4 +1,4 @@
-// tvine/testing — Django-TestClient-style helpers (docs/design/conventions/testing.md).
+// tvine/testing — test client helpers (docs/design/conventions/testing.md).
 // agentClient speaks real HTTP bytes to server.server over an in-memory socket pair: no port, the
 // same parser, handler chain and envelope a real agent gets.
 import { randomUUID } from 'node:crypto'

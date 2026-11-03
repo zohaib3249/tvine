@@ -26,7 +26,7 @@ export const field = {
   datetime: mk<Date, 'datetime'>(DatetimeField),
   json: mk<unknown, 'json'>(JsonField),
   image: mk<string, 'image'>(ImageField),
-  // Django DateField / TimeField / DurationField / DecimalField / EmailField / URLField / SlugField / FileField
+  // date / time / duration / decimal / email / url / slug / file
   date: mk<string, 'date'>(DateField),             // 'YYYY-MM-DD'
   time: mk<string, 'time'>(TimeField),             // 'HH:MM:SS[.ffffff]'
   duration: mk<number, 'duration'>(DurationField), // milliseconds
@@ -39,7 +39,7 @@ export const field = {
   color: mk<string, 'color'>(ColorField),          // '#1a2b3c' (stored lowercase)
   phone: mk<string, 'phone'>(PhoneField),          // E.164 '+15551234567'
   tags: mk<string[], 'tags'>(TagsField),           // JSON array of strings (maxItems, choices)
-  ip: mk<string, 'ip'>(IpField),                   // IPv4 / IPv6 (Django GenericIPAddressField)
+  ip: mk<string, 'ip'>(IpField),                   // IPv4 / IPv6
   country: mk<string, 'country'>(CountryField),    // ISO 3166-1 alpha-2 'IS'
   markdown: mk<string, 'markdown'>(MarkdownField),
   richText: mk<string, 'richText'>(RichTextField), // sanitized HTML (shape/rich.ts allowlist) on every save

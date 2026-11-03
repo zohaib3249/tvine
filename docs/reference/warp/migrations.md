@@ -1,6 +1,6 @@
 # Migrations and fixtures
 
-Migrations work like Django's. Each app has code files `apps/<app>/migrations/NNNN_name.ts`, each exporting `migration({ dependencies, operations })`. There is no state file: the schema state is rebuilt by replaying every migration in dependency order, and `makemigrations` diffs that state against the current `models.ts`. `migrate` renders each operation for the connected database at apply time and records it in the table `__tvine_migrations (app, name, checksum, applied_at)`. Fixtures (`dumpdata` / `loaddata`) move rows in and out as JSON. Source: `warp/src/data/migrations.ts`, `migrate.ts`, `schema/*.ts`, `fixtures.ts`, `cli.ts`.
+Each app has code files `apps/<app>/migrations/NNNN_name.ts`, each exporting `migration({ dependencies, operations })`. There is no state file: the schema state is rebuilt by replaying every migration in dependency order, and `makemigrations` diffs that state against the current `models.ts`. `migrate` renders each operation for the connected database at apply time and records it in the table `__tvine_migrations (app, name, checksum, applied_at)`. Fixtures (`dumpdata` / `loaddata`) move rows in and out as JSON. Source: `warp/src/data/migrations.ts`, `migrate.ts`, `schema/*.ts`, `fixtures.ts`, `cli.ts`.
 
 ## Import
 
@@ -143,7 +143,7 @@ There is no `RunPython` operation. Options the code offers:
 
 ## Fixtures
 
-Format (Django's): a JSON array of rows.
+Format: a JSON array of rows.
 
 ```json
 [

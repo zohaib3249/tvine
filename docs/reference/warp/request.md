@@ -56,7 +56,7 @@ interface Request {
 | `claims` | `Record<string, unknown>?` | Whatever a BYO resolver returns. |
 | `isActive`, `isStaff`, `isSuperuser` | `boolean?` | Filled by `tvine.auth`. |
 | `scopes` | `string[]?` | Token-authenticated: `'*'`, `'read'`, `'app.*'`, `'app.x'`. Dispatch refuses actions outside them. |
-| `hasPerm(perm, obj?)` | `Promise<boolean>?` | Django `user.has_perm`. |
+| `hasPerm(perm, obj?)` | `Promise<boolean>?` | Is one permission (`'app.codename'`) granted, optionally for `obj`. |
 
 Resolution order: `settings.auth.user(request)` (BYO, wins) → a bearer token (`tvine.auth`) → the session's user.
 Details: [contrib/auth.md](./contrib/auth.md).
@@ -149,7 +149,7 @@ function defineUpload(name: string, opts: {
 | `types` | `string[]` | required | Allowed MIME types, checked by sniffing the first bytes (not the client's type). Known: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`. Else `unsupported_type`. |
 | `storage` | `Storage` | `DiskStorage(settings.media.dir, settings.media.route)` | Where files go. |
 | `permissions` | `Permission[]` | `[]` | Action permissions. |
-| `uploadTo` | `string` | — | Key folder (Django `upload_to`): `'avatars'` → `avatars/<id>.png`. Folder names joined by `/`. |
+| `uploadTo` | `string` | — | Key folder: `'avatars'` → `avatars/<id>.png`. Folder names joined by `/`. |
 | `public` | `boolean` | `false` | Served with `Cache-Control: public`. |
 | `private` | `boolean` | `false` | Only via a signed, expiring URL (`media.url`). Not with `public`. |
 | `rate` | rate | 5 per minute | The 5/min default yields to `apps/<app>/rules.ts`; an explicit `rate` beats both. |

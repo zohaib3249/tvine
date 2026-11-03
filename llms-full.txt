@@ -8,7 +8,7 @@ Order: the AI guide (AGENTS.md), the guides from installation to deploy, then th
 
 # AGENTS.md: building with Tvine
 
-This project uses **Tvine**: Django for TypeScript, with Next.js pages, and a UI that AI agents can read and drive.
+This project uses **Tvine**: a TypeScript web framework (models, migrations, admin, auth), with Next.js pages, and a UI that AI agents can read and drive.
 The npm package is `tvinejs`, but you always import it and run it as `tvine`.
 Read this file before you write any code. It covers the layout, the commands, copy-paste recipes and the rules.
 
@@ -42,8 +42,8 @@ Every settings key with its default: `docs/settings-and-env.md` → "Reference: 
 ## Mental model
 
 - **One process.** `tvine dev` runs the backend (**Warp**) and Next.js (**Weft**) on one port.
-- **Warp is Django.** Apps, `defineModel` + ORM, migrations, `installedApps`, `urls.ts`, admin, auth, middleware,
-  tasks (Celery-like), and a test client. Django names are kept, in camelCase (`listDisplay`, `getQueryset`).
+- **Warp is the backend.** Apps, `defineModel` + ORM, migrations, `installedApps`, `urls.ts`, admin, auth, middleware,
+  tasks (background jobs), and a test client. Names are camelCase (`listDisplay`, `getQueryset`).
 - **Every action is four things at once.** Each function or method in `apps/<app>/views.ts` is an *action* with
   id `<app>.<name>`:
   1. `api.<app>.<name>(params)` for pages
@@ -60,7 +60,7 @@ Every settings key with its default: `docs/settings-and-env.md` → "Reference: 
 
 ```
 config/
-  settings/base.ts      shared settings: installedApps, middleware, mcp, db, auth (Django settings.py)
+  settings/base.ts      shared settings: installedApps, middleware, mcp, db, auth
   settings/dev.ts       base + debug + local hosts (used by tvine dev, migrate, shell, test)
   settings/prod.ts      base + secrets from the env (used by tvine start / NODE_ENV=production)
   settings/local.ts     optional, git-ignored, merged over dev.ts (copy local.example.ts)
@@ -409,7 +409,7 @@ Run it with `pnpm tvine test`.
 - **Imports** are `tvine`, `tvine/weft`, `tvine/widgets`, `tvine/api`, `tvine/forms`, `tvine/auth`, `tvine/tasks`,
   `tvine/testing` and `tvine/contrib/admin`. **Never `tvinejs`**: that is only the npm name.
   App files import each other as `./models.ts`, with the extension.
-- **Every request is one transaction** (Django `ATOMIC_REQUESTS`). If the action throws, everything rolls back.
+- **Every request is one transaction** (`settings.db.atomicRequests`). If the action throws, everything rolls back.
   Opt out with `rules: { atomic: false }`. In scripts, use `atomic(async () => ...)`.
 - **Await reads; writes may skip await.** Building a queryset runs no SQL. `count/first/get/list` need `await`.
   An un-awaited write inside a request still runs before commit. `tvine check` flags an un-awaited read.
@@ -524,19 +524,19 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -560,7 +560,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -574,7 +574,7 @@ The smallest working app is [examples/notes](https://github.com/zohaib3249/tvine
 ```
 examples/notes/
 ├─ package.json        deps: tvine, next, react, zod
-├─ settings.ts         Django settings.py (a one-file project; startproject makes config/settings/)
+├─ settings.ts         settings (a one-file project; startproject makes config/settings/)
 ├─ urls.ts             optional REST paths (ROOT_URLCONF)
 ├─ next.config.ts
 ├─ apps/notes/         one app: models, views, urls, admin, tasks, migrations
@@ -593,7 +593,7 @@ pnpm exec tvine dev --port 4400  # Next dev server + Warp in one process
 The full walkthrough, from an empty folder to a working app with admin, agents and background jobs, is
 [getting-started.md](https://github.com/zohaib3249/tvine/blob/main/docs/getting-started.md).
 
-**Autoreload:** like Django's `runserver`, `tvine dev` restarts the server when backend code changes: anything
+**Autoreload:** `tvine dev` restarts the server when backend code changes: anything
 under `apps/` (models, views, serializers, actions, admin, tasks, urls…), `config/`, `.env*` or `tvine.config.*`.
 It prints `tvine dev: apps/blog/views.ts changed, restarting…`, then `ready on :3000 (restarted in 1.2 s)` on the
 same port. Pages and components (`app/`, `components/`, CSS) are not restarted: Next hot-reloads them. A file that
@@ -645,7 +645,7 @@ Next: [settings-and-env.md](https://github.com/zohaib3249/tvine/blob/main/docs/s
 
 # Getting started: a notes app in 15 minutes
 
-You know Django and Next.js. Tvine is both in one TypeScript process: Django-style backend (Warp) and
+Tvine is a backend and a frontend in one TypeScript process: a backend with models, migrations, auth and admin (Warp) and
 Next.js pages (Weft). Every action you write is also an agent tool (MCP), and every page also has a JSON view for agents.
 
 We build `examples/notes/` — it is in the repo, finished, so you can copy from it or compare.
@@ -679,14 +679,14 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
@@ -699,10 +699,10 @@ The rest of this guide builds `examples/notes/` by hand, file by file. It keeps 
 ```
 examples/notes/
 ├─ package.json        deps: tvine, tvine/weft, tvine/admin, next, react, zod
-├─ settings.ts         Django settings.py
-├─ urls.ts             Django ROOT_URLCONF (optional)
+├─ settings.ts         all settings, one file
+├─ urls.ts             root URL table (optional)
 ├─ next.config.ts
-├─ apps/notes/         one Django app: models, views, urls, admin, tasks
+├─ apps/notes/         one app: models, views, urls, admin, tasks
 ├─ app/                Next.js pages
 └─ components/
 ```
@@ -725,9 +725,9 @@ export default defineSettings({
 })
 ```
 
-`'notes'` is the project app in `apps/notes/`: like Django's `INSTALLED_APPS`, only listed apps load.
+`'notes'` is the project app in `apps/notes/`: only listed apps load.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -751,7 +751,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -789,7 +789,7 @@ pnpm exec tvine makemigrations     # → created notes/migrations/0001_initial.t
 pnpm exec tvine migrate            # → applied admin.0001_initial, auth…, notes.0001_initial, tasks…
 ```
 
-Same as Django: migrations are code files you commit; `showmigrations`, `sqlmigrate`, `migrate <app> <target>`
+Migrations are code files you commit; `showmigrations`, `sqlmigrate`, `migrate <app> <target>`
 (rollback) all exist. Run `pnpm exec tvine` for the full command list.
 
 ## 3. Views: a ListView plus `@action`
@@ -829,7 +829,7 @@ export const clearAll = defineAction('clearAll', z.object({}), async () => ({ de
   { humanOnly: 'Deleting every note', destructive: true })   // → notes.clearAll (humans only, see §7)
 ```
 
-Action ids are `<app folder>.<name>`. Each request is one transaction (Django `ATOMIC_REQUESTS`). Params are
+Action ids are `<app folder>.<name>`. Each request is one transaction (`settings.db.atomicRequests`). Params are
 validated by the zod schema before your code runs. Generic views and every DRF hook:
 [views-urls-api.md](https://github.com/zohaib3249/tvine/blob/main/docs/views-urls-api.md).
 
@@ -1073,7 +1073,7 @@ Details: [frontend-weft.md](https://github.com/zohaib3249/tvine/blob/main/docs/f
 
 # Settings and environment
 
-One file, `settings.ts` at the app root, configures everything. It is Django's `settings.py`: zod-validated at
+One file, `settings.ts` at the app root, configures everything. It is zod-validated at
 boot, with defaults for every key you leave out.
 
 ## Minimal
@@ -1113,22 +1113,22 @@ and which backend each subsystem uses.
 | `site` | `{ name, description }`: shown to agents (`/llms.txt`, MCP) and in the admin | — |
 | `installedApps` | built-in apps: `tvine.auth`, `tvine.tasks`, `tvine.admin`, `tvine.audit` | `[]` |
 | `secret` | HMAC key, 32+ chars; an array (or `TVINE_SECRET=new,old`) rotates keys | dev: random; prod: required |
-| `debug` | Django `DEBUG` | on under `tvine dev` and `NODE_ENV=development` |
-| `allowedHosts` | Django `ALLOWED_HOSTS` | dev: localhost; prod: required |
+| `debug` | debug mode: dev CSP, inspector feed, helpful errors | on under `tvine dev` and `NODE_ENV=development` |
+| `allowedHosts` | allowed `Host` names (`*`, `.example.com`); others get a 400 | dev: localhost; prod: required |
 | `dev.allowedHosts` | dev only, added on top: port forwarding / tunnel hosts (`'*.ngrok-free.app'`, `'*.devtunnels.ms'`); also `TVINE_DEV_ALLOWED_HOSTS`. In dev a refused host's 400 names the line to add | `[]` |
 | `db` | `{ url, pool: { max, acquireMs, idleMs }, atomicRequests, slowQueryMs }` | `file:./tvine.db`, one transaction per request |
 | `session` | `{ ttlMs, maxAgeMs, cookieName, secure, sameSite, max, backend }` | 24 h idle, 14 days max, `lax` |
 | `limits` | `{ bodyBytes, handlerMs, rate: { limit, windowMs, by }, sseConnPerIp, backend }` (`rate.by: 'shield'` lets Shield's rules be the only general rate limit, see [shield.md](https://github.com/zohaib3249/tvine/blob/main/docs/shield.md#rate-limits-shield-and-the-framework)) | 64 KB, 10 s, 60/min, `'framework'` |
 | `trustProxy` | how many `X-Forwarded-For` hops to trust (drives `request.ip`) | `0` |
-| `middleware` / `actionMiddleware` | HTTP middleware (Django `MIDDLEWARE`) / around each action | RequestId, AllowedHosts, Security, Cors, GZip |
+| `middleware` / `actionMiddleware` | HTTP middleware / around each action | RequestId, AllowedHosts, Security, Cors, GZip |
 | `security.headers` | HSTS, CSP, COOP, CORP, Referrer-Policy, Permissions-Policy | on |
 | `cors` | `{ origins, methods, credentials, maxAge, routes }` | closed |
 | `compression` | gzip / brotli | on, 1 KB threshold |
 | `mcp` | `{ tools: 'both', exclude, maxTools }` | 40 typed tools |
 | `agent` | `{ shape, budget, rowsL1, inTab }`: the agent snapshot and tab control | `inTab: 'on'` |
-| `logging` | `'json' \| 'pretty' \| 'none'` or a Django `LOGGING` object | pretty in dev, json in prod |
+| `logging` | `'json' \| 'pretty' \| 'none'` or a logging config object | pretty in dev, json in prod |
 | `tasks` | worker lease, poll, grace, result TTL | see [tasks-cache-email.md](https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md) |
-| `caches`, `email` | Django `CACHES`, `EMAIL_*` | memory cache, console mail in dev |
+| `caches`, `email` | named caches, mail backend and addresses | memory cache, console mail in dev |
 | `redis`, `channels` | shared backends for multi-process deploys | memory |
 | `media` | `{ dir, route }` for uploads | `./media`, `/media` |
 | `metrics` | Prometheus text at `/tvine/metrics` | off |
@@ -1143,7 +1143,7 @@ Backends (memory vs redis) for production: [deploy.md](https://github.com/zohaib
 
 ## Middleware
 
-`settings.middleware` is Django's `MIDDLEWARE`. Leave it out and you get the safe default list (the first five
+`settings.middleware` is the HTTP middleware list. Leave it out and you get the safe default list (the first five
 below). Only listed entries run; `middleware: []` turns every one off, security headers included.
 
 ```ts
@@ -1203,7 +1203,7 @@ export const timing = defineMiddleware({
     await next()
   },
 })
-// or Django-style hooks: processRequest(req, res), processResponse(req, res), processException(req, res, err)
+// or hooks: processRequest(req, res), processResponse(req, res), processException(req, res, err)
 ```
 
 `req.tvine` has `path`, `ip`, `https`, `host`, `id`, `locale`, `log`.
@@ -1227,7 +1227,7 @@ cannot skip them. Use it for things like a "shop closed" switch.
 
 ```ts
 logging: 'json'          // or 'pretty' | 'none'. Default: pretty in dev, json in production
-logging: {               // or Django LOGGING
+logging: {               // or a config object
   level: 'info',
   handlers: [
     { type: 'console' },
@@ -1251,7 +1251,7 @@ Built-in loggers: `tvine` (runtime errors), `tvine.request`, `tvine.security` (l
 
 ## Environment variables
 
-Read typed values with `env`, like django-environ:
+Read typed values with `env`:
 
 ```ts
 import { defineSettings, env } from 'tvine'
@@ -1341,9 +1341,9 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `site.name` / `site.description` | `'tvine app'` / `''` | shown to agents (`/llms.txt`, MCP) and in the admin |
 | `siteUrl` | unset (the request's Host) | public origin like `https://shop.example` for links the server builds (approve links, sitemap) |
 | `secret` | dev: random per boot; prod: `TVINE_SECRET`, required | HMAC key, 32+ chars; an array rotates (newest first) |
-| `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | Django `DEBUG`: dev CSP, inspector feed, `ServerTiming` |
+| `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | dev CSP, inspector feed, `ServerTiming` |
 | `installedApps` | `[]` | project apps by folder (`'blog'`) and built-ins `'tvine.auth'`, `'tvine.tasks'`, `'tvine.admin'`, `'tvine.audit'`, `'tvine.shield'` |
-| `rootUrlconf` | `config/urls`, else `urls` | Django `ROOT_URLCONF`, a path from the project root without extension |
+| `rootUrlconf` | `config/urls`, else `urls` | the root URL table, a path from the project root without extension |
 | `tasksModule` | `config/tasks` | where `tvine worker` finds queues and `beatSchedule` |
 | `allowedHosts` | dev: localhost, LAN IPs, hostname; prod: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`, `'*'` |
 | `dev.allowedHosts` | `[]` | dev only, extra hosts such as `'*.ngrok-free.app'` |
@@ -1432,7 +1432,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 
 | Key | Default | Meaning |
 |---|---|---|
-| `auth.userModel` | `'auth.User'` | Django `AUTH_USER_MODEL`; set before the first migrate |
+| `auth.userModel` | `'auth.User'` | the user model; set before the first migrate |
 | `auth.backends` | `['tvine.auth.ModelBackend']` | tried in order; also `'tvine.auth.EmailBackend'` or a dotted path |
 | `auth.user` | unset | your own `(req) => user \| null` resolver; overrides everything |
 | `auth.hashers` / `validators` | built-in | password hashers (first = preferred) and validators |
@@ -1457,7 +1457,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `admin.stats.pages.enabled` / `keepParams` | `true` / `[]` | page stats; query params kept in the path |
 | `email.backend` | console (dev), memory (tests), smtp (prod) | also `'file'`, `'dummy'` ([tasks-cache-email.md](https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md)) |
 | `email.host` / `port` / `user` / `password` / `useTls` / `useSsl` / `allowPlainAuth` / `timeoutMs` | `localhost` / `25` / `''` / `''` / `false` / `false` / `false` / `10000` | SMTP |
-| `email.defaultFrom` / `serverEmail` / `admins` / `subjectPrefix` / `filePath` | `webmaster@localhost` / `root@localhost` / `[]` / `'[Tvine] '` / `'./mail'` | Django `EMAIL_*` |
+| `email.defaultFrom` / `serverEmail` / `admins` / `subjectPrefix` / `filePath` | `webmaster@localhost` / `root@localhost` / `[]` / `'[Tvine] '` / `'./mail'` | sender addresses, admin list, subject prefix, file backend folder |
 | `logging` | pretty (dev), json (prod) | string or `{ level, format, handlers, loggers, redact }`; handler types `console` (`stream`), `file` (`path`, `maxBytes`, `daily`, `keep`), `custom` (`write`), `memory` (`size`) |
 
 
@@ -1465,7 +1465,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 
 # Models and the ORM
 
-Tvine has its own ORM, modelled on Django's: models in `apps/<app>/models.ts`, `Model.objects` querysets,
+Tvine has its own ORM: models in `apps/<app>/models.ts`, `Model.objects` querysets,
 migration files you commit. It runs on SQLite (default), Postgres and MySQL/MariaDB with the same code.
 
 ## Setup
@@ -1504,39 +1504,39 @@ pnpm exec tvine migrate            # → applied notes.0001_initial
 
 ## Field types
 
-| `field.` | Django | JS value |
-|---|---|---|
-| `id()` | AutoField | number |
-| `uuid()` | UUIDField | string |
-| `text()` | TextField / CharField | string |
-| `int()`, `float()` | IntegerField, FloatField | number |
-| `bool()` | BooleanField | boolean |
-| `decimal({ maxDigits, decimalPlaces })` | DecimalField | string `'12.50'` |
-| `money()` | — | `{ value, currency }`, major units, stored as integer cents |
-| `percent()` | — | number 0–100 |
-| `datetime({ auto })` | DateTimeField | `Date` |
-| `date({ autoNow, autoNowAdd })`, `time()` | DateField, TimeField | `'YYYY-MM-DD'`, `'HH:MM:SS'` |
-| `duration()` | DurationField | milliseconds |
-| `dateRange()` | — | `{ start, end }` |
-| `email()`, `url()`, `slug()` | EmailField, URLField, SlugField | validated string |
-| `phone()`, `color()`, `country()`, `ip()` | — / GenericIPAddressField | E.164, `#rrggbb`, ISO code, IPv4/IPv6 |
-| `json()` | JSONField | any JSON |
-| `tags({ maxItems, choices })` | — | `string[]` |
-| `address()` | — | `{ line1, line2?, city, region?, postal?, country }` |
-| `markdown()`, `code({ language })` | — | string |
-| `richText({ allowRemoteImages })` | — | HTML, sanitized on every save |
-| `file({ uploadTo })`, `image({ uploadTo })` | FileField, ImageField | storage key |
-| `signature()` | — | a drawn signature, stored as an image |
-| `encryptedText()`, `encryptedJson()`, `encrypted({ of, deterministic, context })` | — | encrypted at rest (AES-256-GCM) |
-| `enum(['a', 'b'] as const)` | `choices` | one of the values |
-| `fk(() => Model, { onDelete, relatedName })` | ForeignKey | the row gets `<name>Id` |
-| `m2m(() => Model, { through, relatedName })` | ManyToManyField | no column; `Model.related('field', id)` |
+| `field.` | JS value |
+|---|---|
+| `id()` | number |
+| `uuid()` | string |
+| `text()` | string |
+| `int()`, `float()` | number |
+| `bool()` | boolean |
+| `decimal({ maxDigits, decimalPlaces })` | string `'12.50'` |
+| `money()` | `{ value, currency }`, major units, stored as integer cents |
+| `percent()` | number 0–100 |
+| `datetime({ auto })` | `Date` |
+| `date({ autoNow, autoNowAdd })`, `time()` | `'YYYY-MM-DD'`, `'HH:MM:SS'` |
+| `duration()` | milliseconds |
+| `dateRange()` | `{ start, end }` |
+| `email()`, `url()`, `slug()` | validated string |
+| `phone()`, `color()`, `country()`, `ip()` | E.164, `#rrggbb`, ISO code, IPv4/IPv6 |
+| `json()` | any JSON |
+| `tags({ maxItems, choices })` | `string[]` |
+| `address()` | `{ line1, line2?, city, region?, postal?, country }` |
+| `markdown()`, `code({ language })` | string |
+| `richText({ allowRemoteImages })` | HTML, sanitized on every save |
+| `file({ uploadTo })`, `image({ uploadTo })` | storage key |
+| `signature()` | a drawn signature, stored as an image |
+| `encryptedText()`, `encryptedJson()`, `encrypted({ of, deterministic, context })` | encrypted at rest (AES-256-GCM) |
+| `enum(['a', 'b'] as const)` | one of the values |
+| `fk(() => Model, { onDelete, relatedName })` | the row gets `<name>Id` |
+| `m2m(() => Model, { through, relatedName })` | no column; `Model.related('field', id)` |
 
 ### Options every field takes
 
 | Option | Meaning |
 |---|---|
-| `optional` | nullable (Django `null=True, blank=True`) |
+| `optional` | nullable; may be left out on create |
 | `default` | default value |
 | `unique`, `index` | unique / indexed column |
 | `searchable` | used by `?q=` search in generic views and the admin |
@@ -1564,7 +1564,7 @@ Key handling: [auth-and-security.md](https://github.com/zohaib3249/tvine/blob/ma
 ### Meta
 
 **The user.** Point an fk at the configured user model, never at `User` directly: `owner: field.fk(getUserModel)`
-(from `tvine/auth`). That's Django's `ForeignKey(settings.AUTH_USER_MODEL)`, and it follows `settings.auth.userModel`
+(from `tvine/auth`). It follows `settings.auth.userModel`
 (see auth-and-security.md, "Custom user model").
 
 The third argument to `defineModel`:
@@ -1587,7 +1587,7 @@ await Product.objects.filter({ category: 'shirts' }).order('-price').page({ size
 await Product.objects.search('summer').first()
 await Product.objects.filter({ price__lte: 30, stock__gt: 0 }).count()
 await Product.objects.exclude({ category: 'hats' }).all()
-await Product.objects.slice(0, 10).all()                    // Django qs[0:10]
+await Product.objects.slice(0, 10).all()                    // the first 10 rows (LIMIT 10)
 
 const p = await Product.create({ name: 'Shirt', price: { value: 29, currency: 'USD' } })
 await Product.update(p.id, { stock: 11 })
@@ -1598,7 +1598,7 @@ await Product.delete(42)
 Lookups: `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `iexact`, `isnull`, `range`, `year`/`month`/`day`/`date`,
 and relation paths (`vendor__name`, `product_set__price__gt`).
 
-Expressions and aggregates, as in Django:
+Expressions and aggregates:
 
 ```ts
 import { F, Q, Sum, Count, Avg } from 'tvine'
@@ -1623,7 +1623,7 @@ Also `getOrCreate`, `updateOrCreate`, `bulkCreate`, `bulkUpdate`, `inBulk`, `sel
 
 ## Transactions
 
-Each action is one transaction (Django `ATOMIC_REQUESTS`, `settings.db.atomicRequests`). Opt out per action
+Each action is one transaction (`settings.db.atomicRequests`). Opt out per action
 with `rules: { atomic: false }`. In your own code, use `atomic(async () => { … })`.
 
 ## Migrations
@@ -1649,7 +1649,7 @@ be rolled back.
 ## Fixtures
 
 ```bash
-pnpm exec tvine dumpdata notes --output notes.json     # Django format: [{ model, pk, fields }]
+pnpm exec tvine dumpdata notes --output notes.json     # format: [{ model, pk, fields }]
 pnpm exec tvine loaddata notes.json                    # one transaction, upsert by pk
 ```
 
@@ -1759,7 +1759,7 @@ export class ProductDetail extends DetailView<Product> { // → catalog.get
 | Option | Default | Meaning |
 |---|---|---|
 | `model` | required | a `defineModel` model |
-| `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | Django lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
+| `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | field lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
 | `searchFields` | `[]` | fields searched by `q` |
 | `ordering` | `[]` | allowed `sort` values (`-price` = descending) |
 | `pageSize` / `maxPageSize` | 25 / 100 | page size |
@@ -2004,7 +2004,7 @@ call), `sum` (one-line summary), `hidden`, `sensitive`. `defineWidget(def)` make
 
 ## Forms (`tvine/forms`)
 
-Django `ModelForm`-style forms built from field metadata. The admin uses them; any page can too.
+Model forms built from field metadata. The admin uses them; any page can too.
 
 ```tsx
 import { ModelForm } from 'tvine/forms'
@@ -2012,8 +2012,8 @@ import 'tvine/forms/forms.css'   // optional default look
 ```
 
 Parts: `ModelForm` (fieldsets, client validation, server errors per field, dirty state), `Field`, `Fieldset`,
-`InlineFormset` (tabular or stacked), `registerFieldWidget(kind | 'app.model.field', Component)` (Django
-`formfield_overrides`).
+`InlineFormset` (tabular or stacked), `registerFieldWidget(kind | 'app.model.field', Component)` (your own widget
+for a field kind or one field).
 
 ### Input kinds
 
@@ -2046,7 +2046,7 @@ Extra kinds. Every kind is one agent target `field:<name>` with `set({value})` a
 | `percent`, `ip`, `slugAuto` | number + %, IPv4/6, slug built from another field | |
 | `signature` | canvas → PNG | none: human only |
 
-Agents are validated by the same rules as people and get the same error messages. Built-in checks (Django messages): required, min/max, maxLength, decimals, email/url/slug/uuid/json/date,
+Agents are validated by the same rules as people and get the same error messages. Built-in checks: required, min/max, maxLength, decimals, email/url/slug/uuid/json/date,
 choices, upload `accept` / `maxBytes`.
 
 ### ORM fields that pick a kind
@@ -2488,7 +2488,7 @@ url: /shop
 
 # Admin panel
 
-Tvine ships a Django-style admin at `/admin`. You register models in `apps/<app>/admin.ts`, and Warp serves a
+Tvine ships an admin panel at `/admin`. You register models in `apps/<app>/admin.ts`, and Warp serves a
 modern, responsive panel: changelists with filters, search, bulk actions and charts, change forms with inlines,
 a dashboard, and a System section (health, traffic, agents, queries, jobs, logs, security).
 
@@ -2548,7 +2548,7 @@ A small working example: [examples/notes/apps/notes/admin.ts](https://github.com
 
 ## ModelAdmin options
 
-Django names, camelCased.
+Option names are camelCase.
 
 | Option | Default | What it does |
 |---|---|---|
@@ -2726,7 +2726,7 @@ Agents use the same actions as MCP tools, under the same staff and model permiss
 
 # Auth and security
 
-`tvine.auth` is Django's `django.contrib.auth` for Tvine: users, groups, permissions, sessions, password reset,
+`tvine.auth` is the built-in auth app: users, groups, permissions, sessions, password reset,
 TOTP 2FA and personal access tokens for agents. On top, Warp ships secure defaults for every request: host
 allow-list, CSP and security headers, closed CORS, rate limits, session hardening and an audit trail.
 
@@ -2781,7 +2781,7 @@ the last 10 minutes, or the password again.
 
 ## Custom user model
 
-Like Django's `AUTH_USER_MODEL`. Pick it **before the first `tvine migrate`**: tvine.auth's tables point at it.
+Pick it **before the first `tvine migrate`**: tvine.auth's tables point at it.
 Changing it later makes `tvine check` and `tvine migrate` fail with "settings.auth.userModel changed after
 tvine.auth was migrated"; start from a fresh database, or move the users with a hand-written data migration.
 
@@ -2798,7 +2798,7 @@ export const User = extendUser({ phone: field.phone({ optional: true }) }, { req
 auth: { userModel: 'accounts.User' },   // 'app.Model'; the default is 'auth.User'
 ```
 
-The table is `accounts_user` (Django's default name). `auth_user` is never created. Fully custom
+The table is `accounts_user` (`<app>_<model>`). `auth_user` is never created. Fully custom
 (AbstractBaseUser), e.g. sign-in by email with no username:
 
 ```ts
@@ -2817,7 +2817,7 @@ To point your own models at the user, use `field.fk(getUserModel)`.
 
 ## Authentication backends
 
-Like Django's `AUTHENTICATION_BACKENDS`. They're tried in order, and the first one that returns a user wins:
+They're tried in order, and the first one that returns a user wins:
 
 ```ts
 auth: { backends: ['tvine.auth.ModelBackend', 'tvine.auth.EmailBackend', 'accounts.backends.LdapBackend'] }
@@ -2852,7 +2852,7 @@ the user.
 
 ## User methods
 
-User-model rows from the ORM, and `ctx.request.user` for a signed-in user, have Django's methods:
+User-model rows from the ORM, and `ctx.request.user` for a signed-in user, have these methods:
 
 ```ts
 const u = await getUserModel().objects.filter({ username: 'ann' }).first()
@@ -2917,7 +2917,7 @@ Per-action rules beyond permissions: `humanOnly` (agents never), `denyAgents`, `
 confirm token, `by: 'human'` when only the user may say yes), `rate`. See
 [frontend-weft.md](https://github.com/zohaib3249/tvine/blob/main/docs/frontend-weft.md) for the matching `<HumanOnly>` UI.
 
-`migrate` creates `add / change / delete / view` permission rows for every model, as Django does.
+`migrate` creates `add / change / delete / view` permission rows for every model.
 
 ## Security features
 
@@ -2937,7 +2937,7 @@ Condensed; the full table with every setting is
 | | `request.ip` only from trusted proxies | `trustProxy` | 0 |
 | Sessions | httpOnly cookie, `__Host-` when Secure, SameSite, rotation on login/logout | `session.*` | Secure in prod, Lax |
 | | Idle TTL and absolute lifetime | `session.ttlMs`, `session.maxAgeMs` | 24 h, 14 days |
-| Auth | scrypt hashing, rehash on login, Django validators + 20k common passwords | `auth.hashers`, `auth.validators` | on |
+| Auth | scrypt hashing, rehash on login, password validators + 20k common passwords | `auth.hashers`, `auth.validators` | on |
 | | Breach check (Have I Been Pwned, k-anonymity) | `auth.breachCheck` | off |
 | | Login throttling and lockout | `auth.login.*` | 5 per 15 min |
 | | TOTP 2FA, recovery codes, sudo mode | `auth.totp*` | per user |
@@ -2963,7 +2963,7 @@ content-security-policy: default-src 'self'; script-src 'self' … 'nonce-…' '
 
 ## Middleware
 
-`settings.middleware` is a list, like Django's `MIDDLEWARE`. Built-ins: `tvine.middleware.Security`,
+`settings.middleware` is the HTTP middleware list. Built-ins: `tvine.middleware.Security`,
 `tvine.middleware.AllowedHosts`, `tvine.middleware.Cors`, `tvine.middleware.RequestId`,
 `tvine.middleware.GZip`, `tvine.middleware.RateLimit`, `tvine.middleware.IpFilter`. Add your own per app.
 The full catalog with options, and custom middleware: [settings-and-env.md](https://github.com/zohaib3249/tvine/blob/main/docs/settings-and-env.md#middleware).
@@ -3298,8 +3298,7 @@ visitor arrives as your own machine (`::1`), shows as "Local network", and share
 
 # Background tasks, cache and email
 
-Three Django-style subsystems: `tvine.tasks` (Celery-like jobs), the cache (`django.core.cache`) and mail
-(`django.core.mail`). None needs a third-party service to start; Redis is optional for several machines.
+Three built-in subsystems: `tvine.tasks` (background jobs), the cache and mail. None needs a third-party service to start; Redis is optional for several machines.
 
 Settings keys: [settings-and-env.md](https://github.com/zohaib3249/tvine/blob/main/docs/settings-and-env.md). Redis for several processes: [deploy.md](https://github.com/zohaib3249/tvine/blob/main/docs/deploy.md).
 
@@ -3432,7 +3431,7 @@ caches: {
 },
 ```
 
-Cache an action's result (Django `cache_page`), read-only actions only:
+Cache an action's result, read-only actions only:
 
 ```ts
 defineAction('list', schema, run, { readOnly: true, cache: { timeout: 60, varyOn: ['user', 'query'], tags: ['products'] } })
@@ -3494,7 +3493,7 @@ In tests, `mail.outbox` holds sent messages (`mail.outbox.length = 0` resets it)
 
 # Testing
 
-Tvine's own tests use [Vitest](https://vitest.dev). `tvine/testing` is Django's test client:
+Tvine's own tests use [Vitest](https://vitest.dev). `tvine/testing` is the test client:
 it drives your app the way an agent does, in-process, with no port.
 
 ## Run the repo's tests
@@ -3585,7 +3584,7 @@ pnpm exec tvine generate --check         # exit 1 if tvine-api.d.ts is stale
 
 # CLI: `tvine`
 
-`tvine` is Django's `manage.py`. It comes with `tvine`; run it from your app folder (the one with
+`tvine` is the management command. It comes with `tvine`; run it from your app folder (the one with
 `settings.ts`):
 
 ```bash
@@ -3613,7 +3612,7 @@ A bare `tvine` in a shell says "command not found" until you pick one:
 | `tvine startapp <name>` | `apps/<name>/` empty stubs; adds it to `installedApps` and its `include()` to `config/urls.ts` |
 | `tvine shell` | REPL with settings and models loaded |
 
-Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`), like Django's `--settings`.
+Every command takes `--settings config/settings/prod` (or `TVINE_SETTINGS`).
 
 ```
 mysite/
@@ -3624,19 +3623,19 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -3660,7 +3659,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -3669,7 +3668,7 @@ Optional app files (create them when you need them):
 | Command | What it does |
 |---|---|
 | `start [--port 3000] [--host h] [--api-only]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s |
-| `dev [--port 3000] [--host h] [--noreload]` | Django `runserver`: Next dev server with hot reload, `tvine-api.d.ts` regenerated on save; the server restarts (same port) when `apps/`, `config/`, `.env*` or `tvine.config.*` change, and waits for the next save after a crash. `--noreload`: one process, no restart |
+| `dev [--port 3000] [--host h] [--noreload]` | Development server: Next dev server with hot reload, `tvine-api.d.ts` regenerated on save; the server restarts (same port) when `apps/`, `config/`, `.env*` or `tvine.config.*` change, and waits for the next save after a crash. `--noreload`: one process, no restart |
 | `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed |
 
 ```bash
@@ -4059,7 +4058,7 @@ folder up, in [../README.md](../README.md).
 
 # Warp overview
 
-Warp is the backend half of Tvine: a Django-style TypeScript server. You define models (`defineModel`), write actions and views in each app, list the apps in settings, and run `tvine dev`. Every action is reachable four ways from one definition: a human `<Form>` on a Next.js page, plain HTTP at `/tvine/api/<app>.<name>`, optional REST paths from `urls.ts`, and an MCP tool at `/mcp` for AI agents. The data layer (ORM, migrations, fixtures, database drivers) lives in `warp/src/data/`; this folder documents all of it.
+Warp is the backend half of Tvine: a TypeScript server with models, migrations, auth and admin. You define models (`defineModel`), write actions and views in each app, list the apps in settings, and run `tvine dev`. Every action is reachable four ways from one definition: a human `<Form>` on a Next.js page, plain HTTP at `/tvine/api/<app>.<name>`, optional REST paths from `urls.ts`, and an MCP tool at `/mcp` for AI agents. The data layer (ORM, migrations, fixtures, database drivers) lives in `warp/src/data/`; this folder documents all of it.
 
 ## Import
 
@@ -4074,18 +4073,18 @@ The npm package is `tvinejs`; projects install it under the name `tvine` (`"tvin
 
 `tvine startproject shop` writes this (from `warp/src/cli/scaffold.ts`):
 
-| Path | What it is | Django equivalent |
-|---|---|---|
-| `config/settings/base.ts` | Shared settings object (`satisfies SettingsInput`) | `settings/base.py` |
-| `config/settings/dev.ts` | `defineSettings({ ...base, debug: true, ... })`, used by `tvine dev / migrate / shell` | `settings/dev.py` |
-| `config/settings/prod.ts` | Production settings; throws if `TVINE_SECRET`, `TVINE_ALLOWED_HOSTS`, `DATABASE_URL` are missing | `settings/prod.py` |
-| `config/settings/local.ts` | Optional, git-ignored; merged over `dev.ts` (copy `local.example.ts`) | `local_settings.py` |
-| `config/urls.ts` | Root URL table (`urlpatterns`) | `ROOT_URLCONF` |
-| `config/tasks.ts` | Worker queues and beat schedule | Celery config |
-| `config/middleware/` | Your own HTTP middleware | custom `MIDDLEWARE` entries |
-| `apps/<app>/` | One app, listed in `installedApps` | a Django app |
-| `app/` | Next.js pages (the Weft frontend) | templates |
-| `.env` | `TVINE_SECRET`, `DATABASE_URL` for development | |
+| Path | What it is |
+|---|---|
+| `config/settings/base.ts` | Shared settings object (`satisfies SettingsInput`) |
+| `config/settings/dev.ts` | `defineSettings({ ...base, debug: true, ... })`, used by `tvine dev / migrate / shell` |
+| `config/settings/prod.ts` | Production settings; throws if `TVINE_SECRET`, `TVINE_ALLOWED_HOSTS`, `DATABASE_URL` are missing |
+| `config/settings/local.ts` | Optional, git-ignored; merged over `dev.ts` (copy `local.example.ts`) |
+| `config/urls.ts` | Root URL table (`urlpatterns`) |
+| `config/tasks.ts` | Worker queues and beat schedule |
+| `config/middleware/` | Your own HTTP middleware |
+| `apps/<app>/` | One app, listed in `installedApps` |
+| `app/` | Next.js pages (the Weft frontend) |
+| `.env` | `TVINE_SECRET`, `DATABASE_URL` for development |
 
 Which settings file loads: `TVINE_SETTINGS` (or `tvine --settings config/settings/prod`) names it. Unset: `config/settings/prod` when `NODE_ENV=production`, else `config/settings/dev` plus `config/settings/local` if present. A project without `config/settings/` uses `./settings.ts` (the `examples/notes` project does this).
 
@@ -4214,7 +4213,7 @@ function defineModel<const F extends Fields>(name: string, fields: F, meta?: Mod
 |---|---|---|---|
 | `ordering` | `string[]` | none | Default order when a query has no `.order()`. `'field'` ascending, `'-field'` descending. The primary key is always added last as a tie-breaker. |
 | `indexes` | `(string[] \| { fields: string[]; name?: string; unique?: boolean })[]` | `[]` | Extra indexes. A bare array is the field list. The name defaults to `<model>_<fields joined by _>_idx` (`_uniq` when `unique: true`), shortened with a hash when over 63 characters. |
-| `unique` | `string[][]` | `[]` | Unique-together sets (Django `unique_together`). Each entry is a list of field names. |
+| `unique` | `string[][]` | `[]` | Unique-together sets. Each entry is a list of field names. |
 | `constraints` | `ConstraintSpec[]` | `[]` | `CheckConstraint(...)` / `UniqueConstraint(...)` results. |
 | `personalData` | `string[]` | none | Fields that `privacy.export(user)` collects from rows that reference a user (tvine.auth). |
 | `onErase` | `'delete' \| 'anonymize' \| (userId: number) => Promise<void> \| void` | `'anonymize'` | What `privacy.erase(user)` does with these rows. `'anonymize'` blanks the `personalData` fields; each must then be `optional`, or of kind `text`, `email`, `slug`, `url`, `encrypted`. |
@@ -4346,7 +4345,7 @@ interface RelatedManager<T> {
 
 ## Swappable user model
 
-`settings.auth.userModel` (Django `AUTH_USER_MODEL`), default `'auth.User'` (table `auth_user`). A custom value `'accounts.User'` means table `accounts_user`, defined with `defineUserModel` / `extendUser` from `tvine/auth` in `apps/accounts/models.ts`. It must be chosen before the first `tvine migrate`; changing it later makes `migrate` fail with a checksum message. Details: [contrib/auth.md](contrib/auth.md).
+`settings.auth.userModel`, default `'auth.User'` (table `auth_user`). A custom value `'accounts.User'` means table `accounts_user`, defined with `defineUserModel` / `extendUser` from `tvine/auth` in `apps/accounts/models.ts`. It must be chosen before the first `tvine migrate`; changing it later makes `migrate` fail with a checksum message. Details: [contrib/auth.md](contrib/auth.md).
 
 ## Examples
 
@@ -4433,7 +4432,7 @@ const adasOrders = await Customer.related('orders', ada.id).all().filter({ statu
 
 - The fk key differs between definition and data: define `customer: field.fk(...)`, write and read `customerId`. Filters and `update()` accept both `customer` and `customerId`.
 - `create()` refuses unknown keys, including m2m field names. Set m2m links with `related(...).add()` after creating.
-- `Model.update()` sets `autoNow` fields; `Model.objects.filter(...).update()` does not (Django parity).
+- `Model.update()` sets `autoNow` fields; `Model.objects.filter(...).update()` does not.
 - `get()` returns `undefined`, it does not throw. `update()` throws when the row is missing. `delete()` is silent.
 - Rows are plain objects. There are no instance methods and no `save()`. (The user model gets methods such as `checkPassword` through an internal row prototype; app models cannot.)
 - `default` must be a constant (it is written into the table DDL). There is no callable default; use `auto` / `autoNow` / `autoNowAdd` for timestamps, and a `uuid` pk is generated automatically.
@@ -4511,18 +4510,18 @@ Every builder takes an optional `Opts` object. Options a kind does not use are i
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `optional` | `boolean` | `false` | Column is nullable; the value type becomes `V \| null`; may be left out on create (stored as NULL). Django `null=True, blank=True`. |
+| `optional` | `boolean` | `false` | Column is nullable; the value type becomes `V \| null`; may be left out on create (stored as NULL). |
 | `default` | constant | none | Value used when create leaves the field out. Also written as the column `DEFAULT` (must be a literal: string, number, boolean, null, or what the field converts to one). |
 | `unique` | `boolean` | `false` | `UNIQUE` on the (first) column. Violations → `DomainError('domain', '<model>.<field> must be unique')`. |
-| `index` | `boolean` | `false` | Creates index `<model>_<field>_idx` (in migrations). Django `db_index`. |
+| `index` | `boolean` | `false` | Creates index `<model>_<field>_idx` (in migrations). |
 | `searchable` | `boolean` | `false` | Field joins the model's default `.search(term)` fields. Not allowed on money. |
 | `hidden` | `boolean` | `false` (`true` for encrypted) | Left out of generic views' default serializer output. No DDL. |
 | `readOnly` | `boolean` | `false` | Generic views never accept it as create / update input. No DDL. |
 | `writeOnly` | `boolean` | `false` | Generic views accept it as input but never output it. No DDL. |
 | `humanOnly` | `boolean \| string` | `false` | An agent-marked request that changes this field (admin save, generic views) is refused with `human_only`. A string is the reason shown. No DDL. |
 | `auto` | `boolean` | `false` | datetime: set to now on create (same as `autoNowAdd`; legacy name). |
-| `autoNowAdd` | `boolean` | `false` | date / datetime: set to now on create. Django `auto_now_add`. |
-| `autoNow` | `boolean` | `false` | date / datetime: set to now on create and on every `Model.update()`. Django `auto_now`. |
+| `autoNowAdd` | `boolean` | `false` | date / datetime: set to now on create. |
+| `autoNow` | `boolean` | `false` | date / datetime: set to now on create and on every `Model.update()`. |
 | `maxLength` | `number` | per kind | email / url / slug / markdown / code / richText / tags (per tag). See each kind. Not enforced on `text`. |
 | `maxDigits` | `number` | `12` | decimal: total digits. |
 | `decimalPlaces` | `number` | `2` | decimal: digits after the point. |
@@ -4892,7 +4891,7 @@ Examples below use the shop models from [models.md](models.md#examples): `Custom
 | `exclude` | `exclude(where)` | Drop rows matching ONE condition. A plain object with more than one key throws; chain calls or pass `Q(...)`. Null-inclusive: rows where the field is NULL are kept. |
 | `order` | `order(...fields: (string \| OrderBy)[])` | Replace the order. `'name'` asc, `'-name'` desc, `'customer__name'` across a relation, an annotation name, or `F('x').desc({ nulls: 'last' })`. |
 | `search` | `search(term: string, fields?: string[])` | Case-insensitive substring match OR-ed over `fields` (default: the model's `searchable` fields; throws if none). |
-| `slice` | `slice(start: number, end?: number)` | `LIMIT` / `OFFSET` (Django `qs[start:end]`). Non-negative integers. A slice of a slice narrows it. |
+| `slice` | `slice(start: number, end?: number)` | `LIMIT` / `OFFSET`. Non-negative integers. A slice of a slice narrows it. |
 | `limit` | `limit(n)` | `slice(0, n)` |
 | `offset` | `offset(n)` | `slice(n)` |
 | `annotate` | `annotate({ name: Expression, ... })` | Add computed columns. Names must be identifiers without `__` and must not clash with field names. An aggregate makes the query grouped. |
@@ -4959,7 +4958,7 @@ A filter key is `path` or `path__lookup`. `path` is a field name (an fk may be w
 | `orders__isnull: true` | "has no related row" | customers with no orders |
 | `orders` (bare) | the related pk | `Customer.objects.filter({ orders__in: [1, 2] })` |
 
-Filters across relations compile to `IN (SELECT ...)` subqueries, so a row is never duplicated by a to-many relation. Inside ONE `filter()` call (or one `Q` AND node), several lookups through the same to-many relation must all hold for the SAME related row; separate `filter()` calls are independent (Django semantics).
+Filters across relations compile to `IN (SELECT ...)` subqueries, so a row is never duplicated by a to-many relation. Inside ONE `filter()` call (or one `Q` AND node), several lookups through the same to-many relation must all hold for the SAME related row; separate `filter()` calls are independent.
 
 ### Values compared to fields and expressions
 
@@ -4974,7 +4973,7 @@ q.or(...others): QNode
 q.not(): QNode
 ```
 
-TypeScript has no `&` `|` `~` overloading: use `.and`, `.or`, `.not`. `exclude(Q(...))` negates the whole Q (Django semantics). Negation is null-inclusive.
+TypeScript has no `&` `|` `~` overloading: use `.and`, `.or`, `.not`. `exclude(Q(...))` negates the whole Q. Negation is null-inclusive.
 
 ## Expressions (`data/expressions.ts`)
 
@@ -5008,11 +5007,11 @@ Count(x = '*', { distinct?, filter? })
 | Option | Meaning |
 |---|---|
 | `distinct` | Aggregate distinct values only. |
-| `filter` | Lookups or `Q`: only matching rows count (Django `filter=`). |
+| `filter` | Lookups or `Q`: only matching rows count. |
 
 Results: `Count` is `0` on no rows; `Sum` / `Avg` / `Min` / `Max` are `null`. `Avg` is a float (on money: rounded to whole cents). `Sum` / `Avg` need a numeric field. On money they return `{ value, currency }`; if the rows mix currencies, reading the result throws `invalid_param` ("mixes currencies"): filter on `<field>__currency` or group by it. Aggregates cannot be nested. `aggregate()` is not supported over `values()`, `distinct()` or aggregate annotations.
 
-Grouping (Django `values().annotate()`): `values(...)` names become `GROUP BY` columns when an annotation is an aggregate. Without `values()`, an aggregate annotation groups per row of the model.
+Grouping (`values(...)` then `annotate(...)`): `values(...)` names become `GROUP BY` columns when an annotation is an aggregate. Without `values()`, an aggregate annotation groups per row of the model.
 
 ## Pagination
 
@@ -5181,7 +5180,7 @@ Not covered by the code: a raw SQL query API (`raw()`, `extra()`, a cursor), `it
 
 # Migrations and fixtures
 
-Migrations work like Django's. Each app has code files `apps/<app>/migrations/NNNN_name.ts`, each exporting `migration({ dependencies, operations })`. There is no state file: the schema state is rebuilt by replaying every migration in dependency order, and `makemigrations` diffs that state against the current `models.ts`. `migrate` renders each operation for the connected database at apply time and records it in the table `__tvine_migrations (app, name, checksum, applied_at)`. Fixtures (`dumpdata` / `loaddata`) move rows in and out as JSON. Source: `warp/src/data/migrations.ts`, `migrate.ts`, `schema/*.ts`, `fixtures.ts`, `cli.ts`.
+Each app has code files `apps/<app>/migrations/NNNN_name.ts`, each exporting `migration({ dependencies, operations })`. There is no state file: the schema state is rebuilt by replaying every migration in dependency order, and `makemigrations` diffs that state against the current `models.ts`. `migrate` renders each operation for the connected database at apply time and records it in the table `__tvine_migrations (app, name, checksum, applied_at)`. Fixtures (`dumpdata` / `loaddata`) move rows in and out as JSON. Source: `warp/src/data/migrations.ts`, `migrate.ts`, `schema/*.ts`, `fixtures.ts`, `cli.ts`.
 
 ## Import
 
@@ -5324,7 +5323,7 @@ There is no `RunPython` operation. Options the code offers:
 
 ## Fixtures
 
-Format (Django's): a JSON array of rows.
+Format: a JSON array of rows.
 
 ```json
 [
@@ -5494,7 +5493,7 @@ db: {
 | `pool.max` | `number` | `10` | Postgres / MySQL pool size. |
 | `pool.acquireMs` | `number` | `5000` | Max wait for a free connection; then `DomainError('internal', 'db busy — retry')`. |
 | `pool.idleMs` | `number` | `30000` | Idle connections close after this. |
-| `atomicRequests` | `boolean` | `true` | Django `ATOMIC_REQUESTS`: every action that is not `readOnly` (and not `rules.atomic: false`) runs in one lazy transaction. |
+| `atomicRequests` | `boolean` | `true` | Every action that is not `readOnly` (and not `rules.atomic: false`) runs in one lazy transaction. |
 | `slowQueryMs` | `number` | `500` | A statement slower than this logs a `warn` on logger `tvine.db` with its SQL (never its params). `0` turns it off. |
 
 Related settings: `settings.data.defaultPageSize` / `maxPageSize` (page sizes for generic views; the QuerySet's own `page()` uses 25 / 100), `settings.encryption` (keys for encrypted fields), `settings.auth.userModel`. See [settings.md](settings.md).
@@ -5728,7 +5727,7 @@ The fourth argument. Every key:
 | `confirm` | `true \| { message?, by? } \| (params, ctx) => rule \| undefined` | unset | Two-step call. First call runs nothing and returns `confirm_required` with a signed, single-use token (bound to sid + action + params, valid 120 s). Same call again with `params.$confirm = token` runs it. `message`: a string or `(params, ctx) => string` (default `Confirm <id>?`). `by: 'human'`: an agent never gets a token and cannot confirm. A function decides per call. |
 | `bind` | `string[]` | `[]` | Params that may only come from the server-signed `bind` token of an action ref (never from the caller). With `bind` set, a call without a bind → `stale_bind`; sending one of these keys as a param → `invalid_param`. Each key must be a param of the schema (boot error otherwise). Not advertised as params or MCP inputs. |
 | `atomic` | `boolean` | `true` | `false` opts out of the per-action DB transaction (`settings.db.atomicRequests`). |
-| `cache` | `{ timeout: number; varyOn?: string[]; cache?: string; tags?: string[] }` | unset | Django `cache_page` for the result. Needs `readOnly` (boot error otherwise), `timeout` in seconds > 0, not with `secretResult`. `varyOn` default `['user']`; add `'session'`, `'query'` or a header name. `cache`: the `settings.caches` alias. `tags`: dropped by `cache.invalidateTags([...])`. Errors are never cached. |
+| `cache` | `{ timeout: number; varyOn?: string[]; cache?: string; tags?: string[] }` | unset | Caches the result. Needs `readOnly` (boot error otherwise), `timeout` in seconds > 0, not with `secretResult`. `varyOn` default `['user']`; add `'session'`, `'query'` or a header name. `cache`: the `settings.caches` alias. `tags`: dropped by `cache.invalidateTags([...])`. Errors are never cached. |
 | `secretResult` | `boolean` | `false` | The result is a one-time secret (a new API token): blanked as `[redacted]` in hook payloads. Not allowed with `cache`. |
 | `audit` | `boolean` | `true` | `false`: never write a `tvine.audit` row for this action (when `settings.audit.enabled`). |
 | `search` | `string` | unset | Names the param that is a visitor's search term (admin "Top searches"). Generated `list` actions set `'q'` when the view has search fields. |
@@ -5898,7 +5897,7 @@ export const place = defineAction('place', z.object({}), async (_p, ctx) => {
 
 # Class views, ViewSets, `@action` and routers
 
-Class views are Django REST Framework's generic views in TypeScript. You export a class from
+Class views are generic CRUD views. You export a class from
 `apps/<app>/views.ts`; at boot Warp creates it once, checks its config against the model, and turns it into
 ordinary actions: `list`, `get`, `create`, `update`, `delete` (whichever the base class generates) plus one action
 per `@action` method. Those actions are registered exactly like `defineAction` ones (same ids, rules, MCP tools,
@@ -5965,8 +5964,8 @@ List result:
 | `permissions` | `Permission[]` | `[]` | Checked per call by `checkPermissions` (before params are validated). Ones that deny agents (`denyAgents`) are also copied into the action rules (MCP hiding), unless you override `getPermissions`. |
 | `pageSize` | `number` | `25` | Page size (capped by `maxPageSize`). |
 | `maxPageSize` | `number` | `100` | Upper cap. |
-| `pagination` | `'cursor' \| 'page'` | `'cursor'` | `'cursor'`: keyset, stable under inserts. `'page'`: Django `Paginator`, `?page=N`. |
-| `filters` | `string[]` | the model's enum fields and indexed fields (never hidden / writeOnly) | Django lookups allowed as params: `'status'`, `'price__lte'`, `'tags__in'`, `'name__contains'`. Suffixes: exact, `__lt`, `__lte`, `__gt`, `__gte`, `__in` (comma list or array), `__contains` (text/email/url/slug only, max 200 chars), `__ne`. Unknown field or suffix → boot error. |
+| `pagination` | `'cursor' \| 'page'` | `'cursor'` | `'cursor'`: keyset, stable under inserts. `'page'`: page numbers, `?page=N`. |
+| `filters` | `string[]` | the model's enum fields and indexed fields (never hidden / writeOnly) | Field lookups allowed as params: `'status'`, `'price__lte'`, `'tags__in'`, `'name__contains'`. Suffixes: exact, `__lt`, `__lte`, `__gt`, `__gte`, `__in` (comma list or array), `__contains` (text/email/url/slug only, max 200 chars), `__ne`. Unknown field or suffix → boot error. |
 | `searchFields` | `string[]` | the model's `searchable` fields | Fields `?q=` searches (max 200 chars). A money field cannot be searched. |
 | `ordering` | `string[]` | `[]` | Allowed `sort` values; each also allowed as `-field` (descending). |
 | `shapers` | `Shapers` | from `apps/<app>/serializers.ts` | Set by discovery; output shapers by model name. See [serializers.md](./serializers.md). |
@@ -6305,7 +6304,7 @@ export class OrderViewSet extends ModelViewSet<Order> {
 
 # URLs (`urls.ts`, `path`, `include`, `reverse`)
 
-`urls.ts` is Django's URLconf for REST-style paths. It is optional: without it every action still answers at
+`urls.ts` is the URL table for REST-style paths. It is optional: without it every action still answers at
 `POST /tvine/api/<app>.<name>`. Each route maps a URL pattern (and HTTP methods) to an action that discovery
 already registered; a matched request runs that action exactly as `POST /tvine/api/<id>` does (same caller
 check, permissions, rate limits, idempotency, `humanOnly`, origin / CORS, same JSON result). Pages are not routed
@@ -6317,7 +6316,7 @@ here: pages are your Next.js `app/` folder, and Warp reads that route table itse
 
 | File | Role |
 |---|---|
-| `config/urls.ts`, else `urls.ts` (project root = the folder above `apps/`) | The root URLconf (Django `ROOT_URLCONF`). Exports `urlpatterns`. |
+| `config/urls.ts`, else `urls.ts` (project root = the folder above `apps/`) | The root URL table. Exports `urlpatterns`. |
 | `settings.rootUrlconf` | Another root, a path from the project root without extension (`'config/api_urls'`). Must exist, else boot error. |
 | `apps/<app>/urls.ts` | An app's patterns, pulled in with `include('<app>.urls')`. Exports `urlpatterns` and optionally `appName` (the default namespace). |
 | `include('tvine.auth.urls')` | A built-in app's patterns (`tvine.<label>.urls`), when that app is installed. |
@@ -6332,12 +6331,12 @@ function path(route: string, view: ActionDef | ViewClass | Include, opts?: { nam
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `route` | `string` | — | Django syntax: `'products/<int:id>/'`. No leading `/` (boot error). Matched against the decoded request path. |
+| `route` | `string` | — | Path syntax with converters: `'products/<int:id>/'`. No leading `/` (boot error). Matched against the decoded request path. |
 | `view` | action def, `View.action('name')`, a View class, or `include(...)` | — | What runs. |
 | `opts.name` | `string` | unset | URL name for `reverse`; prefixed by the namespaces (`'catalog:product-detail'`). |
 | `opts.methods` | `string[]` | `['GET']` for a `readOnly` action, else `['POST']` | Methods for an action view. Ignored for a View class (it maps its own). |
 
-A View class as `view` (Django `as_view()`): on a route **with** the view's `lookupParam` → `GET` get,
+A View class as `view`: on a route **with** the view's `lookupParam` → `GET` get,
 `PUT`/`PATCH` update, `DELETE` delete; on a route **without** it → `GET` list, `POST` create (whichever the class
 generates). A route that maps no method fails at boot.
 
@@ -6493,7 +6492,7 @@ export const urlpatterns = new SimpleRouter().register('orders', OrderViewSet).u
 
 # Middleware
 
-Tvine has two kinds of middleware. **HTTP middleware** is Django's `MIDDLEWARE`: it wraps every HTTP request
+Tvine has two kinds of middleware. **HTTP middleware** wraps every HTTP request
 the server answers (pages, `/tvine/api`, `/mcp`, media, `urls.ts` routes), sees the raw Node request on the way
 in and the response headers on the way out. You list it in `settings.middleware`; only listed entries run.
 **Action middleware** wraps every action call (any transport, including in-process `api.*` and MCP) after
@@ -6812,7 +6811,7 @@ interface Request {
 | `claims` | `Record<string, unknown>?` | Whatever a BYO resolver returns. |
 | `isActive`, `isStaff`, `isSuperuser` | `boolean?` | Filled by `tvine.auth`. |
 | `scopes` | `string[]?` | Token-authenticated: `'*'`, `'read'`, `'app.*'`, `'app.x'`. Dispatch refuses actions outside them. |
-| `hasPerm(perm, obj?)` | `Promise<boolean>?` | Django `user.has_perm`. |
+| `hasPerm(perm, obj?)` | `Promise<boolean>?` | Is one permission (`'app.codename'`) granted, optionally for `obj`. |
 
 Resolution order: `settings.auth.user(request)` (BYO, wins) → a bearer token (`tvine.auth`) → the session's user.
 Details: [contrib/auth.md](./contrib/auth.md).
@@ -6905,7 +6904,7 @@ function defineUpload(name: string, opts: {
 | `types` | `string[]` | required | Allowed MIME types, checked by sniffing the first bytes (not the client's type). Known: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`. Else `unsupported_type`. |
 | `storage` | `Storage` | `DiskStorage(settings.media.dir, settings.media.route)` | Where files go. |
 | `permissions` | `Permission[]` | `[]` | Action permissions. |
-| `uploadTo` | `string` | — | Key folder (Django `upload_to`): `'avatars'` → `avatars/<id>.png`. Folder names joined by `/`. |
+| `uploadTo` | `string` | — | Key folder: `'avatars'` → `avatars/<id>.png`. Folder names joined by `/`. |
 | `public` | `boolean` | `false` | Served with `Cache-Control: public`. |
 | `private` | `boolean` | `false` | Only via a signed, expiring URL (`media.url`). Not with `public`. |
 | `rate` | rate | 5 per minute | The 5/min default yields to `apps/<app>/rules.ts`; an explicit `rate` beats both. |
@@ -7028,7 +7027,7 @@ interface FieldError { field: string; code?: string; message: string }
 | `code` | Your machine-readable reason (`'out_of_stock'`, `'not_found'`, `'forbidden'`). |
 | `message` | Shown to the user / agent. Write it as the business rule. |
 | `field` | The param at fault (forms highlight it). |
-| `errors` | Several bad fields at once (Django `ValidationError({field: [...]})`). |
+| `errors` | Several bad fields at once. |
 
 How a thrown `DomainError` becomes an `err`:
 
@@ -7216,9 +7215,9 @@ async checkObjectPermissions(ctx, order) {
 
 # Settings
 
-Settings are Django's `settings.py`: one object built with `defineSettings({...})`, validated by a zod schema at
+Settings are one object built with `defineSettings({...})`, validated by a zod schema at
 boot, with a default for every key you leave out. Objects merge deeply over the defaults; arrays, functions and
-plain values replace. Which file is loaded is chosen by `TVINE_SETTINGS` (Django `DJANGO_SETTINGS_MODULE`) or
+plain values replace. Which file is loaded is chosen by `TVINE_SETTINGS` or
 the `config/settings/{base,dev,prod,local}.ts` layout. A handful of environment variables feed keys directly.
 Actions read the result as `ctx.settings`.
 
@@ -7296,7 +7295,7 @@ a default throws naming the variable.
 | `rootUrlconf` | `string?` | `config/urls`, else `urls` | Root `urls.ts`; must exist when set. |
 | `tasksModule` | `string?` | `config/tasks` | Queues / `beatSchedule` for `tvine worker`. |
 | `secret` | `string \| string[]` | see `TVINE_SECRET` | HMAC key (binds, forwards, confirm tokens, signing); array = rotation. |
-| `debug` | `boolean` | see `TVINE_DEBUG` | Django `DEBUG`: dev CSP, inspector feed, `ServerTiming`, dev hosts, helpful 400s. |
+| `debug` | `boolean` | see `TVINE_DEBUG` | Debug mode: dev CSP, inspector feed, `ServerTiming`, dev hosts, helpful 400s. |
 | `frontend.boundary` | `'error' \| 'warn'` | `'error'` | A page importing a model fails `tvine check`, or warns. |
 | `encryption.keys` | `string[]` | `[]` (derived from `secret`) | AES-256-GCM keys for encrypted fields, newest first, each ≥ 32 chars, unique. |
 
@@ -7515,7 +7514,7 @@ export const shopInfo = defineAction('shopInfo', z.object({}),
 
 ## What it is
 
-`tvine.auth` is the built-in users app, modelled on Django's `django.contrib.auth`. It gives you a `User` model,
+`tvine.auth` is the built-in users app. It gives you a `User` model,
 password hashing and validation, sign-in through session cookies or Bearer API tokens, groups and permissions,
 two-factor sign-in (TOTP plus recovery codes), a list of signed-in sessions, mail alerts about account security, and
 a data export and erase flow for privacy requests. Every flow is an ordinary action (`auth.login`, `auth.me`…), so
@@ -7885,11 +7884,11 @@ for that user only.
 | Export | Meaning |
 |---|---|
 | `scryptHasher({ N?, r?, p? })` | default; `N = 2^15`, `r = 8`, `p = 1`; format `scrypt$N$r$p$salt$hash` |
-| `pbkdf2Hasher({ iterations? })` | Django's `pbkdf2_sha256$…` format (Django hashes verify as-is); default 600 000, minimum 100 000 |
+| `pbkdf2Hasher({ iterations? })` | `pbkdf2_sha256$…` format (existing hashes in that format verify as-is); default 600 000, minimum 100 000 |
 | `makePassword(raw, settings)` / `checkPassword(raw, encoded, settings)` | `checkPassword` returns `{ ok, upgrade }` |
 | `minLength(n = 8)` | too short |
 | `numericPassword()` | only digits |
-| `commonPassword(list?)` | Django's 20 000 common passwords, or your list |
+| `commonPassword(list?)` | the built-in 20 000 common passwords, or your list |
 | `userAttributeSimilarity(attrs = ['username', 'email'], max = 0.7)` | too close to a user attribute |
 | `DEFAULT_VALIDATORS` | `[userAttributeSimilarity(), minLength(8), commonPassword(), numericPassword()]` |
 | `validatePassword(raw, settings, user?)` | the list of problems (empty = ok) |
@@ -7993,7 +7992,7 @@ curl -s -X POST http://localhost:3000/tvine/api/orders.list -H 'authorization: B
 
 ## What it is
 
-`tvine.admin` is the built-in staff panel, modelled on Django's `django.contrib.admin`. You register models with a
+`tvine.admin` is the built-in staff panel. You register models with a
 `ModelAdmin` class in `apps/<app>/admin.ts`; Warp serves the panel at `settings.admin.path` (default `/admin`) with
 changelists (filters, search, sorting, bulk actions, inline edits, charts), change forms with inlines, a dashboard,
 an audit history per object, and a System section (health, traffic, agents, queries, jobs, logs, security). Every
@@ -8667,9 +8666,9 @@ console.log(await jobResult(jobId).get({ timeoutMs: 120_000 }))
 
 ## What it is
 
-Tvine's cache is Django's `django.core.cache` in TypeScript: named caches configured in `settings.caches`, each on a
+Tvine's cache: named caches configured in `settings.caches`, each on a
 backend (`memory`, `redis`, `file`, `dummy`), with `get / set / add / getOrSet / incr / delete…`, versions, tag
-invalidation, and a per-action result cache (`rules.cache`, Django's `cache_page`). Values are JSON: Dates and
+invalidation, and a per-action result cache (`rules.cache`). Values are JSON: Dates and
 bigints round-trip, class instances come back as plain objects. Source: `packages/tvine/warp/src/cache/index.ts`.
 
 ## Install / enable
@@ -8825,7 +8824,7 @@ await cache.invalidateTags([`product:${id}`])   // every entry written through c
 
 ## What it is
 
-Tvine's mail module is Django's `django.core.mail`: `sendMail`, `sendMassMail`, `mailAdmins`, the `EmailMessage`
+Tvine's mail module: `sendMail`, `sendMassMail`, `mailAdmins`, the `EmailMessage`
 / `EmailMultiAlternatives` classes, and backends picked by `settings.email.backend` (console, SMTP, file, memory,
 dummy). It has its own small SMTP client (STARTTLS or implicit TLS, AUTH PLAIN / LOGIN). Messages are built
 7-bit clean; any CR or LF in a header or address is refused (`BadHeaderError`). There is no template engine: you
@@ -9353,7 +9352,7 @@ export const recordView = defineAction('recordView', z.object({ id: z.number().i
 
 ## What it is
 
-The security toolbox that ships in the `tvine` package: signed tokens (`signing`, Django's `django.core.signing`),
+The security toolbox that ships in the `tvine` package: signed tokens (`signing`),
 encrypted model fields with key rotation, `safeFetch` (outbound HTTP that cannot reach private networks), the
 response headers and CSP, rate limits, and the agent controls `humanOnly`, `confirm` and `denyAgents`. Bot
 protection is a separate app, Shield: see [../../../shield.md](../../../shield.md). Source:
@@ -10802,7 +10801,7 @@ Weft has four ways to build a form, all agent-operable:
 | Plain HTML `<form>` + `api.*` in `onSubmit` | the Weft JSX runtime | the simplest case; inputs, selects and the form register by themselves |
 | Built-in widgets (`Input`, `Select`, `Quantity`, …) inside a `<form>` | `tvine/widgets` | you want labels, errors, typed agent controls |
 | Server `Form` / `Input` / `Button` primitives bound to an action definition | `tvine/weft` (server components) | a server-rendered form that submits through a Next server action into the same dispatcher agents use |
-| `ModelForm` / `Field` driven by field meta | `tvine/forms` | Django ModelForm / admin style forms with 40+ field kinds, client validation, inline formsets |
+| `ModelForm` / `Field` driven by field meta | `tvine/forms` | Model forms (as in the admin's change form) with 40+ field kinds, client validation, inline formsets |
 
 This page covers all four, plus validation, file uploads, `HumanOnly` and confirm prompts.
 
@@ -11002,7 +11001,7 @@ function ModelForm(props: ModelFormProps): JSX.Element
 - Agent widget `form:<name>`: state `{ dirty, pending?, errors?, banner? }`, controls `submit()` and `reset()`.
 - Fields: `form:<name> > field:<field>`; inline rows: `form:<name> > inline:<i> > row:<pk|newN> > field:<f>`.
 - Inline widget `inline:<name>` (kind `list`): `add()` and `remove(row)`; state `{ rows, deleted, max, min }`.
-- `slugAuto` fields follow their `from` field until someone edits them (Django `prepopulated_fields`).
+- `slugAuto` fields follow their `from` field until someone edits them.
 - Fieldset `classes: ['collapse']` renders a `<details>` that opens itself when it holds an error.
 
 ```tsx
@@ -11155,11 +11154,11 @@ Widgets edit **form shape**; the API takes **API shape**. `fromApi(meta, v)` con
 Client side (`tvine/forms`):
 
 ```ts
-validateField(meta: FieldMeta, value: any): string | undefined        // one field, Django-style messages
+validateField(meta: FieldMeta, value: any): string | undefined        // one field, the standard messages
 validate(fields: Record<string, FieldMeta>, values: Record<string, any>): Record<string, string>
 ```
 
-Messages match Django: `This field is required.`, `Enter a valid email address.`, `Ensure this value is
+Messages: `This field is required.`, `Enter a valid email address.`, `Ensure this value is
 less than or equal to 10.`, `Select a valid choice. x is not one of the available choices.`, and so on.
 `ModelForm` validates on submit and then live after the first submit attempt.
 

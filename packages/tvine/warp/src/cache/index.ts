@@ -1,10 +1,10 @@
-// Cache framework (Django django.core.cache; docs/design/conventions/cache.md). settings.caches.<alias> picks a
+// Cache framework (docs/design/conventions/cache.md). settings.caches.<alias> picks a
 // backend per named cache: memory (per-process LRU), redis (settings.redis.<alias>, shared), file (a directory),
 // dummy (no-op). `cache` is caches.default; `caches.<alias>` (or caches.get(alias)) any other one.
 //
-// Keys are `<keyPrefix>:<version>:<key>` (Django make_key). Values are JSON (Dates and bigints round trip;
+// Keys are `<keyPrefix>:<version>:<key>`. Values are JSON (Dates and bigints round trip;
 // class instances come back as plain objects). Timeouts are seconds: undefined = the cache's default,
-// null = forever, 0 = do not store (Django).
+// null = forever, 0 = do not store.
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -40,7 +40,7 @@ export interface Store {
   get(k: string): Promise<string | undefined>
   set(k: string, v: string, ttlMs: number | null, nx?: boolean): Promise<boolean>
   delete(k: string): Promise<boolean>
-  incr(k: string, by: number): Promise<number>          // throws when k is missing (Django ValueError)
+  incr(k: string, by: number): Promise<number>          // throws when k is missing
   touch(k: string, ttlMs: number | null): Promise<boolean>
   clear(prefix: string): Promise<void>
   close?(): void
@@ -82,7 +82,7 @@ export class MemoryStore implements Store {
 }
 
 // One file per key: sha256(key).cache = {"k","exp","v"}. Written to a temp file then renamed (a reader never sees
-// half a file). ponytail: incr is read-modify-write, not atomic across processes (Django's file cache neither).
+// half a file). ponytail: incr is read-modify-write, not atomic across processes.
 export class FileStore implements Store {
   constructor(private dir: string, private max: number) {}
   private path(k: string) { return join(this.dir, `${createHash('sha256').update(k).digest('hex')}.cache`) }
@@ -104,7 +104,7 @@ export class FileStore implements Store {
   async set(k: string, v: string, ttlMs: number | null, nx?: boolean) {
     if (nx && this.read(k)) return false
     this.write(k, v, ttlMs === null ? null : Date.now() + ttlMs)
-    // Django cull: past maxEntries drop the oldest third (by mtime)
+    // cull: past maxEntries drop the oldest third (by mtime)
     const fs = this.files()
     if (fs.length > this.max) {
       const old = fs.map((f) => ({ f, t: statSync(join(this.dir, f), { throwIfNoEntry: false })?.mtimeMs ?? 0 })).sort((a, b) => a.t - b.t)
@@ -142,7 +142,7 @@ export class DummyStore implements Store {
   async clear() {}
 }
 
-// INCRBY only when the key exists (keeps its TTL): Django raises ValueError on a missing key
+// INCRBY only when the key exists (keeps its TTL): a missing key throws
 const INCR = "if redis.call('EXISTS', KEYS[1]) == 0 then return redis.error_reply('missing') end return redis.call('INCRBY', KEYS[1], ARGV[1])"
 const glob = (s: string) => s.replace(/[*?[\]\\]/g, '\\$&')
 
@@ -179,7 +179,7 @@ export class RedisStore implements Store {
   }
 }
 
-// ---- the cache API (Django BaseCache) ------------------------------------------------------------
+// ---- the cache API ------------------------------------------------------------------------
 const TAGGED = '\u0000t'   // a tagged entry: TAGGED + {"t":{tag:version},"v":value}
 
 export class Cache {
@@ -192,7 +192,7 @@ export class Cache {
   }
   private tagKey(tag: string) { return this.makeKey(`tag:${tag}`, 0) }
 
-  // Django keyFor-style helper: stable key from parts (objects hashed)
+  // keyFor helper: stable key from parts (objects hashed)
   static keyFor(...parts: unknown[]): string {
     return parts.map((p) => (typeof p === 'string' || typeof p === 'number' || typeof p === 'boolean' ? String(p) : createHash('sha256').update(encode(sorted(p))).digest('hex').slice(0, 32))).join(':')
   }
@@ -249,7 +249,7 @@ export class Cache {
   }
   async delete(key: string, version?: number): Promise<boolean> { return this.store.delete(this.makeKey(key, version)) }
   async touch(key: string, timeout?: Timeout, version?: number): Promise<boolean> { return this.store.touch(this.makeKey(key, version), this.ttl(timeout)) }
-  // atomic on redis (INCRBY) and memory; a missing key throws (Django ValueError)
+  // atomic on redis (INCRBY) and memory; a missing key throws
   async incr(key: string, delta = 1, version?: number): Promise<number> { return this.store.incr(this.makeKey(key, version), delta) }
   async decr(key: string, delta = 1, version?: number): Promise<number> { return this.incr(key, -delta, version) }
   async getMany<T = unknown>(keys: string[], version?: number): Promise<Record<string, T>> {
@@ -259,7 +259,7 @@ export class Cache {
   }
   async setMany(data: Record<string, unknown>, timeout?: Timeout, version?: number): Promise<string[]> {
     for (const [k, v] of Object.entries(data)) await this.set(k, v, timeout, version)
-    return []   // Django: the keys that failed to insert
+    return []   // the keys that failed to insert
   }
   async deleteMany(keys: string[], version?: number): Promise<void> { for (const k of keys) await this.delete(k, version) }
   async incrVersion(key: string, delta = 1, version = this.conf.version): Promise<number> {
@@ -313,14 +313,14 @@ function get(alias = 'default'): Cache {
   }
   return c
 }
-// caches.default / caches.get('sessions') (Django caches['default'])
+// caches.default / caches.get('sessions')
 export const caches = new Proxy({ get } as Caches, { get: (t, p) => (p === 'get' ? get : typeof p === 'string' ? get(p) : (t as never)[p]) }) as { get(alias?: string): Cache } & Record<string, Cache>
 // cache = caches.default, resolved per call (settings may be configured after import)
 export const cache: Cache = new Proxy({} as Cache, {
   get: (_t, p) => { const c = get(); const v = (c as unknown as Record<PropertyKey, unknown>)[p]; return typeof v === 'function' ? (v as Function).bind(c) : v },
 })
 
-// ---- per-view caching (rules.cache, Django cache_page) -----------------------------------------
+// ---- per-view caching (rules.cache) -----------------------------------------------------------
 export const VARY_BUILTIN = ['user', 'session', 'query'] as const
 export function checkViewCache(id: string, rules: ActionDef['rules']): void {
   const c = rules?.cache

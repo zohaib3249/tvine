@@ -1,8 +1,8 @@
 # Settings
 
-Settings are Django's `settings.py`: one object built with `defineSettings({...})`, validated by a zod schema at
+Settings are one object built with `defineSettings({...})`, validated by a zod schema at
 boot, with a default for every key you leave out. Objects merge deeply over the defaults; arrays, functions and
-plain values replace. Which file is loaded is chosen by `TVINE_SETTINGS` (Django `DJANGO_SETTINGS_MODULE`) or
+plain values replace. Which file is loaded is chosen by `TVINE_SETTINGS` or
 the `config/settings/{base,dev,prod,local}.ts` layout. A handful of environment variables feed keys directly.
 Actions read the result as `ctx.settings`.
 
@@ -80,7 +80,7 @@ a default throws naming the variable.
 | `rootUrlconf` | `string?` | `config/urls`, else `urls` | Root `urls.ts`; must exist when set. |
 | `tasksModule` | `string?` | `config/tasks` | Queues / `beatSchedule` for `tvine worker`. |
 | `secret` | `string \| string[]` | see `TVINE_SECRET` | HMAC key (binds, forwards, confirm tokens, signing); array = rotation. |
-| `debug` | `boolean` | see `TVINE_DEBUG` | Django `DEBUG`: dev CSP, inspector feed, `ServerTiming`, dev hosts, helpful 400s. |
+| `debug` | `boolean` | see `TVINE_DEBUG` | Debug mode: dev CSP, inspector feed, `ServerTiming`, dev hosts, helpful 400s. |
 | `frontend.boundary` | `'error' \| 'warn'` | `'error'` | A page importing a model fails `tvine check`, or warns. |
 | `encryption.keys` | `string[]` | `[]` (derived from `secret`) | AES-256-GCM keys for encrypted fields, newest first, each ≥ 32 chars, unique. |
 

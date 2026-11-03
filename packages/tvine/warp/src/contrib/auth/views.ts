@@ -76,7 +76,7 @@ const notInTab = (message: string): Permission => (ctx) => {
   return true
 }
 
-// Django LoginView: authenticate() over settings.auth.backends, then the second factor, then login()
+// login view: authenticate() over settings.auth.backends, then the second factor, then login()
 export const loginAction = defineAction('login', z.object({
   username: z.string().min(1).max(254).optional(),
   email: z.string().min(1).max(254).optional(),
@@ -129,7 +129,7 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
   // cannot use up a victim's resets (secreview L5), and 10/hour per account from everyone (no mail-bombing)
   if (!(await resetRate(ctx.settings).check({ sid: `reset:${want}:${ctx.request.ip}` })).ok) return null
   if (!(await accountRate(ctx.settings).check({ sid: `reset:${want}` })).ok) return null
-  // case-insensitive (Django get_users: email__iexact): contains narrows in SQL, the exact match is here
+  // case-insensitive (email__iexact): contains narrows in SQL, the exact match is here
   const ef = userMeta().emailField, uf = userMeta().usernameField
   if (!ef) return null   // a user model without an email field: no reset by email
   const rows = (await User.objects.filter([{ field: ef, op: 'contains', value: want }, { field: 'isActive', op: 'eq', value: true }]).all(100))
@@ -276,7 +276,7 @@ export const revokeToken = defineAction('revokeToken', z.object({ key: z.string(
   return null
 }, { permissions: [isAuthenticated] })
 
-// Django PasswordResetForm's default mail: the link from settings.auth.resetUrl ('{uid}', '{token}'), else uid + token
+// the password reset's default mail: the link from settings.auth.resetUrl ('{uid}', '{token}'), else uid + token
 function sendResetMail(e: { email: string; uid: string; token: string; user: { username: string } }, resetUrl?: string) {
   const link = resetUrl?.replaceAll('{uid}', encodeURIComponent(e.uid)).replaceAll('{token}', encodeURIComponent(e.token))
   const how = link ? `Open this link to choose a new password:\n\n${link}` : `Reset code: uid ${e.uid}, token ${e.token}`

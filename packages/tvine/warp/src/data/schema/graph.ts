@@ -1,4 +1,4 @@
-// MigrationGraph (Django's): every apps/<app>/migrations/NNNN_name.ts, linked by `dependencies`
+// MigrationGraph: every apps/<app>/migrations/NNNN_name.ts, linked by `dependencies`
 // into a DAG across apps. order() = deterministic topological plan; >1 leaf in one app = conflict.
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -45,7 +45,7 @@ export class MigrationGraph {
     return g
   }
 
-  // Django swappable AUTH_USER_MODEL: tvine.auth's shipped migrations point their user fks at the configured model,
+  // swappable user model: tvine.auth's shipped migrations point their user fks at the configured model,
   // never create auth_user, and run after the user app's first migration. The rewritten ops change the checksums,
   // so switching the model after auth was migrated is caught (migrate / tvine check) instead of silently drifting.
   swapUser(): void {

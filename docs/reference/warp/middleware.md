@@ -1,6 +1,6 @@
 # Middleware
 
-Tvine has two kinds of middleware. **HTTP middleware** is Django's `MIDDLEWARE`: it wraps every HTTP request
+Tvine has two kinds of middleware. **HTTP middleware** wraps every HTTP request
 the server answers (pages, `/tvine/api`, `/mcp`, media, `urls.ts` routes), sees the raw Node request on the way
 in and the response headers on the way out. You list it in `settings.middleware`; only listed entries run.
 **Action middleware** wraps every action call (any transport, including in-process `api.*` and MCP) after

@@ -168,7 +168,7 @@ function lazyAtomic<R>(fn: () => Promise<R>, signal?: AbortSignal): Promise<R> {
   return settle().finally(() => signal?.removeEventListener('abort', onAbort))
 }
 
-// true inside an open atomic() block (selectForUpdate requires one, like Django)
+// true inside an open atomic() block (selectForUpdate requires one)
 // fn runs outside any atomic() block (its writes commit on their own, even if the caller's block rolls back)
 export const outsideAtomic = <R>(fn: () => R): R => bound.exit(() => exitPending(fn))
 export function inAtomic(): boolean { const tx = bound.getStore(); return !!tx && !tx.closed }
@@ -183,7 +183,7 @@ export function onCommit(fn: () => unknown): void | Promise<void> {
   return Promise.resolve(fn()).then(() => undefined)
 }
 
-// Django transaction.on_commit for side work: fn runs after the commit (never on rollback), outside the
+// onCommit for side work: fn runs after the commit (never on rollback), outside the
 // transaction, without holding up the response. Its errors go to the tvine.defer logger.
 export function defer(fn: () => unknown): void {
   void onCommit(() => {
@@ -322,7 +322,7 @@ const MAX_ROWS = 1_000         // the IN cap (queryset.ts MAX_IN)
 export const batchOf = (cols: number, want?: number) => Math.max(1, Math.min(want ?? MAX_ROWS, MAX_ROWS, Math.floor(MAX_PARAMS / Math.max(cols, 1))))
 
 // prepared rows (every key present) → multi-row INSERTs; pg / sqlite return the rows (RETURNING *),
-// mysql the given rows (it cannot report the auto ids of a multi-row insert — Django parity)
+// mysql the given rows (it cannot report the auto ids of a multi-row insert)
 export function insertMany(def: ModelDef, rows: Record<string, unknown>[], batchSize?: number): Promise<Record<string, unknown>[]> {
   if (!rows.length) return Promise.resolve([])
   const t = Table.of(def)
