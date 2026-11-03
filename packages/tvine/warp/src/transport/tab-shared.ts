@@ -55,6 +55,23 @@ if redis.call('HGET', KEYS[1], 'stream') ~= ARGV[1] then return 0 end
 redis.call('HSET', KEYS[1], 'hub', '')
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return 1`)
+// an agent's state() in one round trip: its tab (if that tab is still its own; a stale h: is dropped), else its open
+// request (ARGV[3] = this server's now, as before), else its note
+const STATE = new Script(`
+local p, a = ARGV[1], ARGV[2]
+local tab = redis.call('HGET', p .. 'h:' .. a, 'tabId')
+if tab then
+  if redis.call('HGET', p .. 't:' .. tab, 'agent') == a then return {'control', tab} end
+  redis.call('DEL', p .. 'h:' .. a)
+end
+local id = redis.call('GET', p .. 'aa:' .. a)
+if id then
+  local r = redis.call('HMGET', p .. 'a:' .. id, 'agent', 'url', 'code', 'exp')
+  if r[1] and (tonumber(r[4]) or 0) > tonumber(ARGV[3]) then return {'awaiting', r[2] or '', r[3] or ''} end
+end
+local n = redis.call('GET', p .. 'n:' .. a)
+if n then return {'note', n} end
+return false`)
 
 export class SharedTabHub extends TabHub {
   private me = token()
@@ -183,16 +200,12 @@ export class SharedTabHub extends TabHub {
 
   override async state(agentSid: Sid | undefined): Promise<AgentState | undefined> {
     if (!agentSid) return undefined
-    const h = await this.hm(this.k('h', agentSid), ['tabId'] as const)   // gone after idleMs without a command
-    if (h) {
-      if (await this.r('HGET', this.k('t', h.tabId), 'agent') === agentSid) return { kind: 'control', tabId: h.tabId }
-      await this.r('DEL', this.k('h', agentSid))
-    }
-    const id = await this.r<string | null>('GET', this.k('aa', agentSid))
-    const a = id ? await this.hm(this.k('a', id), ['agent', 'url', 'code', 'exp'] as const) : undefined
-    if (a && Number(a.exp) > Date.now()) return { kind: 'awaiting', approveUrl: a.url, code: fmtCode(a.code) }
-    const n = await this.r<string | null>('GET', this.k('n', agentSid))
-    return n ? { kind: 'note', reason: n } : undefined
+    // h: is gone after idleMs without a command
+    const r = await redis.get(this.alias).then((c) => STATE.run<string[] | null>(c, [], [this.k(''), agentSid, Date.now()]))
+    if (!r) return undefined
+    if (r[0] === 'control') return { kind: 'control', tabId: r[1]! }
+    if (r[0] === 'awaiting') return { kind: 'awaiting', approveUrl: r[1]!, code: fmtCode(r[2]!) }
+    return { kind: 'note', reason: r[1]! }
   }
 
   override async forward(agentSid: Sid, op: TabOp, payload: unknown): Promise<TabAnswer> {
