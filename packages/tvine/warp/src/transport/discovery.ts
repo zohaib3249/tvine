@@ -46,7 +46,7 @@ export function robotsTxt(settings: Settings, o: { sitemap?: string; admin?: str
   const r = settings.robots
   return [
     'User-agent: *',
-    ...['/llms.txt', '/agent.txt', '/.well-known/tvine.json', '/tvine/manifest', '/mcp', ...r.allow].map((p) => `Allow: ${p}`),
+    ...['/llms.txt', '/agent.txt', '/.well-known/tvine.json', '/.well-known/mcp.json', '/tvine/manifest', '/mcp', ...r.allow].map((p) => `Allow: ${p}`),
     ...['/tvine/', ...(o.admin ? [`${o.admin}/`] : []), ...r.disallow].map((p) => `Disallow: ${p}`),
     ...r.extra,
     ...(o.sitemap ? ['', `Sitemap: ${o.sitemap}`] : []),
@@ -88,6 +88,14 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
     tvine: '1', formats: ['json', 'notation', 'md'], header: settings.header, mcp: '/mcp', mcpAuth: 'none',
     channel: '/tvine/channel', manifest: '/tvine/manifest',
   })
+  // an MCP "server card" where agents look for one (/.well-known/mcp.json, an emerging convention, not a final spec)
+  const mcpCard = JSON.stringify({
+    serverInfo: { name: settings.site.name, description: settings.site.description },
+    transport: { type: 'streamable-http', endpoint: '/mcp' },
+    authentication: { required: false, schemes: ['bearer'] },   // anonymous visitor scope; a site API token acts as a user
+    tools: ['read_page', 'expand', 'ui', 'do', 'request_control', 'release', '<app>_<action> (one per action, see /tvine/manifest)'],
+    docs: { llms: '/llms.txt', discovery: '/.well-known/tvine.json', manifest: '/tvine/manifest' },
+  })
   const site = JSON.stringify(buildSiteManifest(manifest, routes))
   const llms = [
     `# ${settings.site.name}`,
@@ -112,7 +120,7 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
     '',
     '## Capabilities',
     '- Full action list with parameters: /tvine/manifest',
-    '- Discovery document: /.well-known/tvine.json',
+    '- Discovery documents: /.well-known/tvine.json (formats, headers), /.well-known/mcp.json (the MCP server card)',
     '',
     '## Routes',
     ...routes.slice(0, 10).map((r) => `- ${r.path}${r.name ? ` — ${r.name}` : ''}`),
@@ -130,6 +138,7 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
     }
     switch (path) {
       case '/.well-known/tvine.json': return get(JSON_CT, CACHED, () => wellKnown)
+      case '/.well-known/mcp.json': return get(JSON_CT, CACHED, () => mcpCard)
       case '/tvine/manifest': return get(JSON_CT, CACHED, () => site)
       case '/llms.txt': return get('text/markdown; charset=utf-8', CACHED, () => llms)
       case '/robots.txt': {
