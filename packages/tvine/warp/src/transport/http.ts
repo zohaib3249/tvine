@@ -18,6 +18,7 @@ import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import type { RouteInfo } from './discovery.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { routeMatcher } from './routes.js'
+import { AGENT_LINKS } from '../middleware/index.js'
 
 type Upload = { file?: UploadedFile; def?: UploadDef; keep?: boolean }
 const hideSid = (e: Event): Event =>
@@ -461,7 +462,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     if ((req.method !== 'GET' && req.method !== 'POST') || !isAgent(req, settings)) {
       // a page answers html OR markdown by Accept: caches must key on it; Link tells agents it negotiates
       if ((req.method === 'GET' || req.method === 'HEAD') && match(path) !== undefined) {
-        res.setHeader('link', `<${path}>; rel="alternate"; type="text/markdown"`)
+        res.setHeader('link', `<${path}>; rel="alternate"; type="text/markdown", ${AGENT_LINKS}`)
         varyAccept(res)
       }
       return next()

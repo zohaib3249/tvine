@@ -66,6 +66,8 @@ type Opts = Record<string, unknown>
 type Factory = (o: Opts, b: BuildCtx) => HttpMiddleware
 
 const PREFIX = 'tvine.middleware.'
+// how an agent finds its way in from any page: what the site is (/llms.txt) and the MCP endpoint
+export const AGENT_LINKS = '</llms.txt>; rel="describedby"; type="text/markdown", </mcp>; rel="service"; title="MCP"'
 export const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
 const prefixed = (paths: unknown, p: string) => Array.isArray(paths) && paths.some((x) => typeof x === 'string' && (p === x || p.startsWith(x.endsWith('/') ? x : `${x}/`)))
 const send = (res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {

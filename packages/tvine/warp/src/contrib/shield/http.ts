@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { buildRequest, rateChecked } from '../../core/request.js'
 import type { BuildCtx, HttpMiddleware, MwRequest } from '../../middleware/index.js'
-import { AGENT_SURFACE } from '../../middleware/index.js'
+import { AGENT_LINKS, AGENT_SURFACE } from '../../middleware/index.js'
 import { checkCaptcha, makeCaptcha } from './captcha.js'
 import {
   LEVELS, checkClearance, claimNonce, clearanceCookie, cookieName, decide, difficultyFor, dur, fpHash, issueClearance, issueNonce, levelFor, limiter,
@@ -236,7 +236,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       // shown in place on the visitor's own URL (no redirect); after /verify the page reloads that URL with the clearance
       const r = signReturn(req.url && req.url.startsWith('/') ? req.url : path, decision.level ?? 'pow')
       const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors)
-      return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'cache-control': 'no-store', 'x-robots-tag': 'noindex' })
+      return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'cache-control': 'no-store', 'x-robots-tag': 'noindex', link: AGENT_LINKS })
     },
   }
 }
