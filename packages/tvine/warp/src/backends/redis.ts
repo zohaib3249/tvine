@@ -145,8 +145,7 @@ export class RedisSessionStore extends SessionStore {
   private client() { return redis.get(this.alias) }
   private get ttl() { return this.settings.ttlMs }
 
-  override async create(): Promise<Session> {
-    const s = newSession()
+  override async create(s: Session = newSession()): Promise<Session> {
     const evicted = await CREATE.run<string[]>(await this.client(), [], [this.prefix, s.sid, s.createdAt, this.ttl, this.settings.max ?? 100_000, enc(s.data)])
     for (const sid of evicted) this.evict(sid)   // #20 flood cap, cluster-wide: the oldest go, with their hooks
     this.cache(s, 0)
@@ -211,6 +210,7 @@ export class RedisSessionStore extends SessionStore {
   }
 
   override async rotate(old: Session): Promise<Session> {
+    if (this.once.get(old.sid) === old) return this.rotateDeferred(old)
     if (this.byId.get(old.sid) !== old) throw new Error('rotate: unknown sid')
     const s: Session = { ...old, sid: nanoid(), data: old.data, lastSeen: Date.now() }
     const ver = await ROTATE.run<number | null>(await this.client(), [], [this.prefix, old.sid, s.sid, s.lastSeen, this.ttl])

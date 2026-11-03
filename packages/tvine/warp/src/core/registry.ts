@@ -194,19 +194,24 @@ export function makeSnapshotter(opts: {
     const ver = await cache.version()
     let res: Response
     const as = opts.asSession?.(sid)
-    try {
-      res = await doFetch(url.href, {
-        headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${await sessions.cookieFor(sid)}`, ...as?.headers },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-    } catch (e: any) {
-      as?.readSession()   // consumed on every path, so a failed render leaves no token behind
-      const why = e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'timeout' : 'network'
-      throw new RegistryError('internal', `render failed (${why}) for ${route}`)
-    }
+    // a cleared timer, not AbortSignal.timeout: that one lives its full timeoutMs and keeps this request's async
+    // context (the whole request) reachable until it fires
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(new DOMException('render timeout', 'TimeoutError')), timeoutMs)
     let html: string, readSession: boolean
-    try { html = await res.text() } finally { readSession = as?.readSession() ?? false }
+    try {
+      try {
+        res = await doFetch(url.href, {
+          headers: { 'x-tvine-internal': '1', cookie: `${cookieName}=${await sessions.cookieFor(sid)}`, ...as?.headers },
+          redirect: 'manual',
+          signal: ac.signal,
+        })
+      } catch (e: any) {
+        as?.readSession()   // consumed on every path, so a failed render leaves no token behind
+        const why = e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'timeout' : 'network'
+        throw new RegistryError('internal', `render failed (${why}) for ${route}`)
+      }
+      try { html = await res.text() } finally { readSession = as?.readSession() ?? false }
+    } finally { clearTimeout(timer) }
     if (res.status >= 300 && res.status < 400) throw new Goto(siteRedirect(res.headers?.get('location') ?? '/', { base: origin0, hosts: [url.host], route: opts.route }))   // redirect()
     if (res.status === 404 || res.status === 410) throw new DomainError('not_found', `not found: ${route}`)        // notFound()
     if (res.status === 401 || res.status === 403) throw new DomainError('forbidden', `forbidden: ${route}`)

@@ -95,7 +95,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   }
   let session = await sessions.peek({ sid: who.sid, cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
-  let ephemeral = false
+  let ephemeral = false, deferred = false
   if (session && who.sid !== undefined) {
     // An agent's snapshot render runs INSIDE that agent's command (dispatch step 10), which holds the sid's
     // queue: dispatching on the same sid would wait for itself. Reads run on an ephemeral copy instead.
@@ -110,7 +110,10 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     }
     if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
     else if (!who.mint) return fail('expired_sid', 'this action needs a session')
-    else { session = await sessions.create(); await who.mint(session) }
+    // a retry token (cmdId) is replayed per stored session: such a call keeps its session up front, as before
+    else if (call.cmdId !== undefined) { session = await sessions.create(); await who.mint(session) }
+    // lazy: stored (and its cookie minted) only if the call needs it, see after the dispatch
+    else { session = sessions.deferred(); deferred = true }
   }
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
@@ -122,9 +125,12 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render' })))
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
     if (rotated) await who.mint?.(rotated)
+    // a cookie-less call keeps a session only when it wrote session data or its answer is bound to the sid (a
+    // confirm token); anything else (a plain insert from an API client) leaves no session and sets no cookie
+    else if (deferred && (session.data.size > 0 || (!r.ok && r.code === 'confirm_required'))) await who.mint!(await sessions.keep(session))
     return r
   } finally {
-    if (ephemeral) sessions.dropEphemeral(session.sid)
+    if (ephemeral || deferred) sessions.dropEphemeral(session.sid)
   }
 }
 

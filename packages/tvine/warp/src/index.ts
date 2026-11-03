@@ -34,7 +34,13 @@ export { guardCheck } from './transport/guards.js'
 export { dispatch, collect, serverCtx, formResult, renderCtx, type ServerCtx, type FormResult, type Log } from './core/dispatch.js'
 export { httpTransport, isAgent, type HttpOptions } from './transport/http.js'
 export { apiTransport, invoke, signForward, verifyForward, toApiResult, API_PREFIX, FORWARD, type ApiResult, type ApiCall, type Forward } from './transport/api.js'
-export { mcpHandler, mcpServer, mcpTools, type McpOptions } from './transport/mcp.js'
+export type { McpOptions } from './transport/mcp.js'
+// lazy: importing 'tvine' never loads the MCP SDK; it loads on the first call (mcpServer/mcpTools: transport/mcp.ts)
+export function mcpHandler(...a: Parameters<typeof import('./transport/mcp.js').mcpHandler>): ReturnType<typeof import('./transport/mcp.js').mcpHandler> {
+  const h = import('./transport/mcp.js').then((m) => m.mcpHandler(...a))
+  h.catch(() => undefined)   // surfaced by the first call
+  return async (req, res) => (await h)(req, res)
+}
 export { discoveryTransport, buildSiteManifest, loadNextRoutes, type RouteInfo, type SiteManifest } from './transport/discovery.js'
 export { channelTransport, type ChannelDeps } from './transport/channel.js'
 export { TabHub, tabTransport, TAB_LIMITS, type TabAnswer, type AgentState } from './transport/tab.js'
