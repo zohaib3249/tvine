@@ -9,6 +9,16 @@ Every Tvine app is an MCP server (Model Context Protocol) at `/mcp`, with no ext
 
 The same actions also answer over plain HTTP, and in-browser agents get them through WebMCP.
 
+## Start here: how an agent finds its way into any Tvine site
+
+1. `GET /llms.txt`: what the site is and how to talk to it. Every page links it (`Link: </llms.txt>; rel="describedby"`). So does the Shield challenge page, in its "Are you an AI agent?" note and its `<script type="application/json" id="tvine-agent">` block.
+2. `GET /.well-known/mcp.json`: the MCP server card (endpoint, transport, auth, tools). `/.well-known/tvine.json` lists formats and header names.
+3. Connect MCP at `/mcp`, then `tools/list`, then `read_page` with view `"md"` (the best first read). Then call `ui` / `do` with the control ids it shows.
+4. No MCP client? Use plain HTTP on the page URL with `Accept: text/markdown` or `x-tvine: 1`. Keep `x-tvine-sid` ([HTTP headers](#http-headers)).
+5. All actions and their params: `GET /tvine/manifest`.
+6. Need the person's real logged-in browser? Call `request_control`. They click **Allow**, and you drive their tab. `release` or their **Stop** ends it ([tab control](#tab-control-in-plain-words)).
+7. Refusals are JSON with a `hint`. Send an honest User-Agent ([agents behind Shield](#agents-behind-shield)).
+
 ## Setup: connect Claude Code
 
 The examples below are from an example store app on port 3000 (tools like `catalog_addToCart`). With `examples/notes` use port 4400 and its `notes_*` tools. Start your app, then put this `.mcp.json` in the folder where you run `claude`:
@@ -119,8 +129,10 @@ curl -s -H 'Accept: text/markdown' http://localhost:3000/product/1              
 curl -s -H 'x-tvine: 1' -H 'x-tvine-view: md' http://localhost:3000/product/1    # same, with the agent header
 curl -s -H 'x-tvine: 1' -H 'x-tvine-view: L0' http://localhost:3000/product/1   # smaller view
 curl -s http://localhost:3000/agent.txt                                          # line notation (formats.notationPath)
+curl -s http://localhost:3000/.well-known/mcp.json                              # MCP server card
+curl -s http://localhost:3000/tvine/manifest                                    # every action with params
 curl -s http://localhost:3000/.well-known/tvine.json                            # discovery
-# {"tvine":"1","formats":["json","notation"],"header":"x-tvine","mcp":"/mcp","mcpAuth":"none",...}
+# {"tvine":"1","formats":["json","notation","md"],"header":"x-tvine","mcp":"/mcp","mcpAuth":"none",...}
 
 # a ui step over plain HTTP (sid from the first line of a GET)
 curl -s -X POST http://localhost:3000/ -H 'x-tvine: 1' -H "x-tvine-sid: $SID" \

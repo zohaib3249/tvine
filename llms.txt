@@ -7,7 +7,17 @@
 
 Inside a Tvine project the same files ship in the package: `node_modules/tvine/llms-full.txt` and `node_modules/tvine/docs/<topic>.md`.
 
-## Start here
+## Using any Tvine site as an agent (in order)
+
+1. `GET /llms.txt`: what the site is and how to talk to it. Every page links it (`Link: </llms.txt>; rel="describedby"`), and so does the Shield challenge page ("Are you an AI agent?" note + `<script type="application/json" id="tvine-agent">`).
+2. `GET /.well-known/mcp.json` (MCP server card: endpoint, transport, tools) and `/.well-known/tvine.json` (formats, header names).
+3. Connect MCP at `/mcp` (Streamable HTTP) → `tools/list` → `read_page` (view "md" is the best first read) → `ui` / `do` with the control ids it shows.
+4. No MCP client: plain HTTP on the page URL with `Accept: text/markdown` or `x-tvine: 1`; keep the session with `x-tvine-sid` (from the first line `#tvine/1 sid=…`).
+5. All actions and their params: `GET /tvine/manifest`.
+6. Need the person's real logged-in browser: `request_control` → they click Allow in their tab → you drive it with a visible cursor; `release` or their Stop ends it.
+7. Refusals are JSON with a `hint` (`challenge_required`, `blocked`, `rate_limited`); send an honest User-Agent (`Claude-User`, `ChatGPT-User`, `Grok/1.0`). Headers reference: agents-and-mcp.md → "HTTP headers".
+
+## Start here (building a Tvine app)
 
 - [AGENTS.md (AI guide)](https://github.com/zohaib3249/tvine/blob/main/packages/tvine/AGENTS.md): layout, commands, recipes and rules for building a Tvine project; also written into every new project
 - [Full docs in one file](https://github.com/zohaib3249/tvine/blob/main/llms-full.txt): the AI guide plus every guide below, concatenated
