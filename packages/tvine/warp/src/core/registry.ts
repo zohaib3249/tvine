@@ -175,22 +175,22 @@ export function makeSnapshotter(opts: {
   // headers naming the agent's session to the page (server.ts); readSession() after the render: did the page read it?
   asSession?: (sid: Sid) => { headers: Record<string, string>; readSession(): boolean }
   route?: (path: string) => string | undefined   // redirect targets must be routed pages (core/redirect.ts)
-}): (route: string, sid: Sid) => Promise<Snapshot> {
+}): (route: string, sid: Sid, rev?: number) => Promise<Snapshot> {
   const { origin, sessions, cache, cookieName = 'tvine_s', timeoutMs = 10_000 } = opts
   const doFetch = opts.fetch ?? globalThis.fetch
   const stamp = (b: Body, sid: Sid, rev: number): Snapshot => ({ ...b, sid, rev })
   const revOf = async (sid: Sid) => (await sessions.resolve({ sid }))?.rev ?? 0
   const origin0 = new URL(origin).origin
 
-  return async (route, sid) => {
+  return async (route, sid, known) => {
     // Reject anything that could steer the cookie-bearing fetch off our origin.
     let url: URL | undefined
     try { if (route.startsWith('/') && !route.startsWith('//')) url = new URL(route, origin) } catch { /* below */ }
     if (!url || url.origin !== origin0) throw new RegistryError('internal', `invalid route: ${route}`)
 
     const hit = await cache.get(route)
-    if (hit) return stamp(hit.body, sid, await revOf(sid))
-    const rev = await revOf(sid) // before the await: old content must not get a newer rev
+    if (hit) return stamp(hit.body, sid, known ?? await revOf(sid))
+    const rev = known ?? await revOf(sid) // before the await: old content must not get a newer rev
     const ver = await cache.version()
     let res: Response
     const as = opts.asSession?.(sid)

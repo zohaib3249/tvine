@@ -35,7 +35,7 @@ export interface ServerCtx {
   actions: ActionManifest
   middleware?: { name: string }[]  // the active HTTP middleware, outermost first (server.ts; tvine check prints it)
   sessions: SessionStore
-  snapshot: (route: string, sid: Sid) => Promise<Snapshot>
+  snapshot: (route: string, sid: Sid, rev?: number) => Promise<Snapshot>   // rev: the session's, when the caller holds it (no reload)
   settings: Settings
   channels: ChannelLayer           // the same layer the SessionStore was built on
   limiter: Limiter                 // settings.limits.backend (backends/index.ts)
@@ -79,7 +79,7 @@ export function serverCtx(o: Pick<ServerCtx, 'actions' | 'settings' | 'snapshot'
   const closers: (() => unknown)[] = []
   if (!o.channels && 'close' in channels) closers.push(() => (channels as { close(): unknown }).close())
   const ctx: ServerCtx = {
-    ...o, snapshot: async (page, sid) => markCalls(await o.snapshot(page, sid), o.actions), channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
+    ...o, snapshot: async (page, sid, rev) => markCalls(await o.snapshot(page, sid, rev), o.actions), channels, log, close: () => {}, health: o.health ?? new Map(), onClose: (fn) => { closers.push(fn) },
     hooks: o.hooks ?? new Hooks((hook, e) => log('error', 'hook failed', { hook, error: errStr(e) })),
     appMiddleware: o.appMiddleware ?? new Map(),
     sessions: o.sessions ?? sessionsFor(settings, { channels }, log),
@@ -127,14 +127,16 @@ const renderRead = new WeakSet<Request>()
 
 // render: a page render's read (api.* inside a server component) — it spends no rate bucket (W11-FIX #6: a
 // rate-limited render is a 500 page with no Tvine root, which kills tab control). Read-only actions only.
-// firstContact: a cookie-less api call (transport/api.ts) — its ip pays one token more, as the <Form> path's ip pre-check
-export type DispatchOpts = { snapshot?: boolean; render?: boolean; firstContact?: boolean }
+// firstContact: a cookie-less api call (transport/api.ts) — its ip pays one token more, as the <Form> path's ip pre-check.
+// session: the caller already resolved the command's session (cmd.sid / the cookie): dispatch does not load it again
+export type DispatchOpts = { snapshot?: boolean; render?: boolean; firstContact?: boolean; session?: Session }
 export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: DispatchOpts = {}): AsyncIterable<Event> {
   if (opts.snapshot === false) quiet.add(request)
   if (opts.render && server.actions.get(cmd.action)?.rules?.readOnly) renderRead.add(request)
   const t0 = performance.now()
   const hold: Hold = { req: request }
   const { sid, events } = await run(cmd, server, request, hold, opts)
+  if (hold.live) lastLive.set(request, hold.live)
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   securityOutcome(server, cmd, sid, events, hold.req!)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
@@ -213,8 +215,10 @@ export async function collect(events: AsyncIterable<Event>): Promise<Event[]> {
 }
 
 // {sid, rev, page} for serialize render(): err events without a snapshot carry none themselves.
+// The session a command ran on, as it ended (the reply's sid/rev without loading it again).
+const lastLive = new WeakMap<Request, Session>()
 export async function renderCtx(server: ServerCtx, cmd: Pick<Command, 'sid'>, request: Request): Promise<Ctx> {
-  const s = rotatedSession(request) ?? await server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
+  const s = rotatedSession(request) ?? lastLive.get(request) ?? await server.sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, server.settings) })
   return { sid: s?.sid ?? cmd.sid ?? '', rev: s?.rev ?? 0, page: pageOf(request) }
 }
 
@@ -338,7 +342,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   if (crossOrigin(request, settings)) return { sid: await peeked(), events: [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })] }
   // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
   const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
-  const known = cmd.cmdId ? await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }) : undefined
+  const known = cmd.cmdId ? opts.session ?? await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }) : undefined
   // humanOnly actions never replay here: the agent mark (agentCmd, tab mark) is only known after the session (4.1 below)
   if (known && !server.actions.get(cmd.action)?.rules?.humanOnly) {
     const r = await server.idempotency.replay(known.sid, cmd.cmdId!, hash)
@@ -352,7 +356,7 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   const rl = await checkAll(server.limiter, rateItems(cmd, server, request, forwarded, opts))
   if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
-  const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
+  const session = opts.session ?? await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
   if (!session) {
     const fresh = await sessions.create()
     return { sid: fresh.sid, events: [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await snap(server, request, fresh.sid) })] }
@@ -427,9 +431,9 @@ async function asAgent(cmd: Command, server: ServerCtx, request: Request, sid: S
   return out
 }
 
-async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snapshot | undefined> {
+async function snap(server: ServerCtx, request: Request, sid: Sid, rev?: number): Promise<Snapshot | undefined> {
   if (quiet.has(request)) return undefined
-  try { return await server.snapshot(pageOf(request), sid) }
+  try { return await server.snapshot(pageOf(request), sid, rev) }
   catch (e) {
     // a page that redirects (Next redirect()) is not a failure: the agent gets a goto to it either way
     if ((e as { name?: string })?.name === 'Goto') server.log('info', 'snapshot render redirected', { page: pageOf(request), to: (e as { url?: string }).url })
@@ -440,7 +444,8 @@ async function snap(server: ServerCtx, request: Request, sid: Sid): Promise<Snap
 
 // settled: the handler's own promise, which may outlive the timeout. req: the request as dispatched (agent-marked).
 // audit: writes the audit row inside the handler's transaction; audited: it did
-type Hold = { settled?: Promise<unknown>; req?: Request; audit?: () => Promise<void>; audited?: boolean }
+// live: the session once the pipeline found it live (after a rotation: the new one)
+type Hold = { settled?: Promise<unknown>; req?: Request; audit?: () => Promise<void>; audited?: boolean; live?: Session }
 
 async function pipeline(cmd: Command, server: ServerCtx, request: Request, session: Session, hash: string, hold: Hold): Promise<Event[]> {
   const { settings } = server, { sid } = session
@@ -449,6 +454,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   // expired). Refuse without any sid or snapshot: the new sid belongs to whoever ran the rotating command.
   if (!(await server.sessions.isLive(session))) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
   let live = session   // the session after this command (a rotation replaces it)
+  hold.live = live
   // 2b. idempotency replay
   if (cmd.cmdId) {
     const r = await server.idempotency.replay(sid, cmd.cmdId, hash)
@@ -457,7 +463,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   }
   const def = server.actions.get(cmd.action)
   // 4. resolve action
-  if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid) })]
+  if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid, session.rev) })]
 
   // handler state is staged: applied only after commit
   const outbox: [string, Event][] = []
@@ -480,7 +486,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     }
     // 6. optimistic concurrency
     if (cmd.rev !== undefined && cmd.rev !== session.rev) {
-      return [ev.err('stale_rev', `rev ${cmd.rev} is stale (current ${session.rev})`, { snapshot: await snap(server, request, sid) })]
+      return [ev.err('stale_rev', `rev ${cmd.rev} is stale (current ${session.rev})`, { snapshot: await snap(server, request, sid, session.rev) })]
     }
     // 6.5 middleware (global, then the action's app) wraps steps 7–10; it may short-circuit or reshape events.
     // It sees frozen params (they cannot drift from the idempotency hash). Writes it makes to ctx after
@@ -516,6 +522,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
           return [ev.err('internal', 'session could not be renewed; sign in again')]
         }
         markRotated(request, live)
+        hold.live = live
       }
       try {
         if (!def.rules?.readOnly) await server.sessions.bump(live.sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
@@ -528,7 +535,7 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       // 10. ok + fresh snapshot (render failure after a commit → goto the page instead of a false err)
       if ('goto' in out) return (committed = [ev.ok(def.id), ev.goto(out.goto)])
       if (quiet.has(request)) return (committed = [ev.ok(def.id, out.result)])
-      const s = await snap(server, request, live.sid)   // the new sid when the session was rotated
+      const s = await snap(server, request, live.sid, live.rev)   // the new sid when the session was rotated
       return (committed = [ev.ok(def.id, out.result), s ? ev.snapshot(s) : ev.goto(pageOf(request))])
     }
     const inner = async function* (): AsyncIterable<Event> {

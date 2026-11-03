@@ -13,7 +13,7 @@ import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
 import { buildRequest, clientIp, type McpSource } from '../core/request.js'
-import type { ActionDef, ActionId, Command, Event, Request, Settings, Snapshot } from '../core/types.js'
+import type { ActionDef, ActionId, Command, Event, Request, Session, Settings, Snapshot } from '../core/types.js'
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/envelope.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
@@ -225,7 +225,8 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
     if (!request) return notPage(server, url)
     if (request === FORBIDDEN) return forbidden(server)
     if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], await renderCtx(server, cmd, request))
-    return reply(server, await collect(dispatch(cmd, server, request)), await renderCtx(server, cmd, request))
+    const known = resolved.get(request)
+    return reply(server, await collect(dispatch(cmd, server, request, known ? { session: known } : {})), await renderCtx(server, cmd, request))
   }
   return srv
 }
@@ -302,8 +303,12 @@ async function requestFor(server: ServerCtx, opts: McpOptions, src: Src, url: st
   let path: string
   try { path = decodeURIComponent(u.pathname) } catch { return undefined }
   const request = await buildRequest({ ...src, url: u.pathname + u.search, route }, server.settings)
-  return (await guardCheck(server.settings)(path, request, await server.sessions.peek({ sid }))) ? request : FORBIDDEN
+  // resolved once: the command / page that follows reuses it (resolvedFor)
+  const session = await server.sessions.resolve({ sid })
+  resolved.set(request, session)
+  return (await guardCheck(server.settings)(path, request, session)) ? request : FORBIDDEN
 }
+const resolved = new WeakMap<Request, Session | undefined>()
 
 // read_page (view) and expand (L2 of one node from the session's cached snapshot; unknown id → L0 map).
 type Shape = { view?: ViewOpt; expand?: ExpandOpt; md?: { offset?: number; limit?: number } }
@@ -311,7 +316,7 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: str
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
-  const session = (await server.sessions.resolve({ sid: a.sid })) ?? await server.sessions.create()
+  const session = resolved.get(request) ?? await server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   return rendering(server, ctx, async () => {
     const t0 = performance.now()
@@ -332,7 +337,7 @@ async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<type
   const request = await requestFor(server, opts, src, a.url, a.sid)
   if (!request) return notPage(server, a.url)
   if (request === FORBIDDEN) return forbidden(server)
-  const known = a.sid === undefined ? undefined : await server.sessions.resolve({ sid: a.sid })
+  const known = a.sid === undefined ? undefined : resolved.get(request)
   const session = known ?? await server.sessions.create()
   const ctx: Ctx = { sid: session.sid, rev: session.rev, page: pagePath(request) }
   if (a.sid !== undefined && !known) {   // like dispatch: a dead sid never runs steps; a fresh sid + snapshot to restart

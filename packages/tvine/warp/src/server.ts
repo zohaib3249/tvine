@@ -225,11 +225,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // 3. sessions, limiter, idempotency (serverCtx), snapshot cache + snapshotter
   connections.configure(settings)
   configureRedis(settings, (level, msg, data) => say(data ? `${msg} ${JSON.stringify(data)}` : msg, level === 'error' ? 'warn' : level))
-  let snapshot: (route: string, sid: string) => Promise<Snapshot>
+  let snapshot: (route: string, sid: string, rev?: number) => Promise<Snapshot>
   // tvine.admin: its pages' agent view is built from the admin.* reads (contrib/admin/agent.ts), not rendered
   const adminBase = installed.includes('tvine.admin') ? settings.admin.path.replace(/\/$/, '') || '/admin' : undefined
   let adminSnap: ((page: string, sid: string) => Promise<Snapshot>) | undefined
-  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (page, sid) => (adminSnap && adminPage(page) ? adminSnap(page, sid) : snapshot(page, sid)) })
+  const ctx = serverCtx({ actions, settings, appMiddleware, appsDir, snapshot: (page, sid, rev) => (adminSnap && adminPage(page) ? adminSnap(page, sid) : snapshot(page, sid, rev)) })
   for (const [name, fn] of appHooks) ctx.hooks.on(name, fn as never)
   // AppConfig.ready(): each app's hooks.ts ready(server), awaited, in installed-app order (contrib auth installs its backend here)
   for (const { app, fn } of signals.ready) {

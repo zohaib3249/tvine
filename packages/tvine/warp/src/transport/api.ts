@@ -102,7 +102,8 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   if (call.params !== undefined && (typeof call.params !== 'object' || call.params === null || Array.isArray(call.params))) {
     return { ok: false, code: 'invalid_param', message: 'params must be an object', field: 'params' }
   }
-  let session = await sessions.peek({ sid: who.sid, cookie: who.cookie })
+  // a cookie: resolved once here and handed to dispatch (an agent render's sid is only peeked: its command holds it)
+  let session = who.sid !== undefined ? await sessions.peek({ sid: who.sid }) : await sessions.resolve({ cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
   let ephemeral = false, deferred = false, firstContact = false
   if (session && who.sid !== undefined) {
@@ -133,7 +134,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
-    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render', firstContact })), who.http)
+    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render', firstContact, session })), who.http)
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
     if (rotated) await who.mint?.(rotated)
     // a cookie-less call keeps a session only when it wrote session data or its answer is bound to the sid (a
