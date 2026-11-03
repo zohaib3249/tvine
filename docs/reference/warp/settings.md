@@ -49,7 +49,8 @@ top. `base.ts` is a convention: `dev.ts` / `prod.ts` import it and spread it (`d
 | `TVINE_LOAD_DOTENV` | `.env` in production | `1` loads `.env` files in production too. |
 | `PORT`, `HOST` | listen address (CLI) | Default 3000; `--port` / `--host` win. |
 | `TVINE_SUPERUSER_USERNAME` / `_EMAIL` / `_PASSWORD` | `createsuperuser --noinput` | CLI only. |
-| `WEB_CONCURRENCY`, `NODE_APP_INSTANCE`, `pm_id` | — | Only read to warn that `memory` backends are per process. |
+| `WEB_CONCURRENCY` | `tvine start` worker count | `n` or `auto` (= CPU cores), default 1; `--workers` wins. More than 1 refuses to start while a backend is `memory` and pings Redis first ([deploy.md](../../deploy.md#2-scaling)). |
+| `NODE_APP_INSTANCE`, `pm_id` | — | pm2 instances: boot warns that `memory` backends are per process. |
 
 Two-server mode (a Next server calling a `tvine start --api-only` server) has no settings in the Next process;
 it reads `TVINE_API_URL`, `TVINE_SECRET`, `TVINE_TRUST_PROXY`, `TVINE_HEADER`, `TVINE_COOKIE_NAME`,

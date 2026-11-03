@@ -212,7 +212,8 @@ names: `env.get(key, default?)` (string), `env.getInt`, `env.getBool`, `env.getL
 | `TVINE_SETTINGS` | which settings module runs, e.g. `config/settings/prod` (same as `--settings`) |
 | `TVINE_DEV_ALLOWED_HOSTS` | dev only: comma list of extra hosts (tunnels, port forwarding), on top of `dev.allowedHosts` |
 | `TVINE_ENCRYPTION_KEYS` | comma list for `encryption.keys` (newest first) when settings leave it out |
-| `WEB_CONCURRENCY`, `NODE_APP_INSTANCE`, `pm_id` | read only to warn at boot that memory backends are per process |
+| `WEB_CONCURRENCY` | `tvine start` workers: `n` or `auto` (CPU cores), default 1; `--workers` wins; more than 1 needs every backend on redis |
+| `NODE_APP_INSTANCE`, `pm_id` | pm2 instances: boot warns that memory backends are per process |
 
 Split mode (Next runs separately and calls a `tvine start --api-only` server): the Next process has no
 settings, so it reads these instead.
@@ -311,7 +312,7 @@ framework key (any case) is reported at boot and by `tvine check`:
   `mcp.maxTools` or add ids to `mcp.exclude` if you want specific ones typed.
 - **Pages must not read settings for runtime values.** Pages call the backend through `api.*`.
 - A page that reads the session must be dynamic (`await connection()` or `export const dynamic = 'force-dynamic'`).
-- Memory backends are per process. With more than one process (`WEB_CONCURRENCY`, pm2) boot warns; use redis.
+- Memory backends are per process. `tvine start --workers n` (or `WEB_CONCURRENCY`) refuses to start more than one worker while any is `memory`; under pm2 boot warns. Use redis.
 
 ## Reference: every key
 

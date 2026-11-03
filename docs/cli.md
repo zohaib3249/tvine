@@ -83,7 +83,7 @@ Optional app files (create them when you need them):
 
 | Command | What it does |
 |---|---|
-| `start [--port 3000] [--host h] [--api-only]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s |
+| `start [--port 3000] [--host h] [--api-only] [--workers n\|auto]` | Production server: Warp + Next in one process. Needs `next build` first. Defaults to `NODE_ENV=production`, so it needs `TVINE_SECRET` and `TVINE_ALLOWED_HOSTS`. `--api-only` serves only the backend (run Next separately with `TVINE_API_URL`). SIGTERM / SIGINT close gracefully, hard exit at 5 s. `--workers` (or `WEB_CONCURRENCY`; the flag wins): that many worker processes on one port, `auto` = CPU cores, default 1; a crashed worker is restarted. More than 1 needs every backend on Redis (it refuses and lists what to change) and a reachable Redis. One worker on a multi-core machine prints a one-line hint ([deploy.md](deploy.md#2-scaling)) |
 | `dev [--port 3000] [--host h] [--noreload]` | Dev server: Next with hot reload, `tvine-api.d.ts` regenerated on save. The server restarts (same port) when any backend file changes (code, json, md, templates, `config/`, `lib/`, `.env*`, `package.json`…); pages, components and CSS hot-reload instead. Open tabs refresh by themselves after a restart. After a crash it waits for the next save. `--noreload`: one process, no restart |
 | `inspect [url] [--port 7357]` | Dev inspector: the human page and the agent's view side by side, with a live command feed |
 

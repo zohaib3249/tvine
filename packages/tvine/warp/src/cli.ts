@@ -14,7 +14,7 @@ import { discoverModels, makeMigrations, migrate, migrateCheck, userModelChanged
 import { dumpData, loadData, type FixtureRow } from './data/fixtures.js'
 import { boundaryCheck, boundaryReport, unawaitedReads } from './cli/boundary.js'
 import { API_DTS, generateApiTypes } from './cli/generate.js'
-import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
+import { createAgentServer, loadSettings, settingsFiles, type AgentServerOptions } from './server.js'
 import type { Settings } from './core/types.js'
 import { backendTable } from './backends/index.js'
 import { customKeyWarnings, rateOverlap, redisUsers } from './settings.js'
@@ -61,8 +61,9 @@ Run
   dev [--port 3000] [--host h] [--noreload]  runserver: in-process next dev (needs next installed);
                                 restarts on backend changes (apps/, config/, .env); --noreload: one process, no restart
   build                         next build (the pages tvine start serves)
-  start [--port 3000] [--host h] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
-                                --api-only: no frontend (Next runs separately with TVINE_API_URL)
+  start [--port 3000] [--host h] [--api-only] [--workers n|auto]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
+                                --api-only: no frontend (Next runs separately with TVINE_API_URL);
+                                --workers (or WEB_CONCURRENCY): n processes on one port, auto = CPU cores (n > 1 needs Redis)
   shell                         Node REPL: settings loaded, db configured, every model by name
   test [vitest args]            vitest run
 
@@ -93,7 +94,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   startapp: { options: {}, args: [1, 1] },
   build: { options: {}, args: [0, 0] },
   shell: { options: {}, args: [0, 0] },
-  start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
+  start: { options: { port: str, host: str, 'api-only': bool, workers: str }, args: [0, 0] },
   dev: { options: { port: str, host: str, noreload: bool }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
   docs: { options: { ai: bool, path: bool }, args: [0, 0] },
@@ -327,6 +328,21 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (running) { io.err(running); return 1 }
         const auto = dev && o.port === undefined && !env.has('PORT')
         if (dev && !child && !o.noreload) return await devSupervisor(argv, apps, port, host, auto, io)
+        const worker = process.env.TVINE_WORKER   // a `tvine start --workers n` worker (the primary forked it)
+        if (!dev && !worker) {
+          const w = await import('./cli/workers.js')
+          let n: number
+          try { n = w.workerCount(o.workers as string | undefined, env.has('WEB_CONCURRENCY') ? env.str('WEB_CONCURRENCY') : undefined) } catch (e) { throw new Usage((e as Error).message) }
+          if (n > 1) {
+            const settings = await loadSettings()
+            const bad = w.sharedStateProblem(settings, n, relativeTo(settingsFiles()[0] ?? 'config/settings/prod.ts')) ?? await w.pingRedis(settings)
+            if (bad) { io.err(bad); return 1 }
+            w.runPrimary(n, io)
+            return undefined
+          }
+          const warn = env.has('NODE_APP_INSTANCE') || env.has('pm_id') ? undefined : w.coresWarning(n)   // pm2 runs its own instances
+          if (warn) io.err(warn)
+        }
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
         // dev, port not forced (--port / PORT): a busy port moves to the next free one, like next dev.
         // A restarted child gets its port forced: the old one may still be letting go of it, so retry briefly.
@@ -336,7 +352,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const addr = srv.server.address() as AddressInfo
         const restarted = Number(process.env.TVINE_DEV_RESTARTED)
         if (child && restarted) io.out(`tvine dev: ready on :${addr.port} (restarted in ${((Date.now() - restarted) / 1000).toFixed(1)} s)`)
-        else io.out(`listening on ${boundUrl(addr)}`)
+        else if (!worker) io.out(`listening on ${boundUrl(addr)}`)   // workers: the primary prints one line for all
         if (dev && !restarted && (host === undefined || host === '0.0.0.0' || host === '::')) {
           io.out(`  Local:   http://localhost:${addr.port}`)
           for (const ip of lanIps()) io.out(`  Network: http://${ip}:${addr.port}`)

@@ -188,15 +188,17 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   // boot lines: stderr (stdout stays CLI output), in the configured format; logging 'none' (no handlers) = silent
   const lc = loggingConfig()
   const say = (msg: string, level: 'info' | 'warn' = 'info') => {
-    if (lc.handlers.length) console.error(lc.format === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
+    // tvine start --workers n: boot info once (worker 1), warnings from every worker
+    if (lc.handlers.length && (level === 'warn' || !process.env.TVINE_WORKER || process.env.TVINE_WORKER === '1')) console.error(lc.format === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
   for (const w of customKeyWarnings(settings)) say(`WARNING: ${w}`, 'warn')
   if (settings.debug && isProduction()) say('WARNING: settings.debug is on with NODE_ENV=production (dev CSP, inspector feed): set TVINE_DEBUG=0', 'warn')
   if (isProduction() && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
   const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
-  if ((env.has('NODE_APP_INSTANCE') || env.has('pm_id') || env.int('WEB_CONCURRENCY', 1) > 1) && local.length) {
-    say(`WARNING: multi-instance run detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
+  // pm2 instances (tvine start --workers refuses memory backends before forking: cli/workers.ts)
+  if ((env.has('NODE_APP_INSTANCE') || env.has('pm_id')) && local.length) {
+    say(`WARNING: pm2 instances detected but ${local.join(', ')} ${local.length > 1 ? 'are' : 'is'} 'memory' (per process): set them to 'redis' (docs/design/conventions/backends.md)`, 'warn')
   }
 
   // 2. discover: duplicate/invalid actions fail here, naming the file, never at request time

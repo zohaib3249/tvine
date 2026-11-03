@@ -1,7 +1,7 @@
 # Deploying Tvine
 
 One Node process serves everything: the Next.js pages, `/tvine/*` (agent API, tab socket), `/mcp`, `/admin` and
-`/media`. Run one process by default; add copies plus Redis when one is not enough. A separate `tvine worker`
+`/media`. Run one process by default; add workers plus Redis when one is not enough ([Scaling](#2-scaling)). A separate `tvine worker`
 runs background jobs.
 
 Commands below were run against an example store app built on Tvine unless marked otherwise.
@@ -33,30 +33,70 @@ pnpm build
 pnpm start                                      # = tvine migrate && tvine start  (PORT or --port, default 3000)
 ```
 
-## 2. One process, or several copies
+## 2. Scaling
 
-**One process (default).** Sessions, the tab socket, rate limits and the snapshot cache live in memory. Nothing
-else to run. Restarting logs everyone out of anonymous sessions (carts in the demo).
+**One process (default).** `tvine start` runs one worker. Sessions, the tab socket, rate limits and the snapshot
+cache live in memory. Nothing else to run. Restarting logs everyone out of anonymous sessions (carts in the demo).
+On a machine with more than one CPU core it says so once at start:
 
-**Several copies** (more CPU, rolling deploys, more than one machine): point every subsystem at a shared Redis in
-`settings.ts` — one connection, named once, used by name:
+```
+tvine start: using 1 of 8 CPU cores. To use all of them: set up Redis (REDIS_URL + the backends) and run: tvine start --workers auto
+```
+
+**More copies need Redis.** Every copy must see the same sessions, limits and caches, so point every subsystem at
+one shared Redis in `config/settings/prod.ts` — one connection, named once, used by name:
 
 ```ts
-redis: { default: { url: process.env.REDIS_URL! } },    // or just set REDIS_URL
+redis: { default: { url: env.get('REDIS_URL') } },    // or just set REDIS_URL
 session:       { backend: 'redis' },
 channels:      { backend: 'redis' },
-limits:        { backend: 'redis' },
+limits:        { backend: 'redis' },                   // also Shield's limiter and claims, login throttle, idempotency
 snapshotCache: { backend: 'redis' },
 caches:        { default: { backend: 'redis' } },
-tasks:         { broker: 'redis' },                     // only when workers run on other machines
+tasks:         { broker: 'redis' },                    // or keep 'file' while everything runs on one machine
 ```
 
 `npm i redis@6` in the app. `tvine check` prints every backend and pings Redis (exit 1 if it is down). Use a
-real database (Postgres/MySQL) too — several copies cannot share one SQLite file over the network.
+real database (Postgres/MySQL) too — several machines cannot share one SQLite file over the network.
 
-**Sticky routing for tab control.** A browser tab's agent connection lives on the copy that holds its event stream.
-Route these to the same copy per session (cookie `tvine_s`, or header `x-tvine-sid`): `/tvine/channel`,
-`/tvine/tab/*`, `/tvine/agent/*`, and `/mcp` (for `request_control`). Everything else can go anywhere.
+**One server: `tvine start --workers auto`.** One process starts one worker per CPU core (`--workers 4` for a fixed
+number, or `WEB_CONCURRENCY=auto|4`; the flag wins). All workers listen on the same port — the operating system
+hands each new connection to one of them, so no load balancer is needed. It prints one line,
+`tvine start: 8 workers on :3000`. A worker that crashes is restarted after a short pause; one that crashes more
+than 5 times in a minute stays down (logged in capitals) while the others keep serving. SIGTERM / SIGINT stop every
+worker gracefully (in-flight requests finish), then the main process exits.
+
+With more than one worker, start refuses (exit 1, nothing started) while anything is still in memory, and lists what
+to change:
+
+```
+tvine start: 8 workers need shared state, but these are in memory:
+  session.backend = memory        → session: { backend: 'redis' }
+  channels.backend = memory       → channels: { backend: 'redis' }
+  limits.backend = memory         → limits: { backend: 'redis' }
+  snapshotCache.backend = memory  → snapshotCache: { backend: 'redis' }
+  caches.default = memory         → caches: { default: { backend: 'redis' } }
+Add to config/settings/prod.ts:  redis: { default: { url: env.get('REDIS_URL') } }  and the lines above (REDIS_URL alone also fills settings.redis.default)
+(one worker keeps working without Redis: tvine start)
+```
+
+It also pings Redis once before starting any worker and exits 1 with the address if Redis does not answer.
+
+**Several servers.** Run `tvine start` (with or without `--workers`) on each, all pointing at one shared Redis and
+one database, and put any load balancer in front (nginx, Cloudflare, a cloud load balancer) with plain round-robin.
+Logins, carts, rate limits and caches work whichever server answers: no sticky sessions needed for them.
+
+**Containers.** Often one worker per container (the default) and you scale the number of containers; Redis is
+still shared by all of them.
+
+**Memory.** Each worker loads its own copy of the app (and of Next.js), so memory is about N × one worker
+(backlog #46 is about lighter workers).
+
+**Tab control is still pinned to one process.** A browser tab's agent connection lives on the worker/server that
+holds its event stream. `/tvine/channel`, `/tvine/tab/*`, `/tvine/agent/*` and `/mcp` (for `request_control`) must
+reach that same process; behind a load balancer route them by session (cookie `tvine_s`, or header
+`x-tvine-sid`). With `--workers` on one server the OS cannot route by cookie, so tab control is only reliable with
+one worker per server for now. Everything else can go anywhere.
 
 Split mode (Next on one server, `tvine start --api-only` on another) exists but is not recommended yet; don't
 start there.
