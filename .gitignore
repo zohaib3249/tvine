@@ -26,3 +26,7 @@ packages/tvine/llms-full.txt
 # local-only architecture map (built from the workflows notes)
 workflows.html
 brain/
+
+# local agent rules (private)
+.cursor/
+CLAUDE.local.md
