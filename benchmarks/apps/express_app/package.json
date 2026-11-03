@@ -1,0 +1,1 @@
+{ "name": "express_app", "private": true, "type": "module", "dependencies": { "express": "^5.1.0", "better-sqlite3": "^12.0.0", "redis": "^6.0.0" } }

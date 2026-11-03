@@ -14,6 +14,7 @@ server so AI agents can use your app. npm package `tvinejs`, imported and run as
 | [agents-and-mcp.md](agents-and-mcp.md) | MCP setup (Claude Code, Claude Desktop), tools, `read_page` / `ui` / `do`, tab control and Allow, WebMCP, the inspector |
 | [admin.md](admin.md) | Admin panel: ModelAdmin options, widgets, dashboard, charts, system pages |
 | [shield.md](shield.md) | Bot protection: rules, challenges, code rules, country rules, the /shield panel, rate limits |
+| [benchmark.md](benchmark.md) | Speed against raw Node, Express, FastAPI and Django; Shield cost, agent bursts and floods |
 | [auth-and-security.md](auth-and-security.md) | Users, 2FA, tokens, sessions, permissions, ALLOWED_HOSTS, CSP/CORS, audit, privacy, encryption keys |
 | [tasks-cache-email.md](tasks-cache-email.md) | Background tasks, cron, cache, email |
 | [testing.md](testing.md) | Test client and helpers |

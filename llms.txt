@@ -39,6 +39,7 @@ Inside a Tvine project the same files ship in the package: `node_modules/tvine/l
 - [testing.md](https://github.com/zohaib3249/tvine/blob/main/docs/testing.md): Test client and helpers
 - [cli.md](https://github.com/zohaib3249/tvine/blob/main/docs/cli.md): Every `tvine` command
 - [deploy.md](https://github.com/zohaib3249/tvine/blob/main/docs/deploy.md): Production checklist, proxies, Redis, Docker
+- [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md): Speed against raw Node, Express, FastAPI and Django; Shield cost, agent bursts and floods
 
 ## Reference (one topic per file: every option, default and example)
 

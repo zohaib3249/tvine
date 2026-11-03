@@ -1,0 +1,1 @@
+{ "name": "node_app", "private": true, "type": "module", "dependencies": { "better-sqlite3": "^12.0.0", "redis": "^6.0.0" } }

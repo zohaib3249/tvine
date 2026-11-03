@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tvine benchmark</title>
+<meta name="description" content="Tvine vs raw Node, Express, FastAPI and Django on the same JSON API, plus Shield overhead, agent bursts and floods.">
+<style>
+  :root { --bg: #fbfaf8; --panel: #ffffff; --line: #e6e3de; --fg: #1d1b18; --muted: #6b665e; --accent: #d9480f; --grid: #eeebe6;
+    --ok: #2b8a3e; --bad: #c92a2a; --c1: #868e96; --c2: #3b5bdb; --c3: #0c8599; --c4: #9c36b5; --c5: #cc5de8; --c6: #9c36b5;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14130f; --panel: #1c1b17; --line: #33312b; --fg: #ece9e2; --muted: #a39e93; --accent: #ff7a3d; --grid: #2a2824;
+    --ok: #69db7c; --bad: #ff8787; --c1: #a3a8ae; --c2: #748ffc; --c3: #3bc9db; --c4: #da77f2; --c5: #e599f7; --c6: #da77f2; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+  .wrap { max-width: 72rem; margin-inline: auto; padding: 2.5rem max(16px, env(safe-area-inset-left, 0px)) 4rem max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 2.5rem; }
+  h1 { font: 400 2.4rem/1.15 var(--serif); margin: 0; text-wrap: balance; }
+  h2 { font: 400 1.6rem/1.2 var(--serif); margin: 0; }
+  h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .lede { max-width: 64ch; font-size: 1.05rem; }
+  .lede b, .note b { font-variant-numeric: tabular-nums; }
+  .muted, .note { color: var(--muted); }
+  .note { font-size: .85rem; line-height: 1.45; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr)); gap: .75rem; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .9rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+  .tile .k { font-size: .8rem; color: var(--muted); }
+  .tile .v { font: 400 1.9rem/1.1 var(--serif); font-variant-numeric: tabular-nums; }
+  .v.bad { color: var(--bad); } .v.ok { color: var(--ok); } .v.accent { color: var(--accent); }
+  section { display: flex; flex-direction: column; gap: 1rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 1.1rem 1.2rem; display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { fill: var(--muted); font: 12px var(--sans); }
+  .chart .strong { fill: var(--fg); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .8rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .legend i { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: .35rem .6rem; font-size: .8rem; white-space: nowrap; z-index: 2; }
+  .tip .t { color: var(--muted); }
+  .tablebox { overflow: auto; max-height: 30rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 600; color: var(--muted); padding: .35rem .6rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); white-space: nowrap; }
+  td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .num { text-align: right; }
+  tr.mine td { font-weight: 600; }
+  .pill.ok { color: var(--ok); font-weight: 600; } .pill.bad { color: var(--bad); font-weight: 600; }
+  ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: .35rem; max-width: 72ch; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:.75rem">
+    <h1>Tvine benchmark</h1>
+    <p class="lede" id="lede"></p>
+    <p class="note" id="when"></p>
+  </header>
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <h2>Speed on one process</h2>
+    <p class="muted" style="max-width:70ch">Each app runs as one process in production mode with the same 10,000 rows. The load tool keeps 50 connections busy and sends the next request the moment one returns, so each bar is that framework's maximum. Shield and Tvine's rate limits are off here.</p>
+    <div class="card"><h3>Requests a second, by endpoint (more is better)</h3><p class="note">The same scale on every row. Raw Node and Express reach the load tool's own limit on the fast endpoints, so their real ceiling may be higher. Hover a bar for latency, CPU and memory.</p><div class="legend" id="lg-main"></div><div class="chart" id="ch-main"></div></div>
+    <div class="card"><h3>Every run</h3><p class="note">Median of three 15-second runs. Latency in milliseconds; server CPU 100% is one core.</p><div class="tablebox" id="tb-main"></div></div>
+  </section>
+
+  <section>
+    <h2>All cores and rising load</h2>
+    <div class="grid">
+      <div class="card"><h3>Eight processes each</h3><p class="note">200 connections from 4 load processes on the same 8 cores. Tvine has no built-in multi-process mode yet, so it ran under a small cluster wrapper.</p><div class="legend" id="lg-cores"></div><div class="chart" id="ch-cores"></div></div>
+      <div class="card"><h3>One process, more connections</h3><p class="note">One row by id, from 10 to 500 open connections. A flat line means the process was already full at 10.</p><div class="legend" id="lg-scale"></div><div class="chart" id="ch-scale"></div></div>
+    </div>
+    <div class="card"><h3>Fixed-rate ramp, eight processes</h3><p class="note">The client sends at a fixed rate; a step fails when p99 goes over the dashed line or more than 1% of requests fail (red dots). 100,000 a second was not reachable here: the load processes ran out of CPU first.</p><div class="legend" id="lg-ramp"></div><div class="chart" id="ch-ramp"></div></div>
+  </section>
+
+  <section>
+    <h2>Shield: cost, agents and floods</h2>
+    <div class="grid">
+      <div class="card"><h3>Cost per request</h3><p class="note">From 20,000 rotating IPs, so the rate limit never fired: this is the cost of the checks alone.</p><div class="tablebox" id="tb-ov"></div></div>
+      <div class="card"><h3>Agents over MCP</h3><p class="note">Agents calling MCP tools at once, with a Claude-User agent name and rotating IPs.</p><div class="tablebox" id="tb-mcp"></div></div>
+    </div>
+    <div class="card"><h3>A real visitor during a 30-second flood</h3><p class="note">While the flood runs, a separate visitor on another IP asks for a page five times a second. The bar is the share of the visitor's requests that were answered.</p><div class="chart" id="ch-flood"></div><div class="tablebox" id="tb-flood"></div>
+      <p class="note">A flood from one IP is turned away by the per-IP limit, which costs far less than serving it, so the visitor keeps getting pages. A flood spread over 1,000 IPs keeps each IP under the limit, so the single process fills up and the visitor's connections are reset. Stopping that needs a whole-site emergency mode and more processes.</p></div>
+  </section>
+
+  <section>
+    <h2>Where Tvine's time goes</h2>
+    <div class="card"><h3>Share of busy CPU, one process reading one row under load</h3><p class="note">From a CPU profile. The rate limiter is busy even with the limit lifted, because every anonymous request gets a new throwaway session; SQL statements are compiled again on every query. Both are fixable. The HTTP middleware is a small share.</p><div class="chart" id="ch-prof"></div></div>
+  </section>
+
+  <section>
+    <h2>How it was measured</h2>
+    <div class="card"><div class="tablebox" id="tb-setup"></div>
+      <ul>
+        <li>Everything ran on one laptop, so the load tool and the servers share the same cores. Read the numbers as this machine's limits, not a production ceiling.</li>
+        <li>SQLite rather than Postgres; Redis on the same machine.</li>
+        <li>Tvine ran as a full app with Next.js and security headers in the same process. Express, FastAPI and raw Node ran with no security middleware.</li>
+        <li>The scale, eight-process, MCP and flood results are single runs.</li>
+        <li>The code and the raw results: <code>benchmarks/</code> in the Tvine repository. <code>./run.sh</code> reruns everything; <code>node report.mjs</code> rebuilds this page.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<script type="application/json" id="data">{"main":[{"framework":"Tvine","endpoint":"Ping","rps":11765,"p50":4,"p99":8,"serverCpu":114,"rssMB":414,"clientCpu":44,"note":""},{"framework":"Tvine","endpoint":"One row","rps":7417,"p50":6,"p99":14,"serverCpu":109,"rssMB":388,"clientCpu":30,"note":""},{"framework":"Tvine","endpoint":"Page of 20","rps":4621,"p50":10,"p99":22,"serverCpu":108,"rssMB":387,"clientCpu":20,"note":""},{"framework":"Tvine","endpoint":"Redis cache","rps":7976,"p50":5,"p99":12,"serverCpu":121,"rssMB":2624,"clientCpu":24,"note":""},{"framework":"Tvine","endpoint":"Insert","rps":4844,"p50":9,"p99":20,"serverCpu":110,"rssMB":1778,"clientCpu":21,"note":""},{"framework":"Express","endpoint":"Ping","rps":48884,"p50":0,"p99":1,"serverCpu":96,"rssMB":141,"clientCpu":100,"note":"load tool near its limit: real ceiling may be higher"},{"framework":"Express","endpoint":"One row","rps":33859,"p50":1,"p99":2,"serverCpu":98,"rssMB":144,"clientCpu":85,"note":"load tool near its limit: real ceiling may be higher"},{"framework":"Express","endpoint":"Page of 20","rps":9478,"p50":5,"p99":10,"serverCpu":98,"rssMB":132,"clientCpu":31,"note":""},{"framework":"Express","endpoint":"Redis cache","rps":35337,"p50":1,"p99":3,"serverCpu":101,"rssMB":563,"clientCpu":79,"note":""},{"framework":"Express","endpoint":"Insert","rps":12941,"p50":2,"p99":17,"serverCpu":75,"rssMB":126,"clientCpu":41,"note":""},{"framework":"FastAPI","endpoint":"Ping","rps":17752,"p50":2,"p99":5,"serverCpu":94,"rssMB":38,"clientCpu":52,"note":""},{"framework":"FastAPI","endpoint":"One row","rps":4751,"p50":10,"p99":17,"serverCpu":186,"rssMB":93,"clientCpu":17,"note":""},{"framework":"FastAPI","endpoint":"Page of 20","rps":753,"p50":66,"p99":113,"serverCpu":294,"rssMB":91,"clientCpu":5,"note":""},{"framework":"FastAPI","endpoint":"Redis cache","rps":7061,"p50":6,"p99":22,"serverCpu":92,"rssMB":70,"clientCpu":25,"note":""},{"framework":"FastAPI","endpoint":"Insert","rps":3936,"p50":2,"p99":202,"serverCpu":107,"rssMB":38,"clientCpu":18,"note":""},{"framework":"Django (sync)","endpoint":"Ping","rps":1617,"p50":2337,"p99":4630,"serverCpu":65,"rssMB":30,"clientCpu":27,"note":"no keep-alive: limited by opening connections"},{"framework":"Django (sync)","endpoint":"One row","rps":920,"p50":2661,"p99":5350,"serverCpu":67,"rssMB":37,"clientCpu":21,"note":"no keep-alive: limited by opening connections"},{"framework":"Django (sync)","endpoint":"Page of 20","rps":864,"p50":2577,"p99":5600,"serverCpu":71,"rssMB":38,"clientCpu":20,"note":"no keep-alive: limited by opening connections"},{"framework":"Django (sync)","endpoint":"Redis cache","rps":1072,"p50":1902,"p99":5990,"serverCpu":56,"rssMB":38,"clientCpu":20,"note":"no keep-alive: limited by opening connections"},{"framework":"Django (sync)","endpoint":"Insert","rps":1302,"p50":2535,"p99":4830,"serverCpu":70,"rssMB":34,"clientCpu":22,"note":"no keep-alive: limited by opening connections"},{"framework":"Django (threads)","endpoint":"Ping","rps":2339,"p50":20,"p99":43,"serverCpu":110,"rssMB":59,"clientCpu":13,"note":""},{"framework":"Django (threads)","endpoint":"One row","rps":1251,"p50":36,"p99":109,"serverCpu":117,"rssMB":48,"clientCpu":9,"note":""},{"framework":"Django (threads)","endpoint":"Page of 20","rps":850,"p50":55,"p99":129,"serverCpu":178,"rssMB":49,"clientCpu":6,"note":""},{"framework":"Django (threads)","endpoint":"Redis cache","rps":1546,"p50":28,"p99":87,"serverCpu":110,"rssMB":48,"clientCpu":11,"note":""},{"framework":"Django (threads)","endpoint":"Insert","rps":1677,"p50":25,"p99":106,"serverCpu":117,"rssMB":48,"clientCpu":12,"note":""},{"framework":"Raw Node","endpoint":"Ping","rps":44525,"p50":0,"p99":2,"serverCpu":79,"rssMB":106,"clientCpu":97,"note":"load tool near its limit: real ceiling may be higher"},{"framework":"Raw Node","endpoint":"One row","rps":42098,"p50":1,"p99":2,"serverCpu":97,"rssMB":107,"clientCpu":95,"note":"load tool near its limit: real ceiling may be higher"},{"framework":"Raw Node","endpoint":"Page of 20","rps":9706,"p50":4,"p99":10,"serverCpu":96,"rssMB":95,"clientCpu":33,"note":""},{"framework":"Raw Node","endpoint":"Redis cache","rps":42156,"p50":1,"p99":2,"serverCpu":98,"rssMB":309,"clientCpu":95,"note":"load tool near its limit: real ceiling may be higher"},{"framework":"Raw Node","endpoint":"Insert","rps":13373,"p50":2,"p99":20,"serverCpu":74,"rssMB":131,"clientCpu":42,"note":""}],"allcores":[{"framework":"Raw Node","endpoint":"Ping","rps":99133,"p99":19,"serverCpu":299,"clientCpu":268},{"framework":"Raw Node","endpoint":"One row","rps":89330,"p99":20,"serverCpu":363,"clientCpu":253},{"framework":"Tvine","endpoint":"Ping","rps":33930,"p99":46,"serverCpu":457,"clientCpu":169},{"framework":"Tvine","endpoint":"One row","rps":17011,"p99":80,"serverCpu":417,"clientCpu":101},{"framework":"Express","endpoint":"Ping","rps":85582,"p99":17,"serverCpu":297,"clientCpu":254},{"framework":"Express","endpoint":"One row","rps":53921,"p99":42,"serverCpu":298,"clientCpu":177},{"framework":"FastAPI","endpoint":"Ping","rps":40653,"p99":71,"serverCpu":340,"clientCpu":170},{"framework":"FastAPI","endpoint":"One row","rps":15622,"p99":85,"serverCpu":539,"clientCpu":92},{"framework":"Django","endpoint":"Ping","rps":8809,"p99":145,"serverCpu":581,"clientCpu":66},{"framework":"Django","endpoint":"One row","rps":5666,"p99":167,"serverCpu":521,"clientCpu":53}],"scale":[{"framework":"Tvine","connections":10,"rps":7267,"p99":3},{"framework":"Tvine","connections":50,"rps":7471,"p99":14},{"framework":"Tvine","connections":200,"rps":6182,"p99":107},{"framework":"Tvine","connections":500,"rps":6314,"p99":162},{"framework":"Raw Node","connections":10,"rps":39709,"p99":0},{"framework":"Raw Node","connections":50,"rps":41981,"p99":2},{"framework":"Raw Node","connections":200,"rps":40842,"p99":9},{"framework":"Raw Node","connections":500,"rps":39873,"p99":22},{"framework":"Express","connections":10,"rps":34959,"p99":0},{"framework":"Express","connections":50,"rps":34973,"p99":2},{"framework":"Express","connections":200,"rps":34059,"p99":8},{"framework":"Express","connections":500,"rps":33297,"p99":27}],"ramp":[{"framework":"Tvine","target":1000,"achieved":1000,"p50":5.4,"p99":194,"errPct":0,"held":true},{"framework":"Express","target":1000,"achieved":1000,"p50":5,"p99":7.3,"errPct":0,"held":true},{"framework":"Express","target":5000,"achieved":5000,"p50":1.7,"p99":3,"errPct":0,"held":true},{"framework":"Tvine","target":5000,"achieved":5000,"p50":2.5,"p99":169.7,"errPct":0,"held":true},{"framework":"Tvine","target":10000,"achieved":10000,"p50":3.6,"p99":1782.9,"errPct":0,"held":false},{"framework":"Express","target":10000,"achieved":10000,"p50":1.4,"p99":6,"errPct":0,"held":true},{"framework":"Express","target":25000,"achieved":25000,"p50":1.4,"p99":12.9,"errPct":0,"held":true},{"framework":"Express","target":50000,"achieved":50000,"p50":2.3,"p99":168.3,"errPct":0,"held":true},{"framework":"Express","target":100000,"achieved":99997,"p50":61051.5,"p99":84928.1,"errPct":0,"held":false}],"overhead":[{"endpoint":"Ping","shield":"Off","rps":10650,"p99":10},{"endpoint":"One row","shield":"Off","rps":7154,"p99":15},{"endpoint":"Ping","shield":"On","rps":8604,"p99":12},{"endpoint":"One row","shield":"On","rps":6011,"p99":18}],"mcp":[{"tool":"read_page","agents":50,"shield":"On","rps":3333,"p99":35,"errors":0},{"tool":"read_page","agents":200,"shield":"On","rps":2353,"p99":178,"errors":0},{"tool":"action tool (items_get)","agents":50,"shield":"On","rps":1594,"p99":62,"errors":0},{"tool":"action tool (items_get)","agents":200,"shield":"On","rps":1348,"p99":439,"errors":0},{"tool":"read_page","agents":50,"shield":"Off","rps":3748,"p99":28,"errors":0},{"tool":"read_page","agents":200,"shield":"Off","rps":2150,"p99":125,"errors":0},{"tool":"action tool (items_get)","agents":50,"shield":"Off","rps":1669,"p99":56,"errors":0},{"tool":"action tool (items_get)","agents":200,"shield":"Off","rps":1844,"p99":130,"errors":0}],"flood":[{"attack":"One IP","connections":1000,"shield":"On","floodRps":19297,"turnedAway":99.9,"visitorOk":100,"visitorRequests":102,"visitorP50":73.1,"visitorP99":111.8},{"attack":"1,000 IPs","connections":1000,"shield":"On","floodRps":6304,"turnedAway":0,"visitorOk":0,"visitorRequests":130,"visitorP50":null,"visitorP99":null},{"attack":"One IP","connections":1000,"shield":"Off","floodRps":7073,"turnedAway":0,"visitorOk":2,"visitorRequests":51,"visitorP50":8482.1,"visitorP99":8482.1},{"attack":"One IP","connections":500,"shield":"On","floodRps":21151,"turnedAway":99.9,"visitorOk":100,"visitorRequests":122,"visitorP50":36.2,"visitorP99":54.1},{"attack":"1,000 IPs","connections":500,"shield":"On","floodRps":6100,"turnedAway":0,"visitorOk":86,"visitorRequests":86,"visitorP50":123.2,"visitorP99":9158.7},{"attack":"One IP","connections":500,"shield":"Off","floodRps":6991,"turnedAway":0,"visitorOk":95.6,"visitorRequests":91,"visitorP50":102.5,"visitorP99":8170.2}],"profile":[{"part":"tvine security/ratelimit","ms":3602,"share":17.5},{"part":"sqlite (better-sqlite3 JS)","ms":2582,"share":12.6},{"part":"tvine data/driver","ms":1489,"share":7.3},{"part":"tvine core/dispatch","ms":1257,"share":6.1},{"part":"(garbage collector)","ms":846,"share":4.1},{"part":"node:worker/js_transferable","ms":838,"share":4.1},{"part":"node:stream_base_commons","ms":789,"share":3.8},{"part":"tvine data/sql","ms":728,"share":3.5},{"part":"zod","ms":711,"share":3.5},{"part":"node:process/task_queues","ms":701,"share":3.4},{"part":"tvine transport/api","ms":590,"share":2.9},{"part":"(program)","ms":405,"share":2},{"part":"tvine views/generic","ms":404,"share":2},{"part":"node:crypto/random","ms":321,"share":1.6},{"part":"node:fs","ms":302,"share":1.5},{"part":"tvine data/queryset","ms":297,"share":1.4},{"part":"node:url","ms":264,"share":1.3},{"part":"tvine core/request","ms":261,"share":1.3},{"part":"node:timers","ms":243,"share":1.2},{"part":"node:async_context_frame","ms":189,"share":0.9},{"part":"tvine middleware/index","ms":188,"share":0.9},{"part":"node:_http_outgoing","ms":187,"share":0.9},{"part":"tvine data/pending","ms":175,"share":0.9}],"setup":[{"item":"Machine","value":"Apple M1 Pro, 8 cores, 16 GB; the load tool runs on the same machine"},{"item":"Runtimes","value":"Node 26.0.0, Python 3.14.6, SQLite 3.53.3 (WAL), Redis 7.2"},{"item":"Tvine","value":"tvinejs 0.3.1 (commit 752490f), Next 16.4.2, tvine start in production mode"},{"item":"Express","value":"Express 5.3.0 + better-sqlite3 12.11.1"},{"item":"FastAPI","value":"FastAPI 0.162.0 + uvicorn 0.54.0 (uvloop, httptools)"},{"item":"Django","value":"Django 5.2.18 + gunicorn 26.2.0: a sync worker, and gthread with 8 threads"},{"item":"Load","value":"autocannon 8.0.0; 5 s warm-up, then 3 × 15 s at 50 connections, median kept; an open-loop client for the fixed-rate ramp"},{"item":"Data","value":"the same 10,000 rows in every app; identical JSON responses checked before timing"}],"at":"2026-11-03T08:21:00.428Z"}</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('data').textContent)
+  const FW = ['Tvine', 'Raw Node', 'Express', 'FastAPI', 'Django (threads)', 'Django (sync)', 'Django']
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()
+  const COLOR = { 'Tvine': '--accent', 'Raw Node': '--c1', 'Express': '--c2', 'FastAPI': '--c3', 'Django (threads)': '--c4', 'Django (sync)': '--c5', 'Django': '--c6' }
+  const col = (fw) => 'var(' + (COLOR[fw] || '--c1') + ')'
+  const num = (n) => (n == null ? '—' : Math.round(n).toLocaleString('en-US'))
+  const ms = (v) => (v == null ? '—' : v >= 100 ? num(v) : v.toFixed(1))
+  const NS = 'http://www.w3.org/2000/svg'
+  const el = (tag, attrs = {}, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e }
+  const h = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e }
+  const by = (id) => document.getElementById(id)
+  let measure
+  const tw = (s) => { if (!measure) { measure = el('svg', { width: 0, height: 0, style: 'position:absolute;visibility:hidden' }); document.body.append(measure) } const t = el('text', { class: '' }, s); t.style.font = '12px ' + css('--sans'); measure.append(t); const w = t.getComputedTextLength(); t.remove(); return w }
+  const tipFor = (host) => {
+    const t = h('div', { class: 'tip' }); t.hidden = true; host.append(t)
+    return { show(ev, head, lines) { t.replaceChildren(h('div', { class: 't' }, head), ...lines.map((l) => h('div', {}, l))); t.hidden = false
+      const b = host.getBoundingClientRect(); let x = ev.clientX - b.left + 12, y = ev.clientY - b.top - t.offsetHeight - 8
+      if (x + t.offsetWidth > b.width) x = Math.max(0, ev.clientX - b.left - t.offsetWidth - 12); if (y < 0) y = ev.clientY - b.top + 14
+      t.style.left = x + 'px'; t.style.top = y + 'px' }, hide() { t.hidden = true } }
+  }
+  const legend = (id, names) => by(id).replaceChildren(...names.map((n) => { const s = h('span'); const i = h('i'); i.style.background = col(n); s.append(i, document.createTextNode(n)); return s }))
+  const svgIn = (host, w, hgt) => { const s = el('svg', { viewBox: '0 0 ' + w + ' ' + hgt, role: 'img' }); host.replaceChildren(s); return s }
+
+  // horizontal bars: one block per group, every block on one shared scale
+  function bars(id, rows, o) {
+    const host = by(id), w = Math.max(320, host.clientWidth || 700)
+    const groups = o.groups.filter((g) => rows.some((r) => r[o.gk] === g)), items = o.items.filter((i) => rows.some((r) => r[o.ik] === i))
+    const labelW = Math.max(...items.map(tw)) + 10, max = Math.max(...rows.map((r) => r[o.vk])) || 1, valW = tw(o.fmt(max)) + 8
+    const x = (vv) => (vv / max) * Math.max(40, w - labelW - valW), barH = 14, gap = 4, head = 20, bg = 14
+    const height = groups.length * (head + items.length * (barH + gap) + bg)
+    const s = svgIn(host, w, height); const tip = tipFor(host); let y = 0
+    for (const g of groups) {
+      if (o.showGroup !== false) s.append(el('text', { class: 'strong', x: 0, y: y + 13 }, g)); y += o.showGroup !== false ? head : 0
+      for (const it of items) {
+        const r = rows.find((d) => d[o.gk] === g && d[o.ik] === it); if (!r) continue
+        s.append(el('text', { x: labelW - 8, y: y + barH - 3, 'text-anchor': 'end' }, it))
+        const rect = el('rect', { x: labelW, y, width: Math.max(1, x(r[o.vk])), height: barH, rx: 2 }); rect.style.fill = o.color(r)
+        rect.addEventListener('pointermove', (ev) => tip.show(ev, g === it ? it : g + ' · ' + it, o.tip(r))); rect.addEventListener('pointerleave', () => tip.hide())
+        s.append(rect, el('text', { x: labelW + x(r[o.vk]) + 6, y: y + barH - 3 }, o.fmt(r[o.vk])))
+        y += barH + gap
+      }
+      y += bg
+    }
+    s.setAttribute('viewBox', '0 0 ' + w + ' ' + y)
+  }
+  // lines over a point x-axis; y linear or log
+  function lines(id, rows, o) {
+    const host = by(id), w = Math.max(320, host.clientWidth || 700), hgt = 240
+    const xs = [...new Set(rows.map((r) => r[o.xk]))].sort((a, b) => a - b), fws = FW.filter((f) => rows.some((r) => r.framework === f))
+    const s = svgIn(host, w, hgt), tip = tipFor(host)
+    const yMax = Math.max(o.minMax || 0, ...rows.map((r) => r[o.yk])), yMin = o.log ? 1 : 0
+    const ticks = o.log ? [1, 10, 100, 1000, 10000].filter((t) => t <= yMax * 1.5) : [0, 1, 2, 3, 4].map((i) => Math.round((yMax * i) / 4))
+    const left = Math.max(...ticks.map((t) => tw(o.ytick(t)))) + 10, right = Math.max(...fws.map(tw)) + 14, top = 10, bottom = 26
+    const X = (vv) => left + (xs.length === 1 ? 0.5 : xs.indexOf(vv) / (xs.length - 1)) * (w - left - right)
+    const Y = (vv) => { const a = o.log ? Math.log10(Math.max(1, vv)) : vv, lo = o.log ? 0 : yMin, hi = o.log ? Math.log10(yMax * 1.5) : yMax; return hgt - bottom - ((a - lo) / (hi - lo || 1)) * (hgt - top - bottom) }
+    for (const t of ticks) { const g = el('line', { x1: left, x2: w - right, y1: Y(t), y2: Y(t) }); g.style.stroke = 'var(--grid)'; s.append(g, el('text', { x: left - 6, y: Y(t) + 4, 'text-anchor': 'end' }, o.ytick(t))) }
+    for (const vv of xs) s.append(el('text', { x: X(vv), y: hgt - 6, 'text-anchor': 'middle' }, o.xtick(vv)))
+    if (o.limit) { const l = el('line', { x1: left, x2: w - right, y1: Y(o.limit), y2: Y(o.limit), 'stroke-dasharray': '4 4' }); l.style.stroke = 'var(--muted)'; s.append(l, el('text', { x: w - right, y: Y(o.limit) - 5, 'text-anchor': 'end' }, o.limitLabel)) }
+    for (const f of fws) {
+      const pts = rows.filter((r) => r.framework === f).sort((a, b) => a[o.xk] - b[o.xk])
+      const p = el('path', { d: pts.map((d, i) => (i ? 'L' : 'M') + X(d[o.xk]).toFixed(1) + ' ' + Y(d[o.yk]).toFixed(1)).join(' '), fill: 'none', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }); p.style.stroke = col(f); s.append(p)
+      for (const d of pts) { const c = el('circle', { cx: X(d[o.xk]), cy: Y(d[o.yk]), r: 4 }); c.style.fill = o.bad && o.bad(d) ? 'var(--bad)' : col(f)
+        c.addEventListener('pointermove', (ev) => tip.show(ev, f + ' · ' + o.xtick(d[o.xk]), o.tip(d))); c.addEventListener('pointerleave', () => tip.hide()); s.append(c) }
+      const last = pts[pts.length - 1], lab = el('text', { x: X(last[o.xk]) + 8, y: Y(last[o.yk]) + 4 }, f); lab.style.fill = col(f); s.append(lab)
+    }
+  }
+  function table(id, rows, cols, mine) {
+    const t = h('table'), tr = h('tr'); for (const c of cols) tr.append(h('th', c.num ? { class: 'num' } : {}, c.label)); const th = h('thead'); th.append(tr); const tb = h('tbody')
+    for (const r of rows) { const row = h('tr', mine && mine(r) ? { class: 'mine' } : {}); for (const c of cols) { const td = h('td', c.num ? { class: 'num' } : {}); const vv = c.fmt ? c.fmt(r[c.key], r) : r[c.key]; if (vv instanceof Node) td.append(vv); else td.textContent = vv == null ? '—' : String(vv); row.append(td) } tb.append(row) }
+    t.append(th, tb); by(id).replaceChildren(t)
+  }
+
+  const EPS = ['Ping', 'One row', 'Page of 20', 'Redis cache', 'Insert']
+  const one = (fw, ep) => (D.main.find((r) => r.framework === fw && r.endpoint === ep) || {}).rps
+  const ov = (ep, s) => (D.overhead.find((r) => r.endpoint === ep && r.shield === s) || {}).rps
+  const fl = (attack, c, s) => D.flood.find((r) => r.attack === attack && r.connections === c && r.shield === s) || {}
+  const tG = one('Tvine', 'One row'), eG = one('Express', 'One row'), fG = one('FastAPI', 'One row'), dG = one('Django (threads)', 'One row')
+  const tL = one('Tvine', 'Page of 20'), fL = one('FastAPI', 'Page of 20')
+  const cost = Math.round((1 - ov('One row', 'On') / ov('One row', 'Off')) * 1000) / 10
+  const ratio = (a, b) => (Math.round((a / b) * 10) / 10).toString()
+  const lede = by('lede'); const bold = (s) => { const b = h('b', {}, s); return b }
+  lede.append('One Tvine process answered ', bold(num(tG)), ' one-row reads a second. Express answered ', bold(num(eG)), ' on the same logic, ', bold(ratio(eG, tG) + '×'), ' more. Tvine was ', bold(ratio(tG, fG) + '×'), ' faster than FastAPI on one row and ', bold(ratio(tL, fL) + '×'), ' on a page of 20, and ', bold(ratio(tG, dG) + '×'), ' faster than Django. Shield cost ', bold(cost + '%'), ' and kept a real visitor at ', bold(fl('One IP', 1000, 'On').visitorOk + '%'), ' answered during a one-IP flood, against ', bold(fl('One IP', 1000, 'Off').visitorOk + '%'), ' without it.')
+  by('when').textContent = 'Measured ' + new Date(D.at).toUTCString().replace(/ GMT$/, ' UTC') + '.'
+  const tile = (k, vv, sub, cls) => { const d = h('div', { class: 'tile' }); d.append(h('span', { class: 'k' }, k), h('span', { class: 'v ' + (cls || '') }, vv), h('span', { class: 'k' }, sub)); return d }
+  by('tiles').append(
+    tile('Tvine, one row, 1 process', num(tG), 'requests a second', 'accent'),
+    tile('Express, same test', num(eG), 'requests a second'),
+    tile('vs FastAPI, page of 20', ratio(tL, fL) + '×', 'faster on Tvine', 'ok'),
+    tile('vs Django, one row', ratio(tG, dG) + '×', 'faster on Tvine', 'ok'),
+    tile('Shield cost, one row', cost + '%', 'fewer requests a second'),
+    tile('Visitor, 1,000-IP flood', fl('1,000 IPs', 1000, 'On').visitorOk + '%', 'of requests answered', 'bad'))
+
+  const draw = () => {
+    bars('ch-main', D.main, { gk: 'endpoint', groups: EPS, ik: 'framework', items: FW, vk: 'rps', fmt: num, color: (r) => col(r.framework), tip: (r) => [num(r.rps) + ' req/s', 'p50 ' + ms(r.p50) + ' ms · p99 ' + ms(r.p99) + ' ms', 'server CPU ' + r.serverCpu + '% · ' + num(r.rssMB) + ' MB'] })
+    bars('ch-cores', D.allcores, { gk: 'endpoint', groups: ['Ping', 'One row'], ik: 'framework', items: FW, vk: 'rps', fmt: num, color: (r) => col(r.framework), tip: (r) => [num(r.rps) + ' req/s', 'p99 ' + ms(r.p99) + ' ms', 'server CPU ' + num(r.serverCpu) + '% · load tool ' + num(r.clientCpu) + '%'] })
+    lines('ch-scale', D.scale, { xk: 'connections', yk: 'rps', xtick: (vv) => vv + ' conns', ytick: num, tip: (d) => [num(d.rps) + ' req/s', 'p99 ' + ms(d.p99) + ' ms'] })
+    lines('ch-ramp', D.ramp, { xk: 'target', yk: 'p99', log: true, minMax: 400, limit: 200, limitLabel: 'p99 limit 200 ms', xtick: (vv) => (vv >= 1000 ? vv / 1000 + 'k' : vv) + '/s', ytick: (t) => num(t) + ' ms', bad: (d) => !d.held, tip: (d) => ['reached ' + num(d.achieved) + '/s', 'p50 ' + ms(d.p50) + ' ms · p99 ' + ms(d.p99) + ' ms', 'errors ' + d.errPct + '% · ' + (d.held ? 'held' : 'failed')] })
+    const fls = [...D.flood].sort((a, b) => a.connections - b.connections || a.attack.localeCompare(b.attack) || b.shield.localeCompare(a.shield)).map((r) => ({ ...r, g: r.connections + ' flood connections', label: r.attack + ', Shield ' + r.shield }))
+    bars('ch-flood', fls, { gk: 'g', groups: ['500 flood connections', '1000 flood connections'], ik: 'label', items: ['One IP, Shield On', 'One IP, Shield Off', '1,000 IPs, Shield On'], vk: 'visitorOk', fmt: (vv) => vv + '%', color: (r) => (r.visitorOk < 50 ? 'var(--bad)' : r.shield === 'On' ? 'var(--ok)' : 'var(--c1)'), tip: (r) => ['visitor answered ' + r.visitorOk + '% of ' + r.visitorRequests, 'visitor p50 ' + ms(r.visitorP50) + ' ms', 'server answered ' + num(r.floodRps) + '/s, ' + r.turnedAway + '% turned away'] })
+    const top = [...D.profile].sort((a, b) => b.share - a.share).slice(0, 14).map((r) => ({ ...r, g: 'all' }))
+    bars('ch-prof', top, { gk: 'g', groups: ['all'], showGroup: false, ik: 'part', items: top.map((r) => r.part), vk: 'share', fmt: (vv) => vv + '%', color: (r) => (/^tvine /.test(r.part) ? 'var(--accent)' : 'var(--c1)'), tip: (r) => [r.share + '% of busy CPU', num(r.ms) + ' ms in the profile'] })
+  }
+  legend('lg-main', FW.filter((f) => D.main.some((r) => r.framework === f)))
+  legend('lg-cores', FW.filter((f) => D.allcores.some((r) => r.framework === f)))
+  legend('lg-scale', FW.filter((f) => D.scale.some((r) => r.framework === f)))
+  legend('lg-ramp', FW.filter((f) => D.ramp.some((r) => r.framework === f)))
+  const order = (r) => EPS.indexOf(r.endpoint) * 10 + FW.indexOf(r.framework)
+  table('tb-main', [...D.main].sort((a, b) => order(a) - order(b)), [{ key: 'framework', label: 'Framework' }, { key: 'endpoint', label: 'Endpoint' }, { key: 'rps', label: 'Req/s', num: true, fmt: num }, { key: 'p50', label: 'p50 ms', num: true, fmt: ms }, { key: 'p99', label: 'p99 ms', num: true, fmt: ms }, { key: 'serverCpu', label: 'Server CPU %', num: true, fmt: num }, { key: 'rssMB', label: 'Memory MB', num: true, fmt: num }, { key: 'note', label: 'Note' }], (r) => r.framework === 'Tvine')
+  const eps = [...new Set(D.overhead.map((r) => r.endpoint))]
+  table('tb-ov', eps.map((ep) => ({ endpoint: ep, off: ov(ep, 'Off'), on: ov(ep, 'On'), change: Math.round((ov(ep, 'On') / ov(ep, 'Off') - 1) * 1000) / 10 })), [{ key: 'endpoint', label: 'Endpoint' }, { key: 'off', label: 'Off req/s', num: true, fmt: num }, { key: 'on', label: 'On req/s', num: true, fmt: num }, { key: 'change', label: 'Change %', num: true }])
+  table('tb-mcp', [...D.mcp].sort((a, b) => a.tool.localeCompare(b.tool) || a.agents - b.agents || a.shield.localeCompare(b.shield)), [{ key: 'tool', label: 'Tool' }, { key: 'agents', label: 'Agents', num: true }, { key: 'shield', label: 'Shield' }, { key: 'rps', label: 'Req/s', num: true, fmt: num }, { key: 'p99', label: 'p99 ms', num: true, fmt: ms }])
+  const pill = (vv) => { const s = h('span', { class: 'pill ' + (vv < 50 ? 'bad' : vv >= 99 ? 'ok' : '') }, vv + ''); return s }
+  table('tb-flood', [...D.flood].sort((a, b) => a.connections - b.connections || a.attack.localeCompare(b.attack) || b.shield.localeCompare(a.shield)), [{ key: 'attack', label: 'Flood from' }, { key: 'connections', label: 'Connections', num: true }, { key: 'shield', label: 'Shield' }, { key: 'floodRps', label: 'Server answered req/s', num: true, fmt: num }, { key: 'turnedAway', label: 'Turned away %', num: true }, { key: 'visitorOk', label: 'Visitor answered %', num: true, fmt: pill }, { key: 'visitorP50', label: 'Visitor p50 ms', num: true, fmt: ms }, { key: 'visitorP99', label: 'Visitor p99 ms', num: true, fmt: ms }])
+  table('tb-setup', D.setup, [{ key: 'item', label: 'Item' }, { key: 'value', label: 'Value' }])
+  draw()
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(draw, 150) })
+})()
+</script>
+</body>
+</html>

@@ -142,6 +142,7 @@ Full guide: [agents-and-mcp.md](https://github.com/zohaib3249/tvine/blob/main/do
 | Admin panel, dashboard, charts, system pages | [admin.md](https://github.com/zohaib3249/tvine/blob/main/docs/admin.md) |
 | Auth, 2FA, tokens, permissions, security features | [auth-and-security.md](https://github.com/zohaib3249/tvine/blob/main/docs/auth-and-security.md) |
 | Bot protection (Shield): rules, challenges, code rules, analytics globe | [shield.md](https://github.com/zohaib3249/tvine/blob/main/docs/shield.md) |
+| Performance: Tvine vs raw Node, Express, FastAPI and Django; Shield under floods | [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md) · [interactive page](https://htmlpreview.github.io/?https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.html) |
 | Background tasks, cache, email | [tasks-cache-email.md](https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md) |
 | Testing | [testing.md](https://github.com/zohaib3249/tvine/blob/main/docs/testing.md) |
 | Every CLI command | [cli.md](https://github.com/zohaib3249/tvine/blob/main/docs/cli.md) |
