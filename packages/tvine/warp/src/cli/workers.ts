@@ -59,8 +59,6 @@ export async function pingRedis(settings: Settings): Promise<string | undefined>
   } finally { await closeRedis() }
 }
 
-// tab control keeps each tab in the worker holding its stream (backlog #53: route it through Redis)
-export const TAB_WARNING = 'tvine start: browser-tab agent control (request_control) needs one worker for now: an agent\'s commands can reach a worker that does not hold the tab. Logins, carts, limits and caches work on every worker.'
 const WINDOW_MS = 60_000, MAX_RESTARTS = 5, STOP_MS = 10_000
 
 // the primary: fork n workers, restart a crashed one (backoff 0.5 s, 1 s, 2 s …; more than 5 in a minute = that slot
@@ -71,7 +69,7 @@ export function runPrimary(n: number, io: { out(s: string): void; err(s: string)
   const fork = (slot: number) => {
     const w = cluster.fork({ TVINE_WORKER: String(slot) })
     live.add(w)
-    w.on('listening', (a) => { if (up.size < n && !up.has(slot) && up.add(slot).size === n) { io.out(`tvine start: ${n} workers on :${a.port}`); io.err(TAB_WARNING) } })
+    w.on('listening', (a) => { if (up.size < n && !up.has(slot) && up.add(slot).size === n) { io.out(`tvine start: ${n} workers on :${a.port}`) } })
     w.on('exit', (code, sig) => {
       live.delete(w)
       if (stopping) { if (!live.size) io.exit(0); return }

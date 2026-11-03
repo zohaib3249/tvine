@@ -21,8 +21,8 @@ import { limiterFor } from '../backends/index.js'
 import { metrics } from '../core/metrics.js'
 
 // a hub limiter from settings.limits.backend, its keys namespaced so two hub limiters never share a bucket
-type TabLimiter = { check(k: { sid: string }): ReturnType<Limiter['check']> }
-function tabLimiter(server: ServerCtx, ns: string, rate: { limit: number; windowMs: number }): TabLimiter {
+export type TabLimiter = { check(k: { sid: string }): ReturnType<Limiter['check']> }
+export function tabLimiter(server: ServerCtx, ns: string, rate: { limit: number; windowMs: number }): TabLimiter {
   const l = limiterFor(server.settings, rate)
   return { check: (k) => l.check({ sid: `tab-${ns}|${k.sid}` }) }
 }
@@ -41,6 +41,7 @@ export const TAB_LIMITS = {
   resultBytes: 1_048_576,     // a result POST (a full page read) may exceed limits.bodyBytes
 }
 
+type MaybePromise<T> = T | Promise<T>
 export type Frame = (event: string, data: unknown) => void
 export type TabOp = 'ui' | 'read' | 'expand' | 'do'
 export type TabAnswer = { ok: true; data: unknown } | { ok: false; code: ErrCode; reason?: string; message: string }
@@ -54,16 +55,16 @@ interface Tab { id: string; sid: Sid; doc: string; send?: Frame; gone?: ReturnTy
 interface Ask { id: string; agentSid: Sid; name: string; exp: number; code: string; codeExp: number; approveUrl: string; tabId?: string }
 interface Held { tabId: string; name: string; since: number; used: number }
 
-const token = () => randomBytes(16).toString('base64url')
-const hashId = (s: string) => createHash('sha256').update(`tab:${s}`).digest('hex').slice(0, 16)   // 128 bit
+export const token = () => randomBytes(16).toString('base64url')
+export const hashId = (s: string) => createHash('sha256').update(`tab:${s}`).digest('hex').slice(0, 16)   // 128 bit
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
-const newCode = () => [...randomBytes(8)].map((b) => CROCKFORD[b & 31]).join('')
+export const newCode = () => [...randomBytes(8)].map((b) => CROCKFORD[b & 31]).join('')
 // what the human types: case-insensitive, dashes/spaces ignored, Crockford look-alikes folded
 export const normCode = (s: string) => s.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1').slice(0, 16)
-const fmtCode = (c: string) => `${c.slice(0, 4)}-${c.slice(4)}`
+export const fmtCode = (c: string) => `${c.slice(0, 4)}-${c.slice(4)}`
 // declared name: ≤ 40 chars, control/bidi chars stripped; never verified
 export const cleanName = (s: unknown) => (typeof s === 'string' ? s : '').replace(/[\0-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '').trim().slice(0, 40) || 'Agent'
-const fail = (code: ErrCode, reason: string | undefined, message: string): TabAnswer => ({ ok: false, code, ...(reason && { reason }), message })
+export const fail = (code: ErrCode, reason: string | undefined, message: string): TabAnswer => ({ ok: false, code, ...(reason && { reason }), message })
 
 export class TabHub {
   private tabs = new Map<string, Tab>()
@@ -75,8 +76,8 @@ export class TabHub {
   private tail = new Map<Sid, number>()                  // session sid → stays agent until (after its last command)
   private fails = new Map<string, { n: number; until: number }>()   // ip → wrong pairing codes
   // settings.limits.backend: shared across servers on 'redis' (each limiter in its own key space)
-  private askRate: TabLimiter     // request_control per agent sid / per ip
-  private codeRate: TabLimiter    // pairing tries per tab / per ip
+  protected askRate: TabLimiter     // request_control per agent sid / per ip
+  protected codeRate: TabLimiter    // pairing tries per tab / per ip
   private cmdRate = new RateLimiter({ limit: 10, windowMs: 3_334 })     // forwarded commands per tab: 10 burst, 3/s
   private readRate = new RateLimiter({ limit: 30, windowMs: 1_000 })    // read_page/expand per tab: their own, generous 30/s
   readonly helloRate: TabLimiter  // hello (mints sessions) per ip
@@ -85,7 +86,7 @@ export class TabHub {
   private unwatch: () => void
   private unrotate: () => void
 
-  constructor(private server: ServerCtx) {
+  constructor(protected server: ServerCtx) {
     this.askRate = tabLimiter(server, 'ask', { limit: 5, windowMs: 60_000 })
     this.codeRate = tabLimiter(server, 'code', { limit: 5, windowMs: 60_000 })
     this.helloRate = tabLimiter(server, 'hello', { limit: 30, windowMs: 10_000 })
@@ -109,7 +110,7 @@ export class TabHub {
 
   get size(): number { return this.tabs.size }   // metrics: connected tabs
   // tvine.admin's Agents page: the tabs an agent controls now. ids are hashes (never a tab token or a sid).
-  controlled(): { id: string; session: string; since: number; agent: string; used: number }[] {
+  controlled(): MaybePromise<{ id: string; session: string; since: number; agent: string; used: number }[]> {
     const out = []
     for (const [agentSid, h] of this.held) {
       const t = this.tabs.get(h.tabId)
@@ -118,7 +119,7 @@ export class TabHub {
     return out
   }
   // the admin's Stop: the same release as the human's Stop pill
-  revoke(id: string): boolean {
+  revoke(id: string): MaybePromise<boolean> {
     for (const t of this.tabs.values()) if (t.agent && hashId(t.id) === id) { this.release(t, 'human', 'not_connected'); return true }
     return false
   }
@@ -130,7 +131,7 @@ export class TabHub {
   // A live stream is taken over only by the same document (per-page nonce `doc`): another tab of the
   // session that learned the tabId gets a tab of its own. ponytail: a reload whose old stream is still
   // open gets a new tab (its control ends with the old one's grace); add a handoff if that bites.
-  open(sid: Sid, send: Frame, want?: string, doc = ''): string {
+  open(sid: Sid, send: Frame, want?: string, doc = ''): MaybePromise<string> {
     const old = want ? this.tabs.get(want) : undefined
     if (old && old.sid === sid && (!old.send || (doc !== '' && old.doc === doc))) {
       clearTimeout(old.gone); old.gone = undefined
@@ -184,7 +185,7 @@ export class TabHub {
   }
 
   // Where an agent's ui/read_page/expand/do goes: its tab, a pending approval, a note, or (undefined) headless.
-  state(agentSid: Sid | undefined): AgentState | undefined {
+  state(agentSid: Sid | undefined): MaybePromise<AgentState | undefined> {
     if (!agentSid) return undefined
     const h = this.held.get(agentSid)
     if (h) {
@@ -208,23 +209,14 @@ export class TabHub {
     if (!rl.ok) return { ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` }
     h.used = Date.now()
     const cmdId = token(), sid = tab.sid
-    // every server must see the session as agent BEFORE the tab runs the command (its requests may land anywhere)
-    this.busy.set(sid, (this.busy.get(sid) ?? 0) + 1)
-    try { await this.share(sid) } catch (e) {
-      this.unbusy(sid)
-      this.server.log('error', 'tab: agent marking failed; command not forwarded', { error: String(e) })
-      return fail('internal', undefined, 'internal error')
-    }
-    if (!tab.send || tab.agent !== agentSid) { this.unbusy(sid); void this.share(sid).catch(() => undefined); return fail('domain', 'stopped', 'control of the tab ended') }
+    const bad = await this.begin(sid)
+    if (bad) return bad
+    if (!tab.send || tab.agent !== agentSid) { this.settle(sid); return fail('domain', 'stopped', 'control of the tab ended') }
     return new Promise((resolve) => {
       const done = (a: TabAnswer) => {
         if (!tab.pending.delete(cmdId)) return
         clearTimeout(timer)
-        this.unbusy(sid)
-        // answered (or Stop, which aborts it in the tab) → short tail; no answer → it may still be running there
-        const ran = a.ok || a.reason === 'stopped'
-        this.tail.set(sid, Math.max(this.tail.get(sid) ?? 0, Date.now() + (ran ? TAB_LIMITS.tailMs : TAB_LIMITS.driftMs)))
-        void this.share(sid).catch((e: unknown) => this.server.log('error', 'tab: agent marking failed', { error: String(e) }))
+        this.settle(sid, a)
         resolve(a)
       }
       const timer = setTimeout(() => done(fail('domain', 'timeout', 'the tab did not answer in time; the step may have run: read_page before retrying')), TAB_LIMITS.cmdMs)
@@ -232,6 +224,24 @@ export class TabHub {
       tab.pending.set(cmdId, { resolve: done })
       tab.send!('cmd', { cmdId, op, payload })
     })
+  }
+
+  // every server must see the session as agent BEFORE the tab runs the command (its requests may land anywhere):
+  // a failed marking forwards nothing (the answer is returned)
+  protected async begin(sid: Sid): Promise<TabAnswer | undefined> {
+    this.busy.set(sid, (this.busy.get(sid) ?? 0) + 1)
+    try { await this.share(sid); return undefined } catch (e) {
+      this.unbusy(sid)
+      this.server.log('error', 'tab: agent marking failed; command not forwarded', { error: String(e) })
+      return fail('internal', undefined, 'internal error')
+    }
+  }
+  // a begun command ended: `a` its answer (none = it was never sent)
+  protected settle(sid: Sid, a?: TabAnswer): void {
+    this.unbusy(sid)
+    // answered (or Stop, which aborts it in the tab) → short tail; no answer → it may still be running there
+    if (a) this.tail.set(sid, Math.max(this.tail.get(sid) ?? 0, Date.now() + (a.ok || a.reason === 'stopped' ? TAB_LIMITS.tailMs : TAB_LIMITS.driftMs)))
+    void this.share(sid).catch((e: unknown) => this.server.log('error', 'tab: agent marking failed', { error: String(e) }))
   }
 
   // dispatch(): while a forwarded command runs in a tab of this session, every request of it is agent.
@@ -260,7 +270,7 @@ export class TabHub {
     }
   }
   // this server's marking of `sid`, published: busy → until the command's answer could still come (cmdMs + drift);
-  // else the tail. Only the server holding the session's tabs writes it (tabs are pinned to their stream).
+  // else the tail. Each server writes its own (marks keeps one entry per process; the session is agent while any is live).
   private share(sid: Sid): Promise<void> {
     const m = this.server.marks
     if (!m) return Promise.resolve()
@@ -269,7 +279,7 @@ export class TabHub {
     return m.set(sid, Math.max(0, until - now))
   }
 
-  releaseAgent(agentSid: Sid): void {
+  releaseAgent(agentSid: Sid): MaybePromise<void> {
     for (const a of [...this.asks.values()]) if (a.agentSid === agentSid) this.asks.delete(a.id)
     this.notes.delete(agentSid)
     const h = this.held.get(agentSid), tab = h && this.tabs.get(h.tabId)
@@ -288,14 +298,14 @@ export class TabHub {
     tab.send?.('release', { why })
   }
 
-  private expired(sid: Sid): void {
+  protected expired(sid: Sid): void {
     for (const t of [...this.tabs.values()]) if (t.sid === sid) this.drop(t)
     if (this.held.has(sid)) this.releaseAgent(sid)
     for (const a of [...this.asks.values()]) if (a.agentSid === sid) this.asks.delete(a.id)
     this.notes.delete(sid)
   }
 
-  private sweep(): void {
+  protected sweep(): void {
     const now = Date.now()
     for (const a of [...this.asks.values()]) if (a.exp <= now) { this.asks.delete(a.id); this.notes.set(a.agentSid, { reason: 'timeout', at: now }) }
     for (const h of [...this.held.values()]) if (now - h.used > TAB_LIMITS.idleMs) { const t = this.tabs.get(h.tabId); if (t) this.release(t, 'idle', 'not_connected') }
@@ -305,14 +315,15 @@ export class TabHub {
   }
 
   // ---- tab side (POST /tvine/tab/*) --------------------------------------------------------
-  own(session: Session, tabId: unknown): Tab | undefined {
+  own(session: Session, tabId: unknown): MaybePromise<boolean> { return !!this.mine(session, tabId) }
+  private mine(session: Session, tabId: unknown): Tab | undefined {
     const t = typeof tabId === 'string' ? this.tabs.get(tabId) : undefined
     return t && t.sid === session.sid ? t : undefined
   }
 
   // The tab opened approveUrl: show the prompt there (first tab wins), or answer busy for an already controlled tab.
-  show(session: Session, b: Record<string, unknown>): [number, unknown] {
-    const tab = this.own(session, b.tabId)
+  show(session: Session, b: Record<string, unknown>): MaybePromise<[number, unknown]> {
+    const tab = this.mine(session, b.tabId)
     if (!tab) return [403, { error: 'not your tab' }]
     const ask = typeof b.requestId === 'string' ? this.asks.get(b.requestId) : undefined
     if (!ask || ask.exp <= Date.now() || (ask.tabId !== undefined && ask.tabId !== tab.id)) return [404, { error: 'this request expired or was already used' }]
@@ -323,7 +334,7 @@ export class TabHub {
   }
 
   async approve(session: Session, b: Record<string, unknown>, ip: string): Promise<[number, unknown]> {
-    const tab = this.own(session, b.tabId)
+    const tab = this.mine(session, b.tabId)
     if (!tab) return [403, { error: 'not your tab' }]
     const now = Date.now()
     let ask: Ask | undefined
@@ -370,8 +381,8 @@ export class TabHub {
     return reason === 'busy' ? [409, { error: 'busy: another agent controls this tab' }] : [200, { denied: true }]
   }
 
-  result(session: Session, b: Record<string, unknown>): [number, unknown] {
-    const tab = this.own(session, b.tabId)
+  result(session: Session, b: Record<string, unknown>): MaybePromise<[number, unknown]> {
+    const tab = this.mine(session, b.tabId)
     if (!tab) return [403, { error: 'not your tab' }]
     const p = typeof b.cmdId === 'string' ? tab.pending.get(b.cmdId) : undefined
     if (!p) return [409, { error: 'no such pending command' }]   // forged, late or replayed: dropped
@@ -379,8 +390,8 @@ export class TabHub {
     return [200, { ok: true }]
   }
 
-  stop(session: Session, b: Record<string, unknown>): [number, unknown] {
-    const tab = this.own(session, b.tabId)
+  stop(session: Session, b: Record<string, unknown>): MaybePromise<[number, unknown]> {
+    const tab = this.mine(session, b.tabId)
     if (!tab) return [403, { error: 'not your tab' }]
     this.release(tab, 'human', 'not_connected')
     return [200, { ok: true }]
@@ -460,15 +471,15 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
       return send(res, 200, { ok: true }, { 'set-cookie': cookieHeader(settings, c) })
     }
     if (!session) return send(res, 401, { error: 'no session' })
-    if (!hub.own(session, tabId)) return send(res, 403, { error: 'not your tab' })
+    if (!(await hub.own(session, tabId))) return send(res, 403, { error: 'not your tab' })
     if (op !== 'release' && !(await hub.tabRate.check({ sid: `tab:${tabId}` })).ok) return tooMany(res)
     const b = await body(req, op === 'result' ? TAB_LIMITS.resultBytes : settings.limits.bodyBytes)
     if (!b) { res.setHeader('connection', 'close'); return send(res, 400, { error: 'body must be a JSON object' }) }
     b.tabId = tabId
-    const [status, out] = op === 'request' ? hub.show(session, b)
+    const [status, out] = op === 'request' ? await hub.show(session, b)
       : op === 'approve' ? await hub.approve(session, b, ip)
-      : op === 'result' ? hub.result(session, b)
-      : hub.stop(session, b)
+      : op === 'result' ? await hub.result(session, b)
+      : await hub.stop(session, b)
     send(res, status, out)
   }
 
@@ -479,7 +490,7 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     const ip = ipOf(req)
     const sidKey = hdr(req, 'x-tvine-sid') ?? (typeof b.sid === 'string' ? b.sid : undefined)
     if (op === 'release') {
-      if (sidKey && await sessions.peek({ sid: sidKey })) hub.releaseAgent(sidKey)
+      if (sidKey && await sessions.peek({ sid: sidKey })) await hub.releaseAgent(sidKey)
       return send(res, 200, { ok: true })
     }
     if (!(await server.limiter.check({ ip })).ok) return tooMany(res)

@@ -150,7 +150,8 @@ export const systemLogs = defineAction('admin.system.logs', z.object({
 }, superuser)
 
 // ---- agents ----------------------------------------------------------------------------------------------------------------
-type Hub = { controlled?(): { id: string; session: string; since: number; agent: string; used: number }[]; revoke?(id: string): boolean }
+type Hub = { controlled?(): Promise<Row[]> | Row[]; revoke?(id: string): Promise<boolean> | boolean }
+type Row = { id: string; session: string; since: number; agent: string; used: number }
 const tabsOf = () => (runtime.ctx?.tabs ?? {}) as Hub
 export const systemAgents = defineAction('admin.system.agents', z.object({ range: rangeParam.optional() }), async ({ range }) => {
   const c = col(), now = Date.now()
@@ -159,7 +160,7 @@ export const systemAgents = defineAction('admin.system.agents', z.object({ range
     (r) => (AGENT_VIA.has(r.dims.v ?? '') ? 'agent' : 'human'))
   const refusals: Record<string, number> = { human_only: 0, confirm: 0 }
   for (const r of act.rows) { if (r.dims.o === 'human_only') refusals.human_only! += r.count; if (r.dims.o === 'confirm_required') refusals.confirm! += r.count }
-  const hubTabs = tabsOf().controlled?.() ?? []
+  const hubTabs = await tabsOf().controlled?.() ?? []
   return {
     activity: { ...activity, title: 'Human vs agent actions', type: 'stacked', unit: 'count' } as ChartData,
     topAgents: table(['Agent (unverified)', 'Via', 'Actions'], topOf(ag.rows, (r) => `${r.dims.n}\u0000${r.dims.v}`).map(([k, a]) => [...k.split('\u0000'), a.count])),
@@ -179,7 +180,7 @@ const errorsOf = (rows: StatRow[], action: string, agentOnly: boolean) =>
 
 // the admin's Stop: ends an agent's control of a tab (the tab hub's own release; the agent is told it was stopped)
 export const systemRevokeTab = defineAction('admin.system.revokeTab', z.object({ id: z.string().regex(/^[0-9a-f]{16}$/) }), async ({ id }) => {
-  if (!tabsOf().revoke?.(id)) throw new DomainError('not_found', 'no agent controls that tab now')
+  if (!(await tabsOf().revoke?.(id))) throw new DomainError('not_found', 'no agent controls that tab now')
   return { ok: true }
 }, { permissions: [staffGuard, isSuperuser, denyAgents] })   // a human superuser only: it ends someone's agent session
 

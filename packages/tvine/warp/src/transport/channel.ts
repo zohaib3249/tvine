@@ -132,8 +132,9 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
       // tab frames (hello/request/control/release/cmd) go to this stream only, never to the session group;
       // JSON.stringify keeps every value on one data line (no frame injection from an agent's name)
       const tf: Frame = (event, data) => { if (!closed) safe(() => { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`) }) }
-      const tabId = deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined, (url.searchParams.get('doc') ?? '').slice(0, 64))
+      const tabId = await deps.tabs!.open(sid, tf, url.searchParams.get('tab') || undefined, (url.searchParams.get('doc') ?? '').slice(0, 64))
       untab = () => deps.tabs!.gone(tabId, tf)
+      if (closed) untab()   // the stream ended while a shared hub registered the tab
     }
 
     // subscribe first, replay second: an event sent while the replay is read is held, then sent once (by seq)
