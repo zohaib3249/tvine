@@ -1,13 +1,16 @@
 // The inspector UI: one static page + three GET endpoints, on loopback only. It reaches the target only
 // through public surfaces (agent GETs, /tvine/channel?group=inspector, /tvine/manifest), so every
 // target guard still applies: the page sees exactly what any agent would.
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { sidHashLog as sidHash } from '../../warp/dist/security/sid-hash.js'
 
 export interface InspectorOptions { target: string; port?: number }
 export interface Inspector { url: string; address: string; port: number; close(): Promise<void> }
+
+// inspect builds before warp (warp's cli imports inspect/dist), so it cannot import warp/dist: same digest as warp's sidHashLog
+const sidHash = (sid: string) => (sid ? createHash('sha256').update(sid).digest('base64url').slice(0, 12) : '')
 
 const HOST = '127.0.0.1'   // ponytail: loopback only, no --host flag; the page proxies a dev server's agent view
 const PAGE = new URL('../static/index.html', import.meta.url)
