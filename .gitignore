@@ -22,3 +22,6 @@ docs/superpowers/
 packages/tvine/docs/
 packages/tvine/llms.txt
 packages/tvine/llms-full.txt
+
+# local-only architecture map (built from the workflows notes)
+workflows.html
