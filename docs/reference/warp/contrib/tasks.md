@@ -3,8 +3,8 @@
 ## What it is
 
 `tvine.tasks` runs work outside the request: background jobs, retries, timeouts, periodic (cron) jobs, and job
-chains, in the style of Celery. You define tasks with `defineTask` in `apps/<app>/tasks.ts`, enqueue them from
-actions with `.delay(args)`, and run them in `tvine worker`. Jobs are stored by a broker: a local SQLite file by
+chains. You define tasks with `defineTask` in `apps/<app>/tasks.ts`, enqueue them from
+actions with `.delay(args)`, and run them in job workers (`tvine worker`). Jobs are stored by a broker: a local SQLite file by
 default, Redis for several hosts, your app's database, or memory for tests. Source:
 `packages/tvine/warp/src/contrib/tasks/`.
 
@@ -26,7 +26,28 @@ tvine worker --beat          # also fire scheduled tasks (several --beat process
 ```
 
 No middleware is needed. The web server discovers tasks at boot (so actions can enqueue them) and relays job
-progress to the browser; it does **not** run jobs, except with `broker: 'memory'`.
+progress to the browser; it does **not** run jobs or schedules, except with `broker: 'memory'` (jobs only) or
+`tvine start --with-worker [--beat]`. With only `tvine start`, queued jobs wait and schedules never fire; about 30 s
+after start it prints once:
+
+```
+tvine start: background jobs are queued but no job worker is running. Start one: tvine worker --beat   (see docs/deploy.md#background-jobs)
+```
+
+(not in `tvine dev`, not with broker `memory`, not with `--with-worker`; it reads the broker's worker heartbeats).
+How to run both in production: [deploy.md](../../../deploy.md#how-a-tvine-app-runs-in-production).
+
+### Job workers
+
+| | |
+|---|---|
+| Claiming | a worker claims up to `claimBatch` jobs with a lease (`leaseMs`, 30 s) and renews it every `leaseMs / 3` while they run |
+| Run once | only the lease holder may finish a job (a token fences it); several workers never run the same attempt |
+| A worker dies | its lease expires, the reaper puts the job back, another worker runs it (counted as an attempt) |
+| How many | any number of processes and machines that reach the broker; `--concurrency` jobs at once each (default 10) |
+| Who is alive | each worker registers in the broker and heartbeats; one silent longer than `leaseMs` is stale. `tvine check`, `/tvine/health` (`workers`, `staleWorkers`) and the admin's Job workers tile read this |
+| Stop | SIGTERM: stop claiming, finish within `--grace` (`graceMs`), put the rest back (attempt not spent); a second signal exits now |
+| In the web process | `tvine start --with-worker [--concurrency n] [--beat]`: one job worker (and scheduler) inside the web server; with `--workers` > 1 only web worker 1 runs it; stop waits up to `graceMs` for running jobs |
 
 ## Import
 
@@ -149,8 +170,10 @@ schedule: { every: 15 * 60_000, args: { full: false } }   // every n ms (>= 1000
 | `misfire` | `'once'` | after downtime longer than `graceMs`: `'once'` = run one catch-up, `'skip'` = none, `'all'` = every missed run (max 100) |
 | `graceMs` | `60_000` | lateness that still counts as on time |
 
-Run the beat with `tvine worker --beat`. Several beats may run: one leads (a lock in the broker) and a fire time is
-never sent twice. Schedules can also live in `config/tasks.ts` (or `settings.tasksModule`):
+Run the scheduler with `tvine worker --beat` (or `tvine start --with-worker --beat`). Several `--beat` workers are
+safe and recommended for failover: one holds the scheduler lock (renewed every 10 s, 30 s lease), the others stand
+by and take over within ~30 s when it dies (at once after a clean stop), and a fire time is never sent twice (a
+compare-and-set in the broker). `tvine check` and the admin show the leader's name, or `scheduler off`. Schedules can also live in `config/tasks.ts` (or `settings.tasksModule`):
 
 ```ts
 // config/tasks.ts
@@ -162,23 +185,27 @@ export const beatSchedule = { 'orders.closeStaleCarts': { cron: '*/30 * * * *' }
 
 ## Commands
 
+Every flag with its default: [cli.md](../../../cli.md#jobs) (or `tvine worker --help`).
+
 | Command | Meaning |
 |---|---|
-| `tvine worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]` | run jobs; `--queues '*'` = all. SIGTERM: stop claiming, finish or release running jobs within the grace; a second signal exits now |
+| `tvine worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]` | a job worker; `--queues '*'` (default, or `queues` in `config/tasks.ts`) = all; `--beat` = also the scheduler |
+| `tvine start --with-worker [--concurrency 10] [--beat]` | a job worker inside the web process (small sites) |
 | `tvine tasks list [--status s] [--queue q] [--limit 50]` | list jobs |
 | `tvine tasks inspect <jobId>` | one job as JSON |
 | `tvine tasks retry <jobId>` | requeue a `dead`, `expired` or `cancelled` job |
 | `tvine tasks purge --dead` | delete dead jobs |
 | `tvine tasks compact` | shrink the `file` broker's file |
-| `tvine tasks bench [--jobs 5000] [--workers 4] [--batch n]` | raw jobs/s of the configured broker |
+| `tvine tasks bench [--jobs 5000] [--workers 4] [--batch 10]` | raw jobs/s of the configured broker |
+| `tvine check` | `tasks: N job worker(s) running · M job(s) waiting · scheduler on (leader)\|off`; warns when jobs wait and no worker runs |
 
 ## Brokers
 
 | `settings.tasks.broker` | Store | Use |
 |---|---|---|
-| `'file'` (default) | its own SQLite WAL file, `settings.tasks.file` | one host, any number of worker processes |
+| `'file'` (default) | its own SQLite WAL file, `settings.tasks.file` | one host, any number of processes (start them from the same folder: the path is relative) |
 | `'redis'` | `settings.redis.<tasks.redis>` | several hosts |
-| `'db'` | the `tasks_*` tables of the app's database, polled every `pollMs` | |
+| `'db'` | the `tasks_*` tables of the app's database, polled every `pollMs` | several hosts that share the database |
 | `'memory'` | this process | dev / tests: the web server runs the jobs itself and they are lost on restart; `tvine worker` refuses to start |
 
 ## Settings: `settings.tasks.*`
@@ -270,7 +297,9 @@ console.log(await jobResult(jobId).get({ timeoutMs: 120_000 }))
 
 - Without `durable: true` on the task, a crash between commit and push loses the job (the push is after commit).
   `durable` on a task (outbox) is not the same as `settings.tasks.durable` (disk sync of the file broker).
-- `broker: 'memory'` jobs run inside the web server and die with it; a separate worker cannot see them.
+- `broker: 'memory'` jobs run inside the web server and die with it; a separate worker cannot see them. Its
+  schedules fire only with `tvine start --with-worker --beat`.
+- Only `tvine start` and no job worker: jobs wait forever, schedules never fire (the start warning above).
 - A handler that ignores `ctx.signal` keeps its worker slot after a timeout or revoke until it settles (JS cannot
   kill a promise).
 - `rateLimit` is per worker process, not global.

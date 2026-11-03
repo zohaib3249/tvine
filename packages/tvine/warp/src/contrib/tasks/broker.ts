@@ -25,6 +25,7 @@ export interface WorkerInfo { name: string; queues: string; concurrency: number;
 export interface QueueStats {
   queued: number; scheduled: number; running: number; dead: number
   workers: { name: string; queues: string; running: number; processed: number; beatAgoMs: number; stale: boolean }[]
+  beat?: string   // the scheduler leader (`tvine worker --beat` holding the 'beat' lock), absent when none runs
 }
 export type Final = Exclude<JobStatus, 'queued' | 'running' | 'deduped'>
 
@@ -318,8 +319,9 @@ class DbBroker implements Broker {
       count('queued', [{ field: 'runAt', op: 'lte', value: now }]), count('queued', [{ field: 'runAt', op: 'gt', value: now }]),
       count('running'), count('dead'), WorkerRow.objects.order('name').all(200),
     ])
+    const beat = (await Lock.objects.filter([{ field: 'key', op: 'eq', value: 'beat' }, { field: 'expiresAt', op: 'gt', value: now }]).first())?.owner
     return {
-      queued, scheduled, running, dead,
+      queued, scheduled, running, dead, ...(beat && { beat }),
       workers: workers.map((w) => ({ name: w.name, queues: w.queues, running: w.running, processed: w.processed, beatAgoMs: now - w.beatAt, stale: now - w.beatAt > leaseMs })),
     }
   }

@@ -477,8 +477,9 @@ export class FileBroker implements Broker {
       const now = Date.now()
       const count = (s: string) => (this.st(`SELECT count(*) AS n FROM job WHERE status = ?`).get(s) as { n: number }).n
       const workers = this.st('SELECT * FROM worker ORDER BY name LIMIT 200').all() as { name: string; queues: string; running: number; processed: number; beat_at: number }[]
+      const beat = (this.st('SELECT owner FROM lock WHERE key = ? AND expires_at > ?').get('beat', now) as { owner: string } | undefined)?.owner
       return {
-        queued: count('queued'), scheduled: count('scheduled'), running: count('running'), dead: count('dead'),
+        queued: count('queued'), scheduled: count('scheduled'), running: count('running'), dead: count('dead'), ...(beat && { beat }),
         workers: workers.map((w) => ({ name: w.name, queues: w.queues, running: w.running, processed: w.processed, beatAgoMs: now - w.beat_at, stale: now - w.beat_at > leaseMs })),
       }
     })

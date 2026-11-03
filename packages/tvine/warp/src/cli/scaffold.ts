@@ -167,7 +167,7 @@ export const urlpatterns = [
   path('api/auth/', include('tvine.auth.urls')),
 ]
 `,
-    'config/tasks.ts': `// Task worker config, like Celery's (settings.tasksModule). Tasks live in apps/<app>/tasks.ts (defineTask).
+    'config/tasks.ts': `// Job worker config (settings.tasksModule). Tasks live in apps/<app>/tasks.ts (defineTask).
 // Run: tvine worker [--beat]
 
 // Queues this worker consumes when --queues is not given (default: all).

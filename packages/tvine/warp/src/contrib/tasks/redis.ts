@@ -580,8 +580,9 @@ export class RedisBroker implements Broker {
     const now = this.now()
     const [queued, scheduled, running, dead] = await Promise.all(['queued', 'scheduled', 'running', 'dead'].map((s) => this.cmd<number>(['ZCARD', `${this.base}st:${s}`])))
     const workers = (await this.workerRows()).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 200)
+    const beat = await this.cmd<string | null>(['GET', `${this.base}l:beat`])
     return {
-      queued: Number(queued), scheduled: Number(scheduled), running: Number(running), dead: Number(dead),
+      queued: Number(queued), scheduled: Number(scheduled), running: Number(running), dead: Number(dead), ...(beat && { beat }),
       workers: workers.map((w) => ({ name: w.name, queues: w.queues, running: w.running, processed: w.processed, beatAgoMs: now - w.beatAt, stale: now - w.beatAt > leaseMs })),
     }
   }

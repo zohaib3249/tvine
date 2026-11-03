@@ -94,9 +94,10 @@ Run them through the project: `pnpm tvine <cmd>` (or `npx tvine <cmd>`). Never `
 | `tvine show_urls` | urls.ts routes: pattern, methods, name, action |
 | `tvine routes` | every action (the manifest) |
 | `tvine generate` | writes `tvine-api.d.ts` (types for `api.*`) |
-| `tvine worker [--beat]` | runs background tasks (and cron with `--beat`) |
+| `tvine worker [--beat]` | a job worker: runs background tasks (and cron with `--beat`). `tvine start` / `tvine dev` do NOT run jobs: without it jobs wait forever. Several workers and several `--beat` are safe |
 | `tvine build` / `tvine start` | production build / serve (`start` needs `TVINE_SECRET`, `TVINE_ALLOWED_HOSTS`) |
 | `tvine docs --ai` | prints this guide |
+| `tvine <command> --help` | that command's flags, defaults and examples (`tvine help` lists every command) |
 
 ## Recipes
 
@@ -282,7 +283,7 @@ export const notify = defineTask('notify', async ({ id }) => {          // task 
 ```
 
 Queue it from an action with `await notify.delay({ id })`. The job is queued after the request commits.
-Run the worker with `pnpm tvine worker`.
+Run a job worker with `pnpm tvine worker` (the web server never runs jobs; `tvine start --with-worker` runs one inside it).
 Cron goes in `config/tasks.ts`: `beatSchedule = { 'blog.notify': { cron: '0 3 * * *', args: { id: 1 } } }`.
 Then run `tvine worker --beat`.
 

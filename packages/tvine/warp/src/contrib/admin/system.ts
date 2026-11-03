@@ -16,6 +16,7 @@ import { memoryLog, LEVELS, type Level } from '../../log.js'
 import { staffGuard } from './hardening.js'
 import { denyAgents } from '../../security/permissions.js'
 import { AdminStat } from './models.js'
+import type { JobWorkers } from '../tasks/relay.js'
 import {
   AGENT_VIA, Collector, OTHER, merge, newAcc, quantile, rangeOf, round, timeSeries, topOf, type Acc, type ChartData, type Range, type StatRow, type Table,
 } from './stats.js'
@@ -76,6 +77,15 @@ export function configWarnings(s: ServerCtx['settings']): string[] {
   return w
 }
 
+// System > Health tile "Job workers: N running · M waiting · scheduler: on (leader) / off"
+export function jobWorkersSection(j: JobWorkers): Section {
+  return {
+    name: 'workers', title: 'Job workers', status: j.alarm ? 'error' : 'ok',
+    summary: `${j.running} running · ${j.waiting} waiting · scheduler: ${j.scheduler ? `on (${j.scheduler})` : 'off'}${j.alarm ? ' · start one: tvine worker --beat' : ''}`,
+    details: { running: j.running, waiting: j.waiting, scheduler: j.scheduler ?? null },
+  }
+}
+
 export const systemHealth = defineAction('admin.system.health', z.object({}), async (_p, actx) => {
   const ctx = runtime.ctx, c = col(), sections: Section[] = []
   const settings = actx.settings
@@ -105,6 +115,15 @@ export const systemHealth = defineAction('admin.system.health', z.object({}), as
     const st: Status = tasks.error ? 'error' : Number(tasks.dead) > 0 || Number(tasks.staleWorkers) > 0 ? 'warn' : 'ok'
     sections.push({ name: 'broker', title: 'Task queue', status: st, summary: tasks.pending ? 'reading…' : `${tasks.queued ?? 0} queued · ${tasks.running ?? 0} running · ${tasks.dead ?? 0} failed`,
       details: { broker: settings.tasks.broker ?? 'file', ...flat(tasks) } })
+  }
+  // who runs the jobs: live job workers, waiting jobs, the scheduler leader (red: jobs wait and nobody takes them)
+  if (settings.installedApps.includes('tvine.tasks')) {
+    try {
+      const [{ broker }, { jobWorkers }] = await Promise.all([import('../tasks/broker.js'), import('../tasks/relay.js')])
+      sections.push(jobWorkersSection(jobWorkers(await broker().stats(settings.tasks.leaseMs))))
+    } catch (e) {
+      sections.push({ name: 'workers', title: 'Job workers', status: 'error', summary: 'cannot read the broker', details: { error: (e as Error).message.slice(0, 200) } })
+    }
   }
   // cache hit rate (this process, last hour)
   const cache = topOf(c.memoryRows('cache', Date.now() - 3_600_000), (r) => r.dims.h)

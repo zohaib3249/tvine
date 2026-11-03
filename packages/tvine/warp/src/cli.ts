@@ -22,6 +22,7 @@ import { redis } from './redis/index.js'
 import type { AddressInfo } from 'node:net'
 import { defaultEnv, defaultNodeEnv, env, envReport, isProduction, loadDotenv } from './env.js'
 import { describeMiddleware, lanIps } from './middleware/index.js'
+import { closest, commandHelp, COMMANDS, flagsHelp, GLOBAL_FLAGS, usageText, type Flag } from './cli/spec.js'
 
 export interface Io {
   out(s: string): void; err(s: string): void; exit(code: number): void
@@ -36,87 +37,9 @@ async function ttyPrompt(question: string, o: { hidden?: boolean } = {}): Promis
   try { return await rl.question(question) } finally { if (o.hidden) process.stdout.write('\n'); rl.close() }
 }
 
-const USAGE = `usage: tvine <command> [--apps ./apps] [--settings config/settings/prod]  (or TVINE_SETTINGS)
-
-Project
-  startproject <name> [dir] [--db sqlite|postgres|mysql] [--no-admin] [--no-tasks] [--pm pnpm|npm|yarn] [--no-install] [--local]
-                                a ready-to-run project (--local: link this clone's packages; not on npm yet)
-  startapp <name>                 apps/<name>/ empty stubs; adds it to installedApps and config/urls.ts
-  check                         settings + actions + migrations + FE/DB boundary gate (exit 1 on problems)
-  routes                        print the action manifest
-  show_urls                     print the urls.ts routes: pattern, methods, name, action
-  generate [--check]            write tvine-api.d.ts (api.* types); --check: exit 1 when it is stale
-
-Database
-  makemigrations [app] [--name x] [--allow-drop] [--merge] [--empty] [--check] [--dry-run]
-  migrate [<app> [<target>|zero]] [--check] [--plan] [--fake]
-                                <app>: forward to its latest; <target>: forward or ROLL BACK to it
-  sqlmigrate <app> <migration> [--backwards]
-  showmigrations
-  dumpdata [app[.model] …] [--output f.json]   fixtures as JSON (fk order)
-  loaddata <f.json> …           load fixtures in one transaction (upsert by pk)
-  encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)
-
-Run
-  dev [--port 3000] [--host h] [--noreload]  runserver: in-process next dev (needs next installed);
-                                restarts on backend changes (apps/, config/, .env); --noreload: one process, no restart
-  build                         next build (the pages tvine start serves)
-  start [--port 3000] [--host h] [--api-only] [--workers n|auto]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
-                                --api-only: no frontend (Next runs separately with TVINE_API_URL);
-                                --workers (or WEB_CONCURRENCY): n processes on one port, auto = CPU cores (n > 1 needs Redis)
-  shell                         Node REPL: settings loaded, db configured, every model by name
-  test [vitest args]            vitest run
-
-Users
-  createsuperuser [--username u] [--email e] [--noinput]   (tvine.auth; --noinput reads TVINE_SUPERUSER_USERNAME/_EMAIL/_PASSWORD)
-  changepassword <username>                                 (tvine.auth)
-  privacy export|erase <user>   tvine.auth: a user's data as JSON (--output file) / anonymize it (--yes)
-
-Jobs
-  worker [--queues a,b] [--concurrency 10] [--beat] [--name x] [--grace ms]   tvine.tasks: run jobs
-                                (SIGTERM: stop claiming, finish or release running jobs within the grace)
-  tasks list [--status s] [--queue q] [--limit n] | inspect <id> | retry <id> | purge --dead | compact
-        | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
-  audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
-  shield mode off|log|enforce | shield rules disable <id>|--all   tvine.shield escape hatch (running servers pick it up within 3 s)
-  shield lists | shield lists remove <value>|--all   show / remove allow-deny entries (e.g. your own IP denied by mistake)
-  shield simulate [--count n=300] [--hours h=24] | --clear   dev only (debug): synthetic traffic tagged host simulated.tvine
-
-Tools
-  inspect [url] [--port 7357]   split-view devtool on 127.0.0.1 (dev only)
-  docs [--ai [--path]]          the guides' URL; --ai: the AI-assistant guide (AGENTS.md), --path: its file path`
-
+// every command, its flags, defaults, help and examples: cli/spec.ts (also generates docs/cli.md's reference)
+const options = (flags: Record<string, Flag>): Opts => Object.fromEntries(Object.entries(flags).map(([n, f]) => [n, { type: f.type }]))
 type Opts = NonNullable<ParseArgsConfig['options']>
-const bool = { type: 'boolean' } as const, str = { type: 'string' } as const
-// per command: its own flags and how many positionals it takes
-const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number] }> = {
-  startproject: { options: { db: str, 'no-admin': bool, 'no-tasks': bool, pm: str, 'no-install': bool, local: bool }, args: [1, 2] },
-  startapp: { options: {}, args: [1, 1] },
-  build: { options: {}, args: [0, 0] },
-  shell: { options: {}, args: [0, 0] },
-  start: { options: { port: str, host: str, 'api-only': bool, workers: str }, args: [0, 0] },
-  dev: { options: { port: str, host: str, noreload: bool }, args: [0, 0] },
-  inspect: { options: { port: str }, args: [0, 1] },
-  docs: { options: { ai: bool, path: bool }, args: [0, 0] },
-  check: { options: {}, args: [0, 0] },
-  routes: { options: {}, args: [0, 0] },
-  show_urls: { options: {}, args: [0, 0] },
-  generate: { options: { check: bool }, args: [0, 0] },
-  makemigrations: { options: { name: str, 'allow-drop': bool, merge: bool, empty: bool, check: bool, 'dry-run': bool }, args: [0, 1] },
-  migrate: { options: { check: bool, plan: bool, fake: bool }, args: [0, 2] },
-  sqlmigrate: { options: { backwards: bool }, args: [2, 2] },
-  showmigrations: { options: {}, args: [0, 0] },
-  dumpdata: { options: { output: str }, args: [0, Infinity] },
-  loaddata: { options: {}, args: [1, Infinity] },
-  createsuperuser: { options: { username: str, email: str, noinput: bool }, args: [0, 0] },
-  changepassword: { options: {}, args: [1, 1] },
-  worker: { options: { queues: str, concurrency: str, beat: bool, name: str, grace: str }, args: [0, 0] },
-  tasks: { options: { status: str, queue: str, limit: str, dead: bool, jobs: str, workers: str, batch: str }, args: [0, 2] },
-  audit: { options: { days: str }, args: [1, 1] },
-  shield: { options: { all: bool, count: str, hours: str, clear: bool }, args: [1, 3] },
-  encryption: { options: {}, args: [1, 1] },
-  privacy: { options: { output: str, yes: bool }, args: [2, 2] },
-}
 
 class Usage extends Error {}
 
@@ -253,13 +176,30 @@ async function devSupervisor(argv: string[], apps: string, port: number, host: s
 
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
   const [cmd, ...rest] = argv
-  if (cmd === 'test') return await binRun('vitest', ['run', ...rest], io)   // vitest flags pass through untouched
-  const spec = cmd === undefined ? undefined : COMMANDS[cmd]
-  if (!spec) { io.err(USAGE); return 1 }
+  const isHelp = (a: string) => a === '--help' || a === '-h'
+  // help: `tvine help [cmd]`, `tvine --help`, `tvine <cmd> --help` / -h anywhere on the line (the command never runs)
+  if (cmd === undefined) { io.err(usageText()); return 1 }
+  if (isHelp(cmd) || (cmd === 'help' && !rest.length)) { io.out(usageText()); return 0 }
+  const name = cmd === 'help' && !isHelp(rest[0]!) ? rest[0]! : cmd
+  const spec = COMMANDS[name]
+  if (!spec) {
+    const near = closest(name, Object.keys(COMMANDS))
+    io.err(`tvine: unknown command '${name}'${near ? `. Did you mean: tvine ${near}?` : ''}\n\n${usageText()}`)
+    return 1
+  }
+  if (cmd === 'help' || rest.some(isHelp)) { io.out(commandHelp(name)); return 0 }
+  if (spec.passthrough) return await binRun('vitest', ['run', ...rest], io)   // tvine test: vitest flags pass through untouched
   try {
     let parsed
-    try { parsed = parseArgs({ args: rest, allowPositionals: true, strict: true, options: { apps: { type: 'string', default: 'apps' }, settings: { type: 'string' }, ...spec.options } }) }
-    catch (e) { const m = (e as Error).message.replace(/\. To specify a positional.*$/s, ''); throw new Usage(m[0]!.toLowerCase() + m.slice(1)) }
+    const { help: _, ...global } = GLOBAL_FLAGS
+    try { parsed = parseArgs({ args: rest, allowPositionals: true, strict: true, options: { ...options(global), apps: { type: 'string', default: 'apps' }, ...options(spec.flags) } }) }
+    catch (e) {
+      const m = (e as Error).message.replace(/\. To specify a positional.*$/s, '')
+      const bad = (e as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' ? /'(-[^']+)'/.exec(m)?.[1] : undefined
+      const near = bad && closest(bad.replace(/^-+/, ''), Object.keys({ ...spec.flags, ...GLOBAL_FLAGS }))
+      io.err(`tvine ${cmd}: ${m[0]!.toLowerCase() + m.slice(1)}${near ? `. Did you mean --${near}?` : ''}\n${flagsHelp(cmd)}`)
+      return 1
+    }
     const o = parsed.values as Record<string, string | boolean | undefined> & { apps: string }
     const args = parsed.positionals
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
@@ -318,6 +258,10 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const host = (o.host as string | undefined) ?? (env.has('HOST') ? env.str('HOST') : undefined)
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Usage('--port must be an integer 0-65535')
         const dev = cmd === 'dev'
+        const withWorker = !!o['with-worker']
+        if (!withWorker && (o.concurrency !== undefined || o.beat)) throw new Usage('--concurrency and --beat go with --with-worker (or run them in a job worker: tvine worker --beat)')
+        const concurrency = o.concurrency === undefined ? undefined : Number(o.concurrency)
+        if (concurrency !== undefined && (!Number.isInteger(concurrency) || concurrency < 1)) throw new Usage('--concurrency must be an integer >= 1')
         // like `next start`: start means production unless NODE_ENV says otherwise (stable secret, no inspector feed)
         if (!dev) defaultNodeEnv('production')   // empty (NODE_ENV=) counts as unset
         if (dev && isProduction()) throw new Usage('tvine dev is for development; use tvine start in production')
@@ -337,7 +281,10 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
             const settings = await loadSettings()
             const bad = w.sharedStateProblem(settings, n, relativeTo(settingsFiles()[0] ?? 'config/settings/prod.ts')) ?? await w.pingRedis(settings)
             if (bad) { io.err(bad); return 1 }
-            w.runPrimary(n, io)
+            if (withWorker && !settings.installedApps.includes('tvine.tasks')) throw new Usage("--with-worker runs background jobs: add 'tvine.tasks' to settings.installedApps")
+            if (withWorker) io.out('tvine start: --with-worker: web worker 1 runs the job worker' + (o.beat ? ' and the scheduler' : '') + '; the other web workers serve requests only')
+            // the slot running jobs gets their grace to finish before the primary gives up on it
+            w.runPrimary(n, io, withWorker ? settings.tasks.graceMs + 5_000 : undefined)
             return undefined
           }
           const warn = env.has('NODE_APP_INSTANCE') || env.has('pm_id') ? undefined : w.coresWarning(n)   // pm2 runs its own instances
@@ -358,14 +305,28 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           for (const ip of lanIps()) io.out(`  Network: http://${ip}:${addr.port}`)
         }
         const regen = dev ? devWatch(apps, io) : undefined
+        // --with-worker: jobs (and the scheduler) in this web process — in web worker 1 only when there are several
+        const settings = srv.ctx.settings
+        let jobs: { name: string; stop(): Promise<void> } | undefined
+        if (withWorker && (!worker || worker === '1')) {
+          if (!settings.installedApps.includes('tvine.tasks')) { await srv.close(); throw new Usage("--with-worker runs background jobs: add 'tvine.tasks' to settings.installedApps") }
+          const t = await import('./contrib/tasks/cli.js')
+          jobs = await t.embeddedWorker(apps, settings, { concurrency, beat: !!o.beat }, t.logger())
+          io.out(`tvine start: running ${jobs.name} in this process`)
+        }
+        // a production server whose jobs nobody runs: one line ~30 s after start (web worker 1 only)
+        const quiet = !dev && !withWorker && (!worker || worker === '1')
+          ? (await import('./contrib/tasks/relay.js')).noWorkerWarning(settings, io.err) : undefined
         let stopping = false
         const stop = () => {
           if (stopping) return
           stopping = true
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
-          regen?.close()
-          setTimeout(() => { io.err('tvine: close did not finish within 5 s; exiting'); io.exit(1) }, 5_000).unref()
-          srv.close().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
+          regen?.close(); quiet?.()
+          // running jobs get settings.tasks.graceMs to finish (then they are released for another worker)
+          const hard = jobs ? settings.tasks.graceMs + 5_000 : 5_000
+          setTimeout(() => { io.err(`tvine: close did not finish within ${hard / 1000} s; exiting`); io.exit(1) }, hard).unref()
+          ;(async () => { await jobs?.stop(); await srv.close() })().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
         }
         process.once('SIGTERM', stop); process.once('SIGINT', stop)
         // the supervisor is gone (killed, crashed): no orphan server. Polled, not process.on('disconnect'):
@@ -464,6 +425,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
           const p = await redis.ping(alias)
           if (p.ok) io.out(`redis ${alias}: ok (${p.ms} ms)`); else { io.err(`tvine check: redis ${alias}: ${p.error}`); down = true }
         }
+        if (!down && srv.ctx.settings.installedApps.includes('tvine.tasks')) await checkJobs(srv.ctx.settings, io)
         await srv.close()
         if (down) return 1
         const bad = await boundaryCheck(dirname(apps))
@@ -615,7 +577,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
   } catch (e) {
     const err = e as Error
     io.err(`tvine ${cmd}: ${/^(1|true|yes|on)$/i.test(env.str('TVINE_DEBUG', '')) ? err.stack ?? err.message : err.message}`)
-    if (e instanceof Usage) io.err(`run 'tvine' for usage`)
+    if (e instanceof Usage) io.err(`run 'tvine ${cmd} --help' for its flags`)
     return 1
   }
 }
@@ -629,4 +591,15 @@ export function metricsLine(m: Settings['metrics']): string {
   if (!m.enabled) return 'metrics: off'
   const guard = [m.token && 'bearer token', m.allowIps.length && `allowIps (${m.allowIps.length})`].filter(Boolean).join(' or ') || 'loopback only'
   return `metrics: on at ${m.path} (${guard})`
+}
+
+// `tvine check`: who runs the background jobs (the broker's live worker rows), a warning when jobs wait for nobody
+export async function checkJobs(settings: Pick<Settings, 'tasks'>, io: Pick<Io, 'out' | 'err'>): Promise<void> {
+  if (settings.tasks.broker === 'memory') { io.out("tasks: broker memory (the web server runs jobs itself; dev / tests only)"); return }
+  const { broker } = await import('./contrib/tasks/broker.js')
+  const { jobWorkers, jobWorkersLine } = await import('./contrib/tasks/relay.js')
+  let j
+  try { j = jobWorkers(await broker().stats(settings.tasks.leaseMs)) } catch (e) { io.err(`tvine check: warning: tasks: cannot read the broker: ${(e as Error).message}`); return }
+  io.out(`${jobWorkersLine(j)} · scheduler ${j.scheduler ? `on (${j.scheduler})` : 'off'}`)
+  if (j.alarm) io.err(`tvine check: warning: ${j.waiting} background job(s) are waiting and no job worker is running: start one with tvine worker --beat (see docs/deploy.md#background-jobs)`)
 }
