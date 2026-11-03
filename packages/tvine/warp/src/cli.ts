@@ -59,7 +59,8 @@ Database
   encryption rotate             re-encrypt every encrypted field with the newest key (settings.encryption.keys)
 
 Run
-  dev [--port 3000] [--host h]  runserver: in-process next dev (needs next installed)
+  dev [--port 3000] [--host h] [--noreload]  runserver: in-process next dev (needs next installed);
+                                restarts on backend changes (apps/, config/, .env); --noreload: one process, no restart
   build                         next build (the pages tvine start serves)
   start [--port 3000] [--host h] [--api-only]  serve (SIGTERM/SIGINT: graceful close, hard exit at 5 s);
                                 --api-only: no frontend (Next runs separately with TVINE_API_URL)
@@ -94,7 +95,7 @@ const COMMANDS: Record<string, { options: Opts; args: [min: number, max: number]
   build: { options: {}, args: [0, 0] },
   shell: { options: {}, args: [0, 0] },
   start: { options: { port: str, host: str, 'api-only': bool }, args: [0, 0] },
-  dev: { options: { port: str, host: str }, args: [0, 0] },
+  dev: { options: { port: str, host: str, noreload: bool }, args: [0, 0] },
   inspect: { options: { port: str }, args: [0, 1] },
   docs: { options: { ai: bool, path: bool }, args: [0, 0] },
   check: { options: {}, args: [0, 0] },
@@ -172,6 +173,14 @@ export function devRunning(lock = '.next/dev/lock'): string | undefined {
       port = bound
     } catch { return stale() }   // lsof exits 1 when the pid holds no listening socket
   }
+  // an autoreload child: the supervisor (its parent, same `tvine dev` command line) is the one to stop
+  if (process.platform !== 'win32') {
+    try {
+      const ppid = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      const cmd = execFileSync('ps', ['-o', 'command=', '-p', ppid], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      if (/tvine\S*\s+dev\b/.test(cmd)) pid = Number(ppid)
+    } catch { /* parent gone: report the child */ }
+  }
   if (state.startsWith('T')) {
     return `tvine dev for this project is PAUSED (pid ${pid}, stopped with Ctrl+Z) and still holds http://localhost:${port}: ` +
       `resume it with 'fg' in its terminal, or stop it with: kill -9 ${pid}  (use Ctrl+C to stop a dev server)`
@@ -214,6 +223,31 @@ function devWatch(apps: string, io: Io): { close(): void } {
     later('check', check)
   })
   return { close: () => { for (const t of Object.values(timers)) clearTimeout(t); w.close() } }
+}
+
+const retryBusy = async <T>(fn: () => Promise<T>, tries = 30): Promise<T> => {
+  for (let i = 1; ; i++) {
+    try { return await fn() } catch (e) { if (i >= tries || !/is in use/.test((e as Error).message)) throw e }
+    await new Promise((ok) => setTimeout(ok, 100))
+  }
+}
+
+// tvine dev (autoreload): pick the port here (busy → next free, when not forced), then run the server as a child
+// on exactly that port, restarted on every backend change. Ctrl+C / SIGTERM: stop the child, exit 0.
+async function devSupervisor(argv: string[], apps: string, port: number, host: string | undefined, auto: boolean, io: Io): Promise<undefined> {
+  const { createServer } = await import('node:net')
+  const probe = (p: number) => new Promise<void>((ok, bad) => { const s = createServer().once('error', bad); s.listen(p, host, () => s.close(() => ok())) })
+  const at = port === 0 ? 0 : await listenFree(probe, port, auto)
+  if (at !== port) io.out(`port ${port} in use, using ${at}`)
+  const { supervise, linkedDists } = await import('./cli/autoreload.js')
+  const root = process.cwd()
+  const sup = supervise({ root, apps, cmd: [process.execPath, ...process.execArgv, process.argv[1]!, ...argv, '--port', String(at)], out: io.out, err: io.err, dists: linkedDists(root) })
+  const stop = () => {
+    process.off('SIGTERM', stop); process.off('SIGINT', stop)
+    void sup.close().then(() => { devRunning(); io.exit(0) })   // devRunning drops a lock the killed child left behind
+  }
+  process.once('SIGTERM', stop); process.once('SIGINT', stop)
+  return undefined
 }
 
 export async function main(argv: string[], io: Io = stdio): Promise<number | undefined> {
@@ -287,26 +321,40 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         if (!dev) defaultNodeEnv('production')   // empty (NODE_ENV=) counts as unset
         if (dev && isProduction()) throw new Usage('tvine dev is for development; use tvine start in production')
         if (dev) defaultEnv('TVINE_DEBUG', '1')   // runserver = DEBUG on (dev CSP, inspector feed), unless TVINE_DEBUG says no
-        const running = dev ? devRunning() : undefined
+        const child = dev && process.env.TVINE_DEV_CHILD === '1'   // the autoreload supervisor's server process
+        const ppid = process.ppid
+        const running = dev && !child ? devRunning() : undefined
         if (running) { io.err(running); return 1 }
+        const auto = dev && o.port === undefined && !env.has('PORT')
+        if (dev && !child && !o.noreload) return await devSupervisor(argv, apps, port, host, auto, io)
         const srv = await createAgentServer({ appsDir: apps, dev, frontend: dev ? { nextDir: resolve('.next') } : o['api-only'] ? undefined : frontend() })
-        // dev, port not forced (--port / PORT): a busy port moves to the next free one, like next dev
-        const at = await listenFree((p) => srv.listen(p, host), port, dev && o.port === undefined && !env.has('PORT')).catch(async (e) => { await srv.close(); throw e })
+        // dev, port not forced (--port / PORT): a busy port moves to the next free one, like next dev.
+        // A restarted child gets its port forced: the old one may still be letting go of it, so retry briefly.
+        const listen = (p: number) => srv.listen(p, host)
+        const at = await (child ? retryBusy(() => listenFree(listen, port, false)) : listenFree(listen, port, auto)).catch(async (e) => { await srv.close(); throw e })
         if (at !== port) io.out(`port ${port} in use, using ${at}`)
         const addr = srv.server.address() as AddressInfo
-        io.out(`listening on ${boundUrl(addr)}`)
-        if (dev && (host === undefined || host === '0.0.0.0' || host === '::')) {
+        const restarted = Number(process.env.TVINE_DEV_RESTARTED)
+        if (child && restarted) io.out(`tvine dev: ready on :${addr.port} (restarted in ${((Date.now() - restarted) / 1000).toFixed(1)} s)`)
+        else io.out(`listening on ${boundUrl(addr)}`)
+        if (dev && !restarted && (host === undefined || host === '0.0.0.0' || host === '::')) {
           io.out(`  Local:   http://localhost:${addr.port}`)
           for (const ip of lanIps()) io.out(`  Network: http://${ip}:${addr.port}`)
         }
         const regen = dev ? devWatch(apps, io) : undefined
+        let stopping = false
         const stop = () => {
+          if (stopping) return
+          stopping = true
           process.off('SIGTERM', stop); process.off('SIGINT', stop)
           regen?.close()
           setTimeout(() => { io.err('tvine: close did not finish within 5 s; exiting'); io.exit(1) }, 5_000).unref()
           srv.close().then(() => io.exit(0), (e: unknown) => { io.err(`tvine: close failed: ${String(e)}`); io.exit(1) })
         }
         process.once('SIGTERM', stop); process.once('SIGINT', stop)
+        // the supervisor is gone (killed, crashed): no orphan server. Polled, not process.on('disconnect'):
+        // the supervisor may die during startup, before any listener here exists.
+        if (child) setInterval(() => { if (!process.connected || process.ppid !== ppid) stop() }, 1_000).unref()
         return undefined
       }
       case 'worker': {
