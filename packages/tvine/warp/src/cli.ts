@@ -16,7 +16,6 @@ import { boundaryCheck, boundaryReport, unawaitedReads } from './cli/boundary.js
 import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, type AgentServerOptions } from './server.js'
 import type { Settings } from './core/types.js'
-import { mcpEnabled } from './transport/mcp.js'
 import { backendTable } from './backends/index.js'
 import { customKeyWarnings, rateOverlap, redisUsers } from './settings.js'
 import { redis } from './redis/index.js'
@@ -495,6 +494,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         await srv.close()
         if (down) return 1
         const { actions, settings } = srv.ctx
+        const { mcpEnabled } = await import('./transport/mcp.js')
         io.out(table([['action', 'app', 'params', 'permissions', 'mcp'], ...actions.all().map((d) => [
           d.id, d.id.slice(0, d.id.indexOf('.')),
           actions.paramSpecs(d.id).map((p) => p.name + (p.required ? '' : '?')).join(', ') || '-',

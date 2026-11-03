@@ -5,6 +5,11 @@ import { ev } from './events.js'
 import { dataVersion } from '../data/engine.js'
 
 export const SNAP_CAP = 5000, SNAP_PER_SID = 8
+// A session nobody came back for yet (an API client that drops cookies mints one per mutation): these sit in an LRU of
+// their own, so such a client costs at most FRESH_CAP sessions, not session.max for a whole day. A session counts as
+// come back when it is resolved again at least FRESH_MS after it was made (later than its own first request).
+// ponytail: time-based, not per-request; a client that returns within FRESH_MS is confirmed on its next call after that.
+export const FRESH_CAP = 10_000, FRESH_MS = 1_000
 
 // core-session.md: one store, two keys (sid for agents, cookie for humans), per-sid event group.
 // The API is async because the store may be shared (settings.session.backend = 'redis', backends/redis.ts):
@@ -38,6 +43,7 @@ export class SessionStore {
   private snaps = new Map<string, { snap: Snapshot; data: number }>()
   private snapCount = new Map<Sid, number>()
   protected once = new Map<Sid, Session>()   // ephemeral(): outside the flood cap, cookies and session hooks
+  protected fresh = new Set<Sid>()            // created, not seen again yet (FRESH_CAP); insertion order = oldest first
 
   constructor(protected settings: Pick<Settings['session'], 'ttlMs'> & Partial<Settings['session']>, opts: SessionStoreOptions = {}) {
     this.channels = opts.channels ?? new MemoryChannelLayer()
@@ -49,6 +55,8 @@ export class SessionStore {
     while (this.byId.size >= (this.settings.max ?? Infinity)) this.evict(this.byId.keys().next().value as Sid)   // #20: flood cap
     const s = this.adopt(newSession())
     this.created(s.sid)
+    this.fresh.add(s.sid)
+    if (this.fresh.size > FRESH_CAP) this.evict(this.fresh.values().next().value as Sid)
     return s
   }
 
@@ -74,6 +82,7 @@ export class SessionStore {
       return undefined
     }
     s.lastSeen = Date.now()
+    if (s.lastSeen - s.createdAt >= FRESH_MS) this.fresh.delete(sid)   // came back: a normal session from now on
     this.byId.delete(sid); this.byId.set(sid, s)   // most recently used last
     return s
   }
@@ -236,6 +245,7 @@ export class SessionStore {
   // Forget a session HERE only (a shared store found it gone): cookies, snapshots; no hooks, no channel drop.
   protected forget(sid: Sid): void {
     this.byId.delete(sid)
+    this.fresh.delete(sid)
     for (const k of this.snaps.keys()) if (k.startsWith(`${sid}\0`)) this.dropSnap(k)
     for (const c of this.cookiesBySid.get(sid) ?? []) this.byCookie.delete(c)
     this.cookiesBySid.delete(sid)

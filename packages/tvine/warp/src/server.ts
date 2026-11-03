@@ -41,7 +41,6 @@ import { apiTransport, invoke, type ApiCall, type ApiResult } from './transport/
 import { httpTransport } from './transport/http.js'
 import { urlsTransport } from './transport/urls.js'
 import { loadUrls, setLiveUrls, type UrlTable } from './urls.js'
-import { mcpHandler } from './transport/mcp.js'
 import { TabHub, tabTransport } from './transport/tab.js'
 import { devReloadTransport, inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { appDirRoutes, liveRouteMatcher, routeMatcher } from './transport/routes.js'
@@ -302,7 +301,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       await authenticate(settings, request, session)
       return adminGroupAllowed(group, { sid: session.sid, session, route: adminBase, user: request.user, agent: request.agent, ip: request.ip })
     } : undefined })
-  const mcp = mcpHandler(ctx, { route, tabs })
+  // lazy: the MCP SDK (with ajv and zod-to-json-schema, ~12 MB heap) loads on the first /mcp call, not at boot
+  let mcpH: Promise<(req: IncomingMessage, res: ServerResponse) => Promise<void>> | undefined
+  const mcp = async (req: IncomingMessage, res: ServerResponse) => (await (mcpH ??= import('./transport/mcp.js').then((m) => m.mcpHandler(ctx, { route, tabs }))))(req, res)
   const fail = (res: ServerResponse) => (e: unknown) => {
     ctx.log('error', 'request failed', { error: e instanceof Error ? e.stack ?? e.message : String(e) })
     if (!res.headersSent) res.writeHead(500).end(); else res.destroy()
