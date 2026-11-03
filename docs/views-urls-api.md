@@ -89,7 +89,7 @@ export class ProductDetail extends DetailView<Product> { // → catalog.get
 | Option | Default | Meaning |
 |---|---|---|
 | `model` | required | a `defineModel` model |
-| `filters` | `[]` | Django lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
+| `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | Django lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
 | `searchFields` | `[]` | fields searched by `q` |
 | `ordering` | `[]` | allowed `sort` values (`-price` = descending) |
 | `pageSize` / `maxPageSize` | 25 / 100 | page size |
@@ -208,8 +208,8 @@ All commands: [cli.md](cli.md).
 - **`/tvine/api` params go under `params`.** Top-level keys like `{"category":"hats"}` are ignored, so you get
   an unfiltered list, not an error.
 - **No `x-tvine-api: 1` or a cross-site `Origin` → 403.** That is the CSRF guard; browsers send it via `api.*`.
-- **`/tvine/api` counts as a human request**, even with `x-tvine: 1`. `humanOnly` does not stop it there;
-  protect with permissions.
+- **`/tvine/api` with `x-tvine: 1` (or an API token) is an agent request**, so `humanOnly` refuses it there too. A
+  browser's own `api.*` call without that header counts as the person.
 - **Renders may only call read actions.** A mutating action during a server render returns
   `domain` / `render_mutation`. Mutate from forms, server actions or client events.
 - **Call `router.refresh()` yourself** after a client-side mutation; it is not automatic.
