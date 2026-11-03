@@ -265,4 +265,5 @@ visitor arrives as your own machine (`::1`), shows as "Local network", and share
 | `shield.cleanup.enabled` / `schedule` | `true` / `'30 3 * * *'` | the prune task |
 | `shield.webBotAuth.directories` | `[]` | trusted Web Bot Auth key directories (https origins) |
 | `shield.code.enabled` / `timeoutMs` | `true` / `5` | code rules |
+| `shield.hitsFlushMs` | `30000` | how often rule hit counts are written to the database |
 | `limits.rate.by` | `'framework'` | `'shield'` makes Shield's rules the only general rate limit |

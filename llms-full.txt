@@ -1090,7 +1090,7 @@ import { defineSettings } from 'tvine'
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
   installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin', 'notes'],   // users, background jobs, /admin, apps/notes
-  mcp: { exclude: ['admin.*'] },   // keep the admin's actions out of the typed MCP tools
+  mcp: { exclude: ['admin.**'] },   // keep the admin's actions out of the typed MCP tools
 })
 ```
 
@@ -1423,13 +1423,13 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `formats.default` | `'json'` | what an agent request gets with no `Accept` choice: `'json'` or `'notation'` |
 | `formats.notationPath` | `true` | serve `<page>/agent.txt` (the page in line notation); `<page>/agent.json` is always served |
 | `mcp.tools` | `'both'` | `'both'` (six generic + typed), `'generic'`, `'typed'` ([agents-and-mcp.md](https://github.com/zohaib3249/tvine/blob/main/docs/agents-and-mcp.md#which-tools-are-exposed)) |
-| `mcp.exclude` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | globs off MCP tools/`do`/manifest/snapshots. Password auth also has `mcp: false` so unbound agents are refused on every transport |
+| `mcp.exclude` | `['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | globs off MCP tools/`do`/manifest/snapshots. Password auth also has `mcp: false` so unbound agents are refused on every transport |
 | `mcp.maxTools` | `40` | typed tools above this are trimmed (still reachable through `do`) |
 | `agent.shape` | `'v2'` | snapshot format; `'v1'` is the old one, kept for one release |
 | `agent.budget` | `1500` | token budget for `view=auto` |
 | `agent.rowsL1` | `10` | list rows shown at `view=L1` |
-| `agent.inTab` | `'on'` | `'off'` disables tab control and in-tab WebMCP |
-| `snapshotCache.ttlMs` / `backend` / `redis` | `60000` / `'memory'` / `'default'` | shared agent snapshots of public, non-live pages; `0` = off; any write clears it |
+| `agent.inTab` | `'on'` | `'off'` disables tab control and in-tab WebMCP; in production the browser side also needs `<WeftRoot inTab="on">` |
+| `snapshotCache.ttlMs` / `maxEntries` / `backend` / `redis` | `60000` / `1000` / `'memory'` / `'default'` | shared agent snapshots of public, non-live pages; `0` = off; any write clears it |
 | `guards` | `[]` | `[{ path: '/admin/**', permissions: [...] }]`: permission checks on page paths for HTTP, MCP and forms |
 | `robots.allow` / `disallow` / `extra` / `sitemap` | `[]` / `[]` / `[]` / unset | the generated `/robots.txt` (only when the app ships none) |
 | `socket` | `true` | accepted; not read by the current release |
@@ -2154,7 +2154,7 @@ the `humanOnly` flag on the action is the real one. Always set the flag.
 
 | Prop | Default | Meaning |
 |---|---|---|
-| `inTab` | `'on'` | `'off'` = remote agents can never control this tab |
+| `inTab` | `'on'` in development, `'off'` in production | `'on'` lets in-tab WebMCP and remote tab control run; in production you must pass it |
 | `presence` | on | `false` hides outline / cursor / labels (never the "Agent connected · Stop" pill), or `{ outline, cursor, label, typing: 'animate' \| 'instant', cps, holdMs, labels }` |
 | `auto` | `true` | `false` = plain HTML is not auto-registered |
 | `hooks` | none | `{ onAgentAction(e) }` etc.: audit or veto agent actions for the whole app |
@@ -2292,13 +2292,13 @@ Typed tools carry MCP hints: `readOnlyHint` for reads, `destructiveHint` for `de
 
 ```ts
 // settings.ts
-mcp: { tools: 'both', exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 }   // defaults
+mcp: { tools: 'both', exclude: ['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 }   // defaults
 ```
 
 | Setting | Meaning |
 |---|---|
 | `mcp.tools` | `'both'` (generic + typed), `'generic'` (only the six), `'typed'` |
-| `mcp.exclude` | glob on action ids: `['admin.**', 'cart.setQty']` |
+| `mcp.exclude` | glob on action ids: `['admin.**', 'cart.setQty']`. A list you set replaces the default; the password actions (`auth.login`, `auth.logout`, `auth.requestPasswordReset`, `auth.resetPassword`) stay off MCP anyway, because each carries `mcp: false` |
 | `mcp.maxTools` | above this, typed tools are trimmed (still reachable through MCP `do`; `mcp:false` / `mcp.exclude` are not) |
 | `rules: { mcp: false }` on an action | not callable by agents at all (MCP, `do`, agent HTTP) unless a signed bind is present |
 | `mcp.exclude` | hides from MCP tools / MCP `do` / manifest / agent snapshots; other agent transports still see the action unless `mcp: false` |
@@ -2398,7 +2398,8 @@ avoids both: the agent borrows the person's own open tab, already logged in, wit
 5. It ends when the agent calls `release`, the person clicks **Stop**, or the tab closes.
 
 Limits: one agent per tab; only MCP calls go to the tab (plain HTTP stays headless); the link lives 5 minutes;
-`humanOnly` actions still refuse the agent and `confirm` still asks the person; the site can turn it off with
+`humanOnly` actions still refuse the agent and `confirm` still asks the person; in production the root layout must render
+`<WeftRoot inTab="on">` (the browser default is `'off'` there); the site can turn it off everywhere with
 `settings.agent.inTab: 'off'`.
 
 ### The Allow flow
@@ -2436,7 +2437,8 @@ Rules that always hold:
 - The approve link lives 5 minutes, the pairing code 2 minutes.
 - The "Agent connected · Stop" pill can't be hidden by the page while an agent is in control.
 - Actions run from the tab are marked as agent actions on the server, so `humanOnly` and `denyAgents` still apply.
-- `settings.agent.inTab: 'off'` (or `<WeftRoot inTab="off">`) disables tab control.
+- In production, tab control needs `<WeftRoot inTab="on">` in the root layout (the browser default there is `'off'`).
+  `settings.agent.inTab: 'off'` (or `<WeftRoot inTab="off">`) disables it.
 - Several workers or servers: works as with one once `channels: { backend: 'redis' }` is set (the tab, its
   posts and the agent may each reach a different worker; [deploy.md](https://github.com/zohaib3249/tvine/blob/main/docs/deploy.md#scaling)).
 
@@ -3358,6 +3360,7 @@ visitor arrives as your own machine (`::1`), shows as "Local network", and share
 | `shield.cleanup.enabled` / `schedule` | `true` / `'30 3 * * *'` | the prune task |
 | `shield.webBotAuth.directories` | `[]` | trusted Web Bot Auth key directories (https origins) |
 | `shield.code.enabled` / `timeoutMs` | `true` / `5` | code rules |
+| `shield.hitsFlushMs` | `30000` | how often rule hit counts are written to the database |
 | `limits.rate.by` | `'framework'` | `'shield'` makes Shield's rules the only general rate limit |
 
 
@@ -8161,13 +8164,14 @@ framework key (any case) warns at boot and in `tvine check` ("did you mean 'allo
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `mcp.tools` | `'both' \| 'generic' \| 'typed'` | `'both'` | Generic tools (`read_page`, `expand`, `ui`, `do`, `request_control`, `release`) and/or one typed tool per action. |
-| `mcp.exclude` | `string[]` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | Action-id globs off MCP tools/`do`/manifest/snapshots (`'admin.**'`). Does not block agent HTTP unless the action also has `mcp: false`. A pattern matching nothing logs a warning. |
+| `mcp.exclude` | `string[]` | `['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | Action-id globs off MCP tools/`do`/manifest/snapshots (`'admin.**'`). Does not block agent HTTP unless the action also has `mcp: false`. A pattern matching nothing logs a warning. |
 | `mcp.maxTools` | `number` | `40` | Typed tools above this are trimmed to `priority` actions (rest via `do`); not in `'typed'` mode. |
 | `agent.shape` | `'v1' \| 'v2'` | `'v2'` | Snapshot format. |
 | `agent.budget` | `number` | `1500` | Token budget for `view=auto`. |
 | `agent.rowsL1` | `number` | `10` | List rows at `view=L1`. |
-| `agent.inTab` | `'on' \| 'off'` | `'on'` | Agents may control a human's tab. |
+| `agent.inTab` | `'on' \| 'off'` | `'on'` | Agents may control a human's tab (server side). In production the browser side also needs `<WeftRoot inTab="on">`. |
 | `snapshotCache.ttlMs` | `number` | `60000` | Shared snapshots of non-personal pages; `0` = off; any write clears it. |
+| `snapshotCache.maxEntries` | `number` | `1000` | Most pages kept by the memory snapshot cache. |
 | `snapshotCache.backend` / `.redis` | | `'memory'` / `'default'` | |
 | `robots.allow` / `disallow` / `extra` | `string[]` | `[]` | Generated `/robots.txt` (only when the app ships none). |
 | `robots.sitemap` | `string?` | unset (`/sitemap.xml` if the app has one) | Absolute URL. |
@@ -9184,8 +9188,8 @@ admin: { path: '/staff', allowIps: ['10.0.0.0/8'], require2fa: true, idleMs: 15 
 - `getQueryset` is the only row scope: actions, charts, search, autocomplete and deletes all go through it.
 - Deleting a row whose foreign keys use `PROTECT` / `RESTRICT` (the fk default) deletes nothing and lists the
   protected rows.
-- Agents use the admin like staff unless `agents` says otherwise. `mcp: { exclude: ['admin.*'] }` in settings keeps
-  the `admin.*` actions out of the typed MCP tool list.
+- Agents use the admin like staff unless `agents` says otherwise. The default `mcp.exclude` keeps the `admin.*` actions
+  out of the MCP tools; if you set your own list, keep `'admin.**'` in it.
 - The `admin_stat` rollups add up across server and worker processes; `1h` ranges read in-process numbers.
 - `registerPage` / `component` need a frontend component registered with `configureAdmin` from `tvine/admin`.
 
@@ -12855,7 +12859,7 @@ function WeftRoot(props: {
 |---|---|---|
 | `hooks` | — | `onAgentAction` / `afterAgentAction` / `onAgentFocus` for every widget on the page. Several mounted roots stack (innermost first). Functions: pass them from an app-owned `'use client'` wrapper. |
 | `auto` | `true` | `false` keeps the JSX runtime but skips auto-registering plain HTML. |
-| `inTab` | `'on'` | On in production too. `'off'` is the app's opt-out. |
+| `inTab` | `'on'` in development, `'off'` in production | Pass `inTab="on"` to turn on WebMCP and tab control in production (`settings.agent.inTab` must stay `'on'`, its default). |
 | `presence` | `{}` | See "Presence". |
 
 What it mounts: the presence overlay settings, the navigation watcher, the WebMCP tools, the tab socket,

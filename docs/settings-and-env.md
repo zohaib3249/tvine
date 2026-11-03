@@ -12,7 +12,7 @@ import { defineSettings } from 'tvine'
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
   installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin', 'notes'],   // users, background jobs, /admin, apps/notes
-  mcp: { exclude: ['admin.*'] },   // keep the admin's actions out of the typed MCP tools
+  mcp: { exclude: ['admin.**'] },   // keep the admin's actions out of the typed MCP tools
 })
 ```
 
@@ -345,13 +345,13 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `formats.default` | `'json'` | what an agent request gets with no `Accept` choice: `'json'` or `'notation'` |
 | `formats.notationPath` | `true` | serve `<page>/agent.txt` (the page in line notation); `<page>/agent.json` is always served |
 | `mcp.tools` | `'both'` | `'both'` (six generic + typed), `'generic'`, `'typed'` ([agents-and-mcp.md](agents-and-mcp.md#which-tools-are-exposed)) |
-| `mcp.exclude` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | globs off MCP tools/`do`/manifest/snapshots. Password auth also has `mcp: false` so unbound agents are refused on every transport |
+| `mcp.exclude` | `['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | globs off MCP tools/`do`/manifest/snapshots. Password auth also has `mcp: false` so unbound agents are refused on every transport |
 | `mcp.maxTools` | `40` | typed tools above this are trimmed (still reachable through `do`) |
 | `agent.shape` | `'v2'` | snapshot format; `'v1'` is the old one, kept for one release |
 | `agent.budget` | `1500` | token budget for `view=auto` |
 | `agent.rowsL1` | `10` | list rows shown at `view=L1` |
-| `agent.inTab` | `'on'` | `'off'` disables tab control and in-tab WebMCP |
-| `snapshotCache.ttlMs` / `backend` / `redis` | `60000` / `'memory'` / `'default'` | shared agent snapshots of public, non-live pages; `0` = off; any write clears it |
+| `agent.inTab` | `'on'` | `'off'` disables tab control and in-tab WebMCP; in production the browser side also needs `<WeftRoot inTab="on">` |
+| `snapshotCache.ttlMs` / `maxEntries` / `backend` / `redis` | `60000` / `1000` / `'memory'` / `'default'` | shared agent snapshots of public, non-live pages; `0` = off; any write clears it |
 | `guards` | `[]` | `[{ path: '/admin/**', permissions: [...] }]`: permission checks on page paths for HTTP, MCP and forms |
 | `robots.allow` / `disallow` / `extra` / `sitemap` | `[]` / `[]` / `[]` / unset | the generated `/robots.txt` (only when the app ships none) |
 | `socket` | `true` | accepted; not read by the current release |

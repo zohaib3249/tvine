@@ -60,7 +60,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   },
   socket: true,
   // Default exclude: admin UI + password auth (open /mcp must not guess passwords). Apps add more via settings.mcp.exclude.
-  mcp: { tools: 'both', exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 },
+  mcp: { tools: 'both', exclude: ['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 },
   middleware: DEFAULT_MIDDLEWARE,
   actionMiddleware: [],
   allowedHosts: [],

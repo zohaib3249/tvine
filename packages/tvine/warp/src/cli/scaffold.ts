@@ -77,7 +77,7 @@ import { env, loadEnv, type SettingsInput } from 'tvine'
 loadEnv(['.env.shared'])
 
 export const base = {
-  // Like Django SECRET_KEY: startproject baked a random default. TVINE_SECRET / .env wins when set; prod.ts still requires the env var.
+  // startproject baked a random default for development. TVINE_SECRET / .env wins when set; prod.ts still requires the env var.
   secret: env.get('TVINE_SECRET', '${secret}'),
   site: { name: env.get('SITE_NAME', '${title}'), description: env.get('SITE_DESCRIPTION', 'A Tvine project.') },
   // Your own settings: any key you add here (or in dev.ts / local.ts) is kept. Read it as ctx.settings.app in an
@@ -89,7 +89,7 @@ export const base = {
     features: env.getList('FEATURES', []),   // FEATURES=search,wishlist
   },
   installedApps: ${JSON.stringify(installed).replace(/,/g, ', ').replace(/"/g, "'")},
-${admin ? "  mcp: { exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'] },   // admin UI + password auth stay off MCP (open /mcp must not guess passwords)\n" : ''}  // HTTP middleware, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
+${admin ? "  mcp: { exclude: ['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'] },   // admin UI + password auth stay off MCP (open /mcp must not guess passwords)\n" : ''}  // HTTP middleware, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
   middleware: [
     'tvine.middleware.RequestId',          // x-request-id on every request and log line
     'tvine.middleware.AllowedHosts',       // refuses a Host header not in allowedHosts

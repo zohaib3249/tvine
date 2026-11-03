@@ -365,8 +365,8 @@ admin: { path: '/staff', allowIps: ['10.0.0.0/8'], require2fa: true, idleMs: 15 
 - `getQueryset` is the only row scope: actions, charts, search, autocomplete and deletes all go through it.
 - Deleting a row whose foreign keys use `PROTECT` / `RESTRICT` (the fk default) deletes nothing and lists the
   protected rows.
-- Agents use the admin like staff unless `agents` says otherwise. `mcp: { exclude: ['admin.*'] }` in settings keeps
-  the `admin.*` actions out of the typed MCP tool list.
+- Agents use the admin like staff unless `agents` says otherwise. The default `mcp.exclude` keeps the `admin.*` actions
+  out of the MCP tools; if you set your own list, keep `'admin.**'` in it.
 - The `admin_stat` rollups add up across server and worker processes; `1h` ranges read in-process numbers.
 - `registerPage` / `component` need a frontend component registered with `configureAdmin` from `tvine/admin`.
 

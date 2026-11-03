@@ -196,7 +196,7 @@ the `humanOnly` flag on the action is the real one. Always set the flag.
 
 | Prop | Default | Meaning |
 |---|---|---|
-| `inTab` | `'on'` | `'off'` = remote agents can never control this tab |
+| `inTab` | `'on'` in development, `'off'` in production | `'on'` lets in-tab WebMCP and remote tab control run; in production you must pass it |
 | `presence` | on | `false` hides outline / cursor / labels (never the "Agent connected · Stop" pill), or `{ outline, cursor, label, typing: 'animate' \| 'instant', cps, holdMs, labels }` |
 | `auto` | `true` | `false` = plain HTML is not auto-registered |
 | `hooks` | none | `{ onAgentAction(e) }` etc.: audit or veto agent actions for the whole app |

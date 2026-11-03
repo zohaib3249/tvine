@@ -32,7 +32,7 @@ function WeftRoot(props: {
 |---|---|---|
 | `hooks` | — | `onAgentAction` / `afterAgentAction` / `onAgentFocus` for every widget on the page. Several mounted roots stack (innermost first). Functions: pass them from an app-owned `'use client'` wrapper. |
 | `auto` | `true` | `false` keeps the JSX runtime but skips auto-registering plain HTML. |
-| `inTab` | `'on'` | On in production too. `'off'` is the app's opt-out. |
+| `inTab` | `'on'` in development, `'off'` in production | Pass `inTab="on"` to turn on WebMCP and tab control in production (`settings.agent.inTab` must stay `'on'`, its default). |
 | `presence` | `{}` | See "Presence". |
 
 What it mounts: the presence overlay settings, the navigation watcher, the WebMCP tools, the tab socket,

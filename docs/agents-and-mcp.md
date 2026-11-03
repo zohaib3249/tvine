@@ -90,13 +90,13 @@ Typed tools carry MCP hints: `readOnlyHint` for reads, `destructiveHint` for `de
 
 ```ts
 // settings.ts
-mcp: { tools: 'both', exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 }   // defaults
+mcp: { tools: 'both', exclude: ['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 }   // defaults
 ```
 
 | Setting | Meaning |
 |---|---|
 | `mcp.tools` | `'both'` (generic + typed), `'generic'` (only the six), `'typed'` |
-| `mcp.exclude` | glob on action ids: `['admin.**', 'cart.setQty']` |
+| `mcp.exclude` | glob on action ids: `['admin.**', 'cart.setQty']`. A list you set replaces the default; the password actions (`auth.login`, `auth.logout`, `auth.requestPasswordReset`, `auth.resetPassword`) stay off MCP anyway, because each carries `mcp: false` |
 | `mcp.maxTools` | above this, typed tools are trimmed (still reachable through MCP `do`; `mcp:false` / `mcp.exclude` are not) |
 | `rules: { mcp: false }` on an action | not callable by agents at all (MCP, `do`, agent HTTP) unless a signed bind is present |
 | `mcp.exclude` | hides from MCP tools / MCP `do` / manifest / agent snapshots; other agent transports still see the action unless `mcp: false` |
@@ -196,7 +196,8 @@ avoids both: the agent borrows the person's own open tab, already logged in, wit
 5. It ends when the agent calls `release`, the person clicks **Stop**, or the tab closes.
 
 Limits: one agent per tab; only MCP calls go to the tab (plain HTTP stays headless); the link lives 5 minutes;
-`humanOnly` actions still refuse the agent and `confirm` still asks the person; the site can turn it off with
+`humanOnly` actions still refuse the agent and `confirm` still asks the person; in production the root layout must render
+`<WeftRoot inTab="on">` (the browser default is `'off'` there); the site can turn it off everywhere with
 `settings.agent.inTab: 'off'`.
 
 ### The Allow flow
@@ -234,7 +235,8 @@ Rules that always hold:
 - The approve link lives 5 minutes, the pairing code 2 minutes.
 - The "Agent connected · Stop" pill can't be hidden by the page while an agent is in control.
 - Actions run from the tab are marked as agent actions on the server, so `humanOnly` and `denyAgents` still apply.
-- `settings.agent.inTab: 'off'` (or `<WeftRoot inTab="off">`) disables tab control.
+- In production, tab control needs `<WeftRoot inTab="on">` in the root layout (the browser default there is `'off'`).
+  `settings.agent.inTab: 'off'` (or `<WeftRoot inTab="off">`) disables it.
 - Several workers or servers: works as with one once `channels: { backend: 'redis' }` is set (the tab, its
   posts and the agent may each reach a different worker; [deploy.md](deploy.md#scaling)).
 

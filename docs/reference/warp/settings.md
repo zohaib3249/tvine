@@ -130,13 +130,14 @@ framework key (any case) warns at boot and in `tvine check` ("did you mean 'allo
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `mcp.tools` | `'both' \| 'generic' \| 'typed'` | `'both'` | Generic tools (`read_page`, `expand`, `ui`, `do`, `request_control`, `release`) and/or one typed tool per action. |
-| `mcp.exclude` | `string[]` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | Action-id globs off MCP tools/`do`/manifest/snapshots (`'admin.**'`). Does not block agent HTTP unless the action also has `mcp: false`. A pattern matching nothing logs a warning. |
+| `mcp.exclude` | `string[]` | `['admin.**', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | Action-id globs off MCP tools/`do`/manifest/snapshots (`'admin.**'`). Does not block agent HTTP unless the action also has `mcp: false`. A pattern matching nothing logs a warning. |
 | `mcp.maxTools` | `number` | `40` | Typed tools above this are trimmed to `priority` actions (rest via `do`); not in `'typed'` mode. |
 | `agent.shape` | `'v1' \| 'v2'` | `'v2'` | Snapshot format. |
 | `agent.budget` | `number` | `1500` | Token budget for `view=auto`. |
 | `agent.rowsL1` | `number` | `10` | List rows at `view=L1`. |
-| `agent.inTab` | `'on' \| 'off'` | `'on'` | Agents may control a human's tab. |
+| `agent.inTab` | `'on' \| 'off'` | `'on'` | Agents may control a human's tab (server side). In production the browser side also needs `<WeftRoot inTab="on">`. |
 | `snapshotCache.ttlMs` | `number` | `60000` | Shared snapshots of non-personal pages; `0` = off; any write clears it. |
+| `snapshotCache.maxEntries` | `number` | `1000` | Most pages kept by the memory snapshot cache. |
 | `snapshotCache.backend` / `.redis` | | `'memory'` / `'default'` | |
 | `robots.allow` / `disallow` / `extra` | `string[]` | `[]` | Generated `/robots.txt` (only when the app ships none). |
 | `robots.sitemap` | `string?` | unset (`/sitemap.xml` if the app has one) | Absolute URL. |
