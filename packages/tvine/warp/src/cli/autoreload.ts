@@ -1,4 +1,4 @@
-// tvine dev autoreload (Django runserver's StatReloader): the parent watches the project and runs the real
+// tvine dev autoreload (a dev server that restarts on change): the parent watches the project and runs the real
 // server as a child (TVINE_DEV_CHILD=1); a backend change stops the child and starts a fresh one, because
 // Node's ESM cache cannot drop modules. Next's frontend (app/, components/, …) is left to Next HMR.
 import { spawn, type ChildProcess } from 'node:child_process'

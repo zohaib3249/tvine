@@ -21,7 +21,7 @@ export const isSuperuser: Permission = (ctx) => active(ctx) && ctx.user.isSuperu
 export const hiddenFromAnon = (def: ActionDef): boolean =>
   !!def.rules?.humanOnly || (def.rules?.permissions ?? []).some((p) => p === isStaff || p === isSuperuser || deniesAgents(p))
 
-// Django user.has_perms: every codename ('catalog.change_product') granted. A user without hasPerm (anonymous,
+// hasPerms: every codename ('catalog.change_product') granted. A user without hasPerm (anonymous,
 // a BYO user that has none) is denied.
 export function hasPerm(...perms: string[]): Permission {
   if (!perms.length) throw new Error('hasPerm(): name at least one permission')
@@ -32,7 +32,7 @@ export function hasPerm(...perms: string[]): Permission {
   }
 }
 
-// Django's view decorators as permissions (permissions: [...] on an action, a view, @action):
+// view decorators as permissions (permissions: [...] on an action, a view, @action):
 export const loginRequired: Permission = isAuthenticated                                        // login_required
 export const staffMemberRequired: Permission = isStaff                                          // staff_member_required (active staff)
 export const permissionRequired = (...perms: string[]): Permission => hasPerm(...perms)         // permission_required
@@ -44,7 +44,7 @@ export const userPassesTest = (test: (user: PermissionCtx['user'], ctx: Permissi
 export const permCodename = (app: string, action: string, model: string) =>
   `${app}.${action}_${model.startsWith(`${app}_`) ? model.slice(app.length + 1) : model}`
 
-// DRF DjangoModelPermissions for generic views: the generated action name (the id's last segment) → model
+// model permissions for generic views: the generated action name (the id's last segment) → model
 // permissions. Reads need only an authenticated user (DRF maps GET to []); any other action needs `change`
 // unless `map` names it. The app is the action id's first segment.
 export const MODEL_PERMS: Record<string, string[]> = { list: [], get: [], create: ['add'], update: ['change'], delete: ['delete'] }

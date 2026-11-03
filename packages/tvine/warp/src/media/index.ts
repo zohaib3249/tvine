@@ -66,7 +66,7 @@ export class DiskStorage implements Storage {
 }
 
 type UploadRules = Pick<ActionRules, 'permissions' | 'rate'>
-// uploadTo: key folder (Django upload_to), e.g. 'avatars' → 'avatars/<id>.png'; pass the file / image field's own uploadTo
+// uploadTo: key folder, e.g. 'avatars' → 'avatars/<id>.png'; pass the file / image field's own uploadTo
 // public: served with `Cache-Control: public` (shared caches, CDNs); default private (a user's upload)
 // private: never served without a signed, expiring url (media.url(file, { expiresIn, user }))
 export interface UploadOpts { maxBytes: number; types: string[]; storage?: Storage; permissions?: ActionRules['permissions']; uploadTo?: string; public?: boolean; private?: boolean }

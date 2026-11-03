@@ -32,7 +32,7 @@ export const defineSerializer = <T>(s: Serializer<T>): Serializer<T> => s
 export abstract class View {
   static permissions: Permission[] = []             // static → merged into every action's rules
 
-  // Django's as_view() for one action: the registered def (qualified id, merged rules) of a generated or
+  // asView() for one action: the registered def (qualified id, merged rules) of a generated or
   // @action action, e.g. `<Form action={ProductDetail.asAction('addToCart')}>`. Works from a page bundle.
   static asAction<V extends View>(this: abstract new () => V, name: (keyof V & string) | GeneratedAction): ActionDef {
     const d = registeredDef(this, name)
@@ -146,10 +146,10 @@ export abstract class GenericView<T extends object = any> extends View {
   permissions: Permission[] = []                    // runtime checks (getPermissions); static ones go in rules
   pageSize = 25
   maxPageSize = 100
-  // 'cursor' (keyset, default: stable under inserts, no OFFSET scan) | 'page' (Django Paginator: ?page=N,
+  // 'cursor' (keyset, default: stable under inserts, no OFFSET scan) | 'page' (page numbers: ?page=N,
   // the result carries page / numPages / total)
   pagination: 'cursor' | 'page' = 'cursor'
-  filters?: string[]                                // Django lookups; default: the model's enum/index fields
+  filters?: string[]                                // field lookups; default: the model's enum/index fields
   searchFields?: string[]                           // ?q=; default: the model's searchable fields
   ordering: string[] = []                           // allowed ?sort= values (each also as '-field')
   shapers?: Shapers                                 // set by discovery from apps/<app>/serializers.ts
@@ -243,7 +243,7 @@ export abstract class GenericView<T extends object = any> extends View {
     return list.run(params, c) as Promise<Paginated<Out>>
   }
 
-  // Page-component helper for one object (Django get_object_or_404): `await ProductDetail.object(params.id,
+  // Page-component helper for one object (404 when missing): `await ProductDetail.object(params.id,
   // { request: await currentRequest() })` → the same serialized object as `<app>.get` (permissions,
   // getObject / checkObjectPermissions, serializer, app shapers), or undefined when it does not exist or this
   // user may not see it (the page calls notFound()). Any other error (an invalid id) throws.

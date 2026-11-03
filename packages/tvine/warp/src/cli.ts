@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tvine — Django-style management commands (server-index.md §CLI, models-db.md §Migration commands).
+// tvine — management commands (server-index.md §CLI, models-db.md §Migration commands).
 import { existsSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -264,7 +264,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
     if (args.length > spec.args[1]) throw new Usage(`unexpected argument '${args[spec.args[1]]}'`)
     if (args.length < spec.args[0]) throw new Usage(cmd === 'startproject' || cmd === 'startapp' ? `usage: tvine ${cmd} <name>` : cmd === 'changepassword' ? 'usage: tvine changepassword <username>' : cmd === 'loaddata' ? 'usage: tvine loaddata <fixture.json> …' : `usage: tvine ${cmd} <app> <migration>`)
     const apps = resolve(o.apps)
-    if (typeof o.settings === 'string') process.env.TVINE_SETTINGS = o.settings   // DJANGO_SETTINGS_MODULE / --settings
+    if (typeof o.settings === 'string') process.env.TVINE_SETTINGS = o.settings   // --settings
     loadEnv()
     switch (cmd) {
       case 'startproject': {
@@ -437,7 +437,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'check': {
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         // which backend each subsystem runs on (one settings file drives them all), and every redis alias in use answers
-        // Django MIDDLEWARE as it will run, outermost first; which env vars are set (names only, never values)
+        // the HTTP middleware list as it will run, outermost first; which env vars are set (names only, never values)
         io.out(`middleware: ${describeMiddleware(srv.ctx.middleware as never).join(' > ') || '(none)'}`)
         io.out(`action middleware: ${srv.ctx.settings.actionMiddleware.length} global`)
         io.out(`env set: ${envReport().filter((e) => e.set).map((e) => e.name).join(', ') || '(none)'}`)
@@ -501,7 +501,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         ])]))
         return 0
       }
-      case 'show_urls': {   // django-extensions show_urls: the project's urls.ts, resolved
+      case 'show_urls': {   // show_urls: the project's urls.ts, resolved
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         await srv.close()
         const rows = srv.urls?.routes.map((r) => [r.pattern, [...r.methods.keys()].join(','), r.name ?? '-', [...new Set([...r.methods.values()].map((d) => d.id))].join(', ')]) ?? []
@@ -513,7 +513,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const [app] = args
         if (app !== undefined && !o.empty) throw new Usage('per-app makemigrations is only supported with --empty')
         if (o.empty && app === undefined) throw new Usage('--empty needs an app: tvine makemigrations <app> --empty')
-        // Django: --check implies --dry-run and exits 1 when a migration is missing
+        // --check implies --dry-run and exits 1 when a migration is missing
         const dryRun = !!(o.check || o['dry-run'])
         const { installedApps: installed } = await loadSettings()
         const r = await makeMigrations(apps, { installed, name: o.name as string | undefined, allowDrop: !!o['allow-drop'], merge: !!o.merge, empty: app, dryRun })
@@ -549,7 +549,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
       case 'sqlmigrate': {
         const [app, name] = args as [string, string]
         const settings = await loadSettings()
-        const conn = openConn(settings.db.url)   // the connected dialect, as Django does
+        const conn = openConn(settings.db.url)   // the connected dialect
         try { io.out(await sqlMigrate(apps, app, name, conn.dialect, { installed: settings.installedApps, backwards: !!o.backwards })) } finally { await conn.driver.close() }
         return 0
       }

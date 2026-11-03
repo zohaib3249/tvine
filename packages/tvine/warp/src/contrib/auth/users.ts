@@ -1,4 +1,4 @@
-// Server-side helpers (Django UserManager.create_user / create_superuser, set_password, group + permission
+// Server-side helpers (createUser / createSuperuser, setPassword, group + permission
 // grants). Validators run unless `validate: false` (fixtures, tests). `settings` picks the hashers/validators;
 // without it the defaults apply.
 import { DomainError } from '../../core/errors.js'
@@ -13,11 +13,11 @@ const NO_SETTINGS = {} as Settings
 // the usernameField (`username` on the built-in model) and requiredFields of the configured user model, plus any of its fields
 export type NewUser = { username?: string; email?: string | null; password?: string | null; isStaff?: boolean; isSuperuser?: boolean; isActive?: boolean } & Record<string, unknown>
 
-// Django UserManager.create_user on get_user_model()
+// createUser on getUserModel()
 export async function createUser(u: NewUser, o: { settings?: Settings; validate?: boolean } = {}): Promise<UserRow> {
   const s = o.settings ?? NO_SETTINGS, { usernameField: uf, emailField: ef } = userMeta()
   const { password: raw, ...rest } = u
-  const name = String(rest[uf] ?? '').normalize('NFKC').trim()   // Django normalize_username
+  const name = String(rest[uf] ?? '').normalize('NFKC').trim()   // normalize the username
   if (!name) throw new DomainError('invalid_param', `a ${uf} is required`, uf)
   rest[uf] = name
   if (ef && typeof rest[ef] === 'string') rest[ef] = (rest[ef] as string).trim() || null
@@ -25,7 +25,7 @@ export async function createUser(u: NewUser, o: { settings?: Settings; validate?
     const problems = validatePassword(raw, s, { ...rest, username: name, email: (ef && rest[ef]) || '' })
     if (problems.length) throw new DomainError('invalid_param', problems.join(' '), 'password')
   }
-  // no password → unusable (Django set_unusable_password): the account can only get one through a reset
+  // no password → unusable: the account can only get one through a reset
   const password = raw == null ? `${UNUSABLE}${crypto.randomUUID()}` : await makePassword(raw, s)
   return getUserModel().create({ ...rest, password, isStaff: !!u.isStaff, isSuperuser: !!u.isSuperuser, isActive: u.isActive ?? true } as never)
 }
@@ -34,7 +34,7 @@ export const createSuperuser = (u: Omit<NewUser, 'isStaff' | 'isSuperuser'>, o?:
   createUser({ ...u, isStaff: true, isSuperuser: true }, o)
 
 // A new password: the user's API tokens are revoked and every other session dies (bound to the old hash); `ctx` =
-// the request doing it, whose own session stays signed in when it is that user's (Django update_session_auth_hash).
+// the request doing it, whose own session stays signed in when it is that user's.
 export async function setPassword(userId: number, raw: string, o: { settings?: Settings; validate?: boolean; ctx?: Pick<ActionCtx, 'session' | 'settings'> } = {}): Promise<void> {
   const s = o.settings ?? o.ctx?.settings ?? NO_SETTINGS
   const row = await getUserModel().get(userId)

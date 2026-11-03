@@ -65,19 +65,19 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -101,7 +101,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -115,7 +115,7 @@ The smallest working app is [examples/notes](../examples/notes). Copy it and ren
 ```
 examples/notes/
 ├─ package.json        deps: tvine, next, react, zod
-├─ settings.ts         Django settings.py (a one-file project; startproject makes config/settings/)
+├─ settings.ts         settings (a one-file project; startproject makes config/settings/)
 ├─ urls.ts             optional REST paths (ROOT_URLCONF)
 ├─ next.config.ts
 ├─ apps/notes/         one app: models, views, urls, admin, tasks, migrations
@@ -134,7 +134,7 @@ pnpm exec tvine dev --port 4400  # Next dev server + Warp in one process
 The full walkthrough, from an empty folder to a working app with admin, agents and background jobs, is
 [getting-started.md](getting-started.md).
 
-**Autoreload:** like Django's `runserver`, `tvine dev` restarts the server when backend code changes: anything
+**Autoreload:** `tvine dev` restarts the server when backend code changes: anything
 under `apps/` (models, views, serializers, actions, admin, tasks, urls…), `config/`, `.env*` or `tvine.config.*`.
 It prints `tvine dev: apps/blog/views.ts changed, restarting…`, then `ready on :3000 (restarted in 1.2 s)` on the
 same port. Pages and components (`app/`, `components/`, CSS) are not restarted: Next hot-reloads them. A file that

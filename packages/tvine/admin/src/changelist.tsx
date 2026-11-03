@@ -8,7 +8,7 @@ import { Empty, ErrorBox, Icon, cap, PlainForm, Region, Skeleton, Slotted, cx, s
 import { ChartStrip } from './dashboard.js'
 import { DeleteTree } from './pages.js'
 
-// A list cell as Django shows it: choice labels (get_FOO_display), money with its currency, local dates.
+// A list cell for display: choice labels, money with its currency, local dates.
 export function show(v: Display | undefined, empty = '—', f?: { kind?: string; choices?: { value: string; label: string }[] }): ReactNode {
   if (v === null || v === undefined || v === '') return <span className="text-muted">{empty}</span>
   if (typeof v === 'boolean') return <span className={v ? 'text-ok' : 'text-danger'} aria-label={v ? 'Yes' : 'No'}><Icon name={v ? 'check' : 'x'} /></span>
@@ -383,7 +383,7 @@ function FilterGroup({ f, facets, value, pick }: { f: FilterMeta; facets?: Facet
   )
 }
 
-// Django date_hierarchy: year → month → day drill-down, chips from the list's facets (`<field>__year|month|day`).
+// date hierarchy: year → month → day drill-down, chips from the list's facets (`<field>__year|month|day`).
 function DateHierarchy({ field, facets, set }: { field: string; facets?: Record<string, Facet[]>; set(p: Record<string, string | undefined>): void }) {
   const { query } = useAdmin()
   const y = query[`${field}__year`], m = query[`${field}__month`], dd = query[`${field}__day`]

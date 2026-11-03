@@ -1,4 +1,4 @@
-// AdminSite (Django django.contrib.admin.sites): the registry, site options, custom pages/widgets, and
+// AdminSite: the registry, site options, custom pages/widgets, and
 // autodiscover of apps/<app>/admin.ts at boot. docs/design/contrib/admin.md §1.
 import { appModule, importApp } from '../../core/actions.js'
 import { installedApps } from '../../core/apps.js'
@@ -106,7 +106,7 @@ export class AdminSite {
     return out
   }
 
-  // Django system checks for every registered admin: unknown names fail at boot, naming the class
+  // boot checks for every registered admin: unknown names fail at boot, naming the class
   check(): void {
     for (const a of this.admins()) {
       const where = `${a.constructor.name} (${a._key})`
@@ -161,7 +161,7 @@ export function register(...args: (AnyModel | (new () => ModelAdmin))[]) {
   return <C extends new () => ModelAdmin>(cls: C, _ctx?: unknown): C => { site.register(models, cls); return cls }
 }
 
-// Django autodiscover(): app labels for every model, then each installed app's admin module (project apps,
+// autodiscover(): app labels for every model, then each installed app's admin module (project apps,
 // then contrib — tvine.auth / tvine.tasks register theirs). Returns the custom views' action defs.
 let found: Promise<ActionDef[]> | undefined
 const seen = new Set<string>()

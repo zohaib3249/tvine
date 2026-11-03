@@ -1,4 +1,4 @@
-// The one row-scoping path (Django get_queryset): every read of a view's or an admin's rows goes through scoped(),
+// The one row-scoping path (getQueryset): every read of a view's or an admin's rows goes through scoped(),
 // so a new code path cannot forget the per-user / per-tenant scope by reaching for `model.objects`.
 import type { QuerySet } from '../data/queryset.js'
 

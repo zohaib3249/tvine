@@ -1,4 +1,4 @@
-// Django formfield_overrides: registerFieldWidget('money', MyMoney) for every money field, or
+// custom widgets: registerFieldWidget('money', MyMoney) for every money field, or
 // registerFieldWidget('shop.order.status', StatusPicker) for one field of one model (wins over the kind).
 import type { FieldKind, FieldWidget } from './types.js'
 

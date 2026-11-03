@@ -1,7 +1,7 @@
-// diff(from, to) → operations per app (Django's autodetector, minimal). Renames are NEVER guessed:
+// diff(from, to) → operations per app (the autodetector, minimal). Renames are NEVER guessed:
 // a renamed field/model is remove + add, so the drop guard fires and the dev writes
 // ops.renameField / ops.renameModel by hand. Meta indexes / unique-together / constraints are owned by
-// models.ts (Django): removals come first (before the fields they cover go), additions last.
+// models.ts: removals come first (before the fields they cover go), additions last.
 // Field-level `index: true` changes are an alterField.
 import { canon, fieldOf, type ModelState, type ProjectState } from './state.js'
 import { makeOp, type Operation } from './operations.js'

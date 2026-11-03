@@ -53,7 +53,7 @@ export function fromApi(m: FieldMeta, v: unknown): any {
   }
 }
 
-const DUR = /^(?:(\d+)\s+)?(\d+):([0-5]?\d)(?::([0-5]?\d))?$/   // "[D ]H:MM[:SS]" (Django)
+const DUR = /^(?:(\d+)\s+)?(\d+):([0-5]?\d)(?::([0-5]?\d))?$/   // "[D ]H:MM[:SS]"
 export const durationSeconds = (s: string) => {
   const m = DUR.exec(s.trim()); if (!m) return NaN
   return Number(m[1] ?? 0) * 86400 + Number(m[2]) * 3600 + Number(m[3]) * 60 + Number(m[4] ?? 0)
@@ -99,7 +99,7 @@ const out = (fields: Record<string, FieldMeta>, values: Record<string, any>, kee
   return r
 }
 
-// Whole form → admin.create/update params `{ values, inlines? }`. Inline rows keep `pk` and a `DELETE` flag (Django formsets).
+// Whole form → admin.create/update params `{ values, inlines? }`. Inline rows keep `pk` and a `DELETE` flag.
 export function toPayload(form: FormMeta | Record<string, FieldMeta>, values: Record<string, any>, inlines?: Record<string, Row[]>):
   { values: Record<string, unknown>; inlines?: Record<string, Record<string, unknown>[]> } {
   const fields = 'fields' in form && 'fieldsets' in form ? (form as FormMeta).fields : form as Record<string, FieldMeta>
@@ -115,7 +115,7 @@ export function toPayload(form: FormMeta | Record<string, FieldMeta>, values: Re
 export const inlineFields = (meta: Record<string, FieldMeta> | { fields: Record<string, FieldMeta> }): Record<string, FieldMeta> =>
   'fields' in meta && typeof (meta as { fields: unknown }).fields === 'object' && !('kind' in (meta as object)) ? (meta as { fields: Record<string, FieldMeta> }).fields : meta as Record<string, FieldMeta>
 
-// ---- client validation (Django messages) ----
+// ---- client validation ---------------------
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const SLUG = /^[-a-zA-Z0-9_]+$/
 const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i

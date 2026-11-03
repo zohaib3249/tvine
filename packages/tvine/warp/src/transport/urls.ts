@@ -12,7 +12,7 @@ export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransport
   const { settings } = server
 
   async function handle(req: IncomingMessage, res: ServerResponse, hit: ReturnType<UrlTable['match']>[number]) {
-    const method = req.method === 'HEAD' ? 'GET' : req.method!   // Django: HEAD = GET without a body (node drops it)
+    const method = req.method === 'HEAD' ? 'GET' : req.method!   // HEAD = GET without a body (node drops it)
     const def = hit.route.methods.get(method)!
     const who = await callerOf(server, o, req, res)
     if (!who) return sendApi(res, API_FORBIDDEN)

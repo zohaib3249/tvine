@@ -1,4 +1,4 @@
-// Django settings.py. Everything not named here is a default (docs/design/conventions/settings.md).
+// All settings, one file. Everything not named here is a default (docs/design/conventions/settings.md).
 import { defineSettings } from 'tvine'
 
 export default defineSettings({

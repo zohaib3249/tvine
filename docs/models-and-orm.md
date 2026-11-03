@@ -1,6 +1,6 @@
 # Models and the ORM
 
-Tvine has its own ORM, modelled on Django's: models in `apps/<app>/models.ts`, `Model.objects` querysets,
+Tvine has its own ORM: models in `apps/<app>/models.ts`, `Model.objects` querysets,
 migration files you commit. It runs on SQLite (default), Postgres and MySQL/MariaDB with the same code.
 
 ## Setup
@@ -39,39 +39,39 @@ pnpm exec tvine migrate            # → applied notes.0001_initial
 
 ## Field types
 
-| `field.` | Django | JS value |
-|---|---|---|
-| `id()` | AutoField | number |
-| `uuid()` | UUIDField | string |
-| `text()` | TextField / CharField | string |
-| `int()`, `float()` | IntegerField, FloatField | number |
-| `bool()` | BooleanField | boolean |
-| `decimal({ maxDigits, decimalPlaces })` | DecimalField | string `'12.50'` |
-| `money()` | — | `{ value, currency }`, major units, stored as integer cents |
-| `percent()` | — | number 0–100 |
-| `datetime({ auto })` | DateTimeField | `Date` |
-| `date({ autoNow, autoNowAdd })`, `time()` | DateField, TimeField | `'YYYY-MM-DD'`, `'HH:MM:SS'` |
-| `duration()` | DurationField | milliseconds |
-| `dateRange()` | — | `{ start, end }` |
-| `email()`, `url()`, `slug()` | EmailField, URLField, SlugField | validated string |
-| `phone()`, `color()`, `country()`, `ip()` | — / GenericIPAddressField | E.164, `#rrggbb`, ISO code, IPv4/IPv6 |
-| `json()` | JSONField | any JSON |
-| `tags({ maxItems, choices })` | — | `string[]` |
-| `address()` | — | `{ line1, line2?, city, region?, postal?, country }` |
-| `markdown()`, `code({ language })` | — | string |
-| `richText({ allowRemoteImages })` | — | HTML, sanitized on every save |
-| `file({ uploadTo })`, `image({ uploadTo })` | FileField, ImageField | storage key |
-| `signature()` | — | a drawn signature, stored as an image |
-| `encryptedText()`, `encryptedJson()`, `encrypted({ of, deterministic, context })` | — | encrypted at rest (AES-256-GCM) |
-| `enum(['a', 'b'] as const)` | `choices` | one of the values |
-| `fk(() => Model, { onDelete, relatedName })` | ForeignKey | the row gets `<name>Id` |
-| `m2m(() => Model, { through, relatedName })` | ManyToManyField | no column; `Model.related('field', id)` |
+| `field.` | JS value |
+|---|---|
+| `id()` | number |
+| `uuid()` | string |
+| `text()` | string |
+| `int()`, `float()` | number |
+| `bool()` | boolean |
+| `decimal({ maxDigits, decimalPlaces })` | string `'12.50'` |
+| `money()` | `{ value, currency }`, major units, stored as integer cents |
+| `percent()` | number 0–100 |
+| `datetime({ auto })` | `Date` |
+| `date({ autoNow, autoNowAdd })`, `time()` | `'YYYY-MM-DD'`, `'HH:MM:SS'` |
+| `duration()` | milliseconds |
+| `dateRange()` | `{ start, end }` |
+| `email()`, `url()`, `slug()` | validated string |
+| `phone()`, `color()`, `country()`, `ip()` | E.164, `#rrggbb`, ISO code, IPv4/IPv6 |
+| `json()` | any JSON |
+| `tags({ maxItems, choices })` | `string[]` |
+| `address()` | `{ line1, line2?, city, region?, postal?, country }` |
+| `markdown()`, `code({ language })` | string |
+| `richText({ allowRemoteImages })` | HTML, sanitized on every save |
+| `file({ uploadTo })`, `image({ uploadTo })` | storage key |
+| `signature()` | a drawn signature, stored as an image |
+| `encryptedText()`, `encryptedJson()`, `encrypted({ of, deterministic, context })` | encrypted at rest (AES-256-GCM) |
+| `enum(['a', 'b'] as const)` | one of the values |
+| `fk(() => Model, { onDelete, relatedName })` | the row gets `<name>Id` |
+| `m2m(() => Model, { through, relatedName })` | no column; `Model.related('field', id)` |
 
 ### Options every field takes
 
 | Option | Meaning |
 |---|---|
-| `optional` | nullable (Django `null=True, blank=True`) |
+| `optional` | nullable; may be left out on create |
 | `default` | default value |
 | `unique`, `index` | unique / indexed column |
 | `searchable` | used by `?q=` search in generic views and the admin |
@@ -99,7 +99,7 @@ Key handling: [auth-and-security.md](auth-and-security.md).
 ### Meta
 
 **The user.** Point an fk at the configured user model, never at `User` directly: `owner: field.fk(getUserModel)`
-(from `tvine/auth`). That's Django's `ForeignKey(settings.AUTH_USER_MODEL)`, and it follows `settings.auth.userModel`
+(from `tvine/auth`). It follows `settings.auth.userModel`
 (see auth-and-security.md, "Custom user model").
 
 The third argument to `defineModel`:
@@ -122,7 +122,7 @@ await Product.objects.filter({ category: 'shirts' }).order('-price').page({ size
 await Product.objects.search('summer').first()
 await Product.objects.filter({ price__lte: 30, stock__gt: 0 }).count()
 await Product.objects.exclude({ category: 'hats' }).all()
-await Product.objects.slice(0, 10).all()                    // Django qs[0:10]
+await Product.objects.slice(0, 10).all()                    // the first 10 rows (LIMIT 10)
 
 const p = await Product.create({ name: 'Shirt', price: { value: 29, currency: 'USD' } })
 await Product.update(p.id, { stock: 11 })
@@ -133,7 +133,7 @@ await Product.delete(42)
 Lookups: `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `iexact`, `isnull`, `range`, `year`/`month`/`day`/`date`,
 and relation paths (`vendor__name`, `product_set__price__gt`).
 
-Expressions and aggregates, as in Django:
+Expressions and aggregates:
 
 ```ts
 import { F, Q, Sum, Count, Avg } from 'tvine'
@@ -158,7 +158,7 @@ Also `getOrCreate`, `updateOrCreate`, `bulkCreate`, `bulkUpdate`, `inBulk`, `sel
 
 ## Transactions
 
-Each action is one transaction (Django `ATOMIC_REQUESTS`, `settings.db.atomicRequests`). Opt out per action
+Each action is one transaction (`settings.db.atomicRequests`). Opt out per action
 with `rules: { atomic: false }`. In your own code, use `atomic(async () => { … })`.
 
 ## Migrations
@@ -184,7 +184,7 @@ be rolled back.
 ## Fixtures
 
 ```bash
-pnpm exec tvine dumpdata notes --output notes.json     # Django format: [{ model, pk, fields }]
+pnpm exec tvine dumpdata notes --output notes.json     # format: [{ model, pk, fields }]
 pnpm exec tvine loaddata notes.json                    # one transaction, upsert by pk
 ```
 

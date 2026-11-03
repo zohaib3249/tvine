@@ -1,6 +1,6 @@
 # Tvine
 
-**The agent-native web framework: Django for TypeScript, with Next.js and React, where AI agents use your app through a built-in MCP server (Model Context Protocol) and WebMCP.** Own ORM, migrations, admin panel, auth, background tasks.
+**The agent-native TypeScript web framework, with Next.js and React, where AI agents use your app through a built-in MCP server (Model Context Protocol) and WebMCP.** Own ORM, migrations, admin panel, auth, background tasks.
 
 [![npm](https://img.shields.io/npm/v/tvinejs?label=npm%3A%20tvinejs)](https://www.npmjs.com/package/tvinejs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -44,7 +44,7 @@ Admin screenshots are from an example store app; Shield screenshots use sample t
 
 - **People and AI agents use the same app.** Every action you write is also an MCP tool. Every page has a Markdown and a JSON view for agents on the same URL.
 - **Agents can use a real, logged-in browser.** With tab control the person clicks **Allow** and the agent drives their open tab. No captchas, no shared passwords, **Stop** takes it back.
-- **Django, in TypeScript.** Models, migrations, QuerySets, views, serializers, `urls.ts`, auth, admin, tasks, cache, email, audit, middleware. If you know Django, you know where things go.
+- **Batteries included.** Models, migrations, QuerySets, views, serializers, `urls.ts`, auth, admin, tasks, cache, email, audit, middleware. If you know Django, you'll recognise the layout.
 - **Next.js pages.** React 19 + Next 16 for the frontend, calling the backend through a typed `api.*` client.
 - **One Node process.** **Warp** is the server, **Weft** the frontend. Tvine is Icelandic for "twine two threads".
 - **Secure by default.** Host allow-list, CSP, CORS, sessions, 2FA, encrypted fields, human-only actions, confirm prompts for agents.

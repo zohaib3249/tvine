@@ -2,9 +2,9 @@
 
 ## What it is
 
-Tvine's cache is Django's `django.core.cache` in TypeScript: named caches configured in `settings.caches`, each on a
+Tvine's cache: named caches configured in `settings.caches`, each on a
 backend (`memory`, `redis`, `file`, `dummy`), with `get / set / add / getOrSet / incr / delete…`, versions, tag
-invalidation, and a per-action result cache (`rules.cache`, Django's `cache_page`). Values are JSON: Dates and
+invalidation, and a per-action result cache (`rules.cache`). Values are JSON: Dates and
 bigints round-trip, class instances come back as plain objects. Source: `packages/tvine/warp/src/cache/index.ts`.
 
 ## Install / enable

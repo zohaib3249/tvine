@@ -1,4 +1,4 @@
-// Django URLs (docs/design/conventions/urls.md): path / re_path / include / reverse, DRF routers. Every
+// URLs (docs/design/conventions/urls.md): path / re_path / include / reverse, routers. Every
 // route names an action the manifest already holds; transport/urls dispatches it like POST /tvine/api/<id>.
 // The project's config/urls.ts (or urls.ts; settings.rootUrlconf) is the ROOT_URLCONF; without one there are no URL routes.
 import { dirname } from 'node:path'
@@ -13,9 +13,9 @@ export interface UrlPattern { kind: 'path'; route: string; regex: boolean; view:
 export interface UrlInclude { kind: 'include'; route: string; module: string | UrlEntry[]; namespace?: string }
 export type UrlEntry = UrlPattern | UrlInclude
 
-// Django's default converters: regex + to_python. path matches across '/'.
+// default converters: regex + parse. path matches across '/'.
 const CONVERTERS: Record<string, { re: string; parse?: (s: string) => unknown }> = {
-  int: { re: '[0-9]{1,15}', parse: Number },   // ponytail: ≤ 15 digits stays exact as a JS number (Django: unbounded int)
+  int: { re: '[0-9]{1,15}', parse: Number },   // ponytail: ≤ 15 digits stays exact as a JS number
   str: { re: '[^/]+' },
   slug: { re: '[-a-zA-Z0-9_]+' },
   uuid: { re: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' },
@@ -27,7 +27,7 @@ export class NoReverseMatch extends Error { name = 'NoReverseMatch' }
 export class ImproperlyConfigured extends Error { name = 'ImproperlyConfigured' }
 
 type Part = string | { name: string; conv: string }
-// '<int:id>/' → parts; an unknown converter or a bad group name throws now (Django: at path() time)
+// '<int:id>/' → parts; an unknown converter or a bad group name throws now, at path() time
 function parse(route: string): Part[] {
   const parts: Part[] = []
   let at = 0
@@ -76,7 +76,7 @@ export class SimpleRouter {
     this.registry.push({ prefix, view, basename })
     return this
   }
-  // read at boot (after discovery), like Django evaluating urlpatterns
+  // read at boot (after discovery)
   get urls(): UrlEntry[] {
     const slash = this.opts.trailingSlash === false ? '' : '/'
     const out: UrlEntry[] = []
@@ -121,7 +121,7 @@ function methodsOf(e: UrlPattern, parts: Part[] | undefined): Map<string, Action
     for (const x of e.methods?.map((s) => s.toUpperCase()) ?? [e.view.rules?.readOnly ? 'GET' : 'POST']) m.set(x, e.view)
     return m
   }
-  // a View class: Django as_view() — GET list/retrieve, POST create, PUT/PATCH update, DELETE destroy;
+  // a View class: asView() — GET list/retrieve, POST create, PUT/PATCH update, DELETE destroy;
   // detail when the route carries the view's lookup param
   const { routes, lookup } = viewRoutes(e.view)
   const detail = parts ? parts.some((p) => typeof p !== 'string' && p.name === lookup.param) : e.route.includes(`(?<${lookup.param}>`)
@@ -141,7 +141,7 @@ export async function loadUrls(appsDir: string, installed: readonly string[] = [
   const load = async (file: string) => {
     try { return await importApp(file) } catch (e) { throw new ImproperlyConfigured(`${file}: ${(e as Error).message}`, { cause: e }) }
   }
-  // prefix: Django parts while every route so far is a path(); a regex source once a re_path is involved
+  // prefix: path parts while every route so far is a path(); a regex source once a re_path is involved
   const walk = async (entries: unknown, file: string, prefix: { src?: string; parts?: Part[] }, ns: string[]) => {
     if (!Array.isArray(entries)) throw new ImproperlyConfigured(`${file}: urlpatterns must be an array`)
     for (const e of entries as UrlEntry[]) {
@@ -230,7 +230,7 @@ function table(routes: Route[]): UrlTable {
   }
 }
 
-// Django reverse('ns:name', kwargs): the first pattern of that name whose params are exactly the kwargs
+// reverse('ns:name', kwargs): the first pattern of that name whose params are exactly the kwargs
 // and whose converters accept them. Values are URL-quoted (path keeps its '/').
 export function reverse(name: string, kwargs: Record<string, string | number> = {}, urls: UrlTable | undefined = g[LIVE]): string {
   const all = urls?.routes ?? []

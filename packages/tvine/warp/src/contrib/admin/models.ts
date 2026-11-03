@@ -1,10 +1,10 @@
-// tvine.admin models: Django's admin LogEntry. user is the user's id as text (no fk: the admin works with a
+// tvine.admin models: the admin LogEntry. user is the user's id as text (no fk: the admin works with a
 // BYO user resolver too); contentType is the model key '<app>.<model>'.
 import { defineModel } from '../../data/model.js'
 import { field } from '../../data/fields.js'
 
 export const ADDITION = 1, CHANGE = 2, DELETION = 3
-export const REPR_MAX = 200   // Django object_repr max_length
+export const REPR_MAX = 200   // max length of the stored object repr
 
 export const LogEntry = defineModel('admin_logentry', {
   id: field.id(),

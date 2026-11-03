@@ -103,7 +103,7 @@ export function DeleteView({ meta, obj, preview, error, pk }: { meta: ModelMeta;
   )
 }
 
-// Django LogEntry.get_change_message, in words
+// the LogEntry change message, in words
 export function changeText(m: unknown, action: string): string {
   if (typeof m === 'string') return m
   if (!Array.isArray(m) || !m.length) return action === 'add' ? 'Added.' : action === 'delete' ? 'Deleted.' : 'No fields changed.'
@@ -143,7 +143,7 @@ export function HistoryView({ meta, obj, rows, pk }: { meta: ModelMeta; obj?: Ob
 
 export { Login } from './login.js'
 
-// Django user_change_password: two password inputs that must match → the UserAdmin getUrls view (validators run there)
+// change password: two password inputs that must match → the UserAdmin getUrls view (validators run there)
 export function PasswordChange({ args, data }: { args?: Record<string, string>; data?: unknown }) {
   const { call, base, navigate } = useAdmin()
   const [err, setErr] = useState<string>(), [busy, setBusy] = useState(false)

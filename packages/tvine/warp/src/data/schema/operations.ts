@@ -1,4 +1,4 @@
-// Migration operations (Django's set, v1). Each op is plain data + two steps:
+// Migration operations (v1). Each op is plain data + two steps:
 //   stateForwards(state, app)            — replay: how the op changes ProjectState
 //   databaseForwards(dialect, from, to)  — the SQL, via dialect.renderOperation (sqlite rebuilds
 //                                          tables for what it cannot ALTER; see dialects/sqlite.ts)
@@ -76,7 +76,7 @@ export const ops = {
   addConstraint: (model: string, constraint: ConstraintSpec) => makeOp({ kind: 'addConstraint', model: id(model), constraint: { ...constraint, name: id(constraint.name) } }),
   removeConstraint: (model: string, name: string) => makeOp({ kind: 'removeConstraint', model: id(model), name: id(name) }),
   alterUniqueTogether: (model: string, unique: string[][]) => makeOp({ kind: 'alterUniqueTogether', model: id(model), unique: unique.map(u => u.map(id)) }),
-  // escape hatch, like Django's RunSQL: one string per statement; a bare string/array runs on every dialect.
+  // escape hatch (RunSQL): one string per statement; a bare string/array runs on every dialect.
   // reverse: the rollback SQL ([] = nothing to undo); without it the migration cannot be rolled back
   runSQL: (sql: SQL | Partial<Record<DbName, SQL>>, opts: { reverse?: SQL | Partial<Record<DbName, SQL>> } = {}) =>
     makeOp({ kind: 'runSQL', sql, ...(opts.reverse !== undefined ? { reverse: opts.reverse } : {}) }),

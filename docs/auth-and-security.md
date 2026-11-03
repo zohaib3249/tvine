@@ -1,6 +1,6 @@
 # Auth and security
 
-`tvine.auth` is Django's `django.contrib.auth` for Tvine: users, groups, permissions, sessions, password reset,
+`tvine.auth` is the built-in auth app: users, groups, permissions, sessions, password reset,
 TOTP 2FA and personal access tokens for agents. On top, Warp ships secure defaults for every request: host
 allow-list, CSP and security headers, closed CORS, rate limits, session hardening and an audit trail.
 
@@ -55,7 +55,7 @@ the last 10 minutes, or the password again.
 
 ## Custom user model
 
-Like Django's `AUTH_USER_MODEL`. Pick it **before the first `tvine migrate`**: tvine.auth's tables point at it.
+Pick it **before the first `tvine migrate`**: tvine.auth's tables point at it.
 Changing it later makes `tvine check` and `tvine migrate` fail with "settings.auth.userModel changed after
 tvine.auth was migrated"; start from a fresh database, or move the users with a hand-written data migration.
 
@@ -72,7 +72,7 @@ export const User = extendUser({ phone: field.phone({ optional: true }) }, { req
 auth: { userModel: 'accounts.User' },   // 'app.Model'; the default is 'auth.User'
 ```
 
-The table is `accounts_user` (Django's default name). `auth_user` is never created. Fully custom
+The table is `accounts_user` (`<app>_<model>`). `auth_user` is never created. Fully custom
 (AbstractBaseUser), e.g. sign-in by email with no username:
 
 ```ts
@@ -91,7 +91,7 @@ To point your own models at the user, use `field.fk(getUserModel)`.
 
 ## Authentication backends
 
-Like Django's `AUTHENTICATION_BACKENDS`. They're tried in order, and the first one that returns a user wins:
+They're tried in order, and the first one that returns a user wins:
 
 ```ts
 auth: { backends: ['tvine.auth.ModelBackend', 'tvine.auth.EmailBackend', 'accounts.backends.LdapBackend'] }
@@ -126,7 +126,7 @@ the user.
 
 ## User methods
 
-User-model rows from the ORM, and `ctx.request.user` for a signed-in user, have Django's methods:
+User-model rows from the ORM, and `ctx.request.user` for a signed-in user, have these methods:
 
 ```ts
 const u = await getUserModel().objects.filter({ username: 'ann' }).first()
@@ -191,7 +191,7 @@ Per-action rules beyond permissions: `humanOnly` (agents never), `denyAgents`, `
 confirm token, `by: 'human'` when only the user may say yes), `rate`. See
 [frontend-weft.md](frontend-weft.md) for the matching `<HumanOnly>` UI.
 
-`migrate` creates `add / change / delete / view` permission rows for every model, as Django does.
+`migrate` creates `add / change / delete / view` permission rows for every model.
 
 ## Security features
 
@@ -211,7 +211,7 @@ Condensed; the full table with every setting is
 | | `request.ip` only from trusted proxies | `trustProxy` | 0 |
 | Sessions | httpOnly cookie, `__Host-` when Secure, SameSite, rotation on login/logout | `session.*` | Secure in prod, Lax |
 | | Idle TTL and absolute lifetime | `session.ttlMs`, `session.maxAgeMs` | 24 h, 14 days |
-| Auth | scrypt hashing, rehash on login, Django validators + 20k common passwords | `auth.hashers`, `auth.validators` | on |
+| Auth | scrypt hashing, rehash on login, password validators + 20k common passwords | `auth.hashers`, `auth.validators` | on |
 | | Breach check (Have I Been Pwned, k-anonymity) | `auth.breachCheck` | off |
 | | Login throttling and lockout | `auth.login.*` | 5 per 15 min |
 | | TOTP 2FA, recovery codes, sudo mode | `auth.totp*` | per user |
@@ -237,7 +237,7 @@ content-security-policy: default-src 'self'; script-src 'self' … 'nonce-…' '
 
 ## Middleware
 
-`settings.middleware` is a list, like Django's `MIDDLEWARE`. Built-ins: `tvine.middleware.Security`,
+`settings.middleware` is the HTTP middleware list. Built-ins: `tvine.middleware.Security`,
 `tvine.middleware.AllowedHosts`, `tvine.middleware.Cors`, `tvine.middleware.RequestId`,
 `tvine.middleware.GZip`, `tvine.middleware.RateLimit`, `tvine.middleware.IpFilter`. Add your own per app.
 The full catalog with options, and custom middleware: [settings-and-env.md](settings-and-env.md#middleware).

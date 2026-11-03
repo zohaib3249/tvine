@@ -9,7 +9,7 @@ Weft has four ways to build a form, all agent-operable:
 | Plain HTML `<form>` + `api.*` in `onSubmit` | the Weft JSX runtime | the simplest case; inputs, selects and the form register by themselves |
 | Built-in widgets (`Input`, `Select`, `Quantity`, …) inside a `<form>` | `tvine/widgets` | you want labels, errors, typed agent controls |
 | Server `Form` / `Input` / `Button` primitives bound to an action definition | `tvine/weft` (server components) | a server-rendered form that submits through a Next server action into the same dispatcher agents use |
-| `ModelForm` / `Field` driven by field meta | `tvine/forms` | Django ModelForm / admin style forms with 40+ field kinds, client validation, inline formsets |
+| `ModelForm` / `Field` driven by field meta | `tvine/forms` | Model forms (as in the admin's change form) with 40+ field kinds, client validation, inline formsets |
 
 This page covers all four, plus validation, file uploads, `HumanOnly` and confirm prompts.
 
@@ -209,7 +209,7 @@ function ModelForm(props: ModelFormProps): JSX.Element
 - Agent widget `form:<name>`: state `{ dirty, pending?, errors?, banner? }`, controls `submit()` and `reset()`.
 - Fields: `form:<name> > field:<field>`; inline rows: `form:<name> > inline:<i> > row:<pk|newN> > field:<f>`.
 - Inline widget `inline:<name>` (kind `list`): `add()` and `remove(row)`; state `{ rows, deleted, max, min }`.
-- `slugAuto` fields follow their `from` field until someone edits them (Django `prepopulated_fields`).
+- `slugAuto` fields follow their `from` field until someone edits them.
 - Fieldset `classes: ['collapse']` renders a `<details>` that opens itself when it holds an error.
 
 ```tsx
@@ -362,11 +362,11 @@ Widgets edit **form shape**; the API takes **API shape**. `fromApi(meta, v)` con
 Client side (`tvine/forms`):
 
 ```ts
-validateField(meta: FieldMeta, value: any): string | undefined        // one field, Django-style messages
+validateField(meta: FieldMeta, value: any): string | undefined        // one field, the standard messages
 validate(fields: Record<string, FieldMeta>, values: Record<string, any>): Record<string, string>
 ```
 
-Messages match Django: `This field is required.`, `Enter a valid email address.`, `Ensure this value is
+Messages: `This field is required.`, `Enter a valid email address.`, `Ensure this value is
 less than or equal to 10.`, `Select a valid choice. x is not one of the available choices.`, and so on.
 `ModelForm` validates on submit and then live after the first submit attempt.
 

@@ -1,4 +1,4 @@
-// Connections, Django-style: models never hold one; queries call connections.get() when they RUN.
+// Connections: models never hold one; queries call connections.get() when they RUN.
 // configure() registers an alias without opening anything; get() builds the driver lazily (and the
 // pg / mysql pool connects on its first query). sqlite: WAL + busy_timeout, one connection per alias;
 // postgres / mysql: a pool sized from settings.db.pool.

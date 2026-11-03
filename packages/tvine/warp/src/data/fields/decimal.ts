@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { byDb, Field } from './base.js'
 import type { Dialect } from '../sql/dialect.js'
 
-// Django DecimalField(maxDigits, decimalPlaces). JS value: a string with exactly decimalPlaces decimals
+// decimal(maxDigits, decimalPlaces). JS value: a string with exactly decimalPlaces decimals
 // ('12.50'), so no float rounding on postgres NUMERIC / mysql DECIMAL. Input: that string or a number.
-// sqlite has no exact decimal: NUMERIC affinity (Django does the same) — exact up to ~15 digits.
+// sqlite has no exact decimal: NUMERIC affinity — exact up to ~15 digits.
 const NUM = /^-?\d+(\.\d+)?$/
 export class DecimalField extends Field<string, boolean, 'decimal', boolean> {
   readonly kind = 'decimal' as const

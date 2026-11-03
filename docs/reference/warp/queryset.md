@@ -22,7 +22,7 @@ Examples below use the shop models from [models.md](models.md#examples): `Custom
 | `exclude` | `exclude(where)` | Drop rows matching ONE condition. A plain object with more than one key throws; chain calls or pass `Q(...)`. Null-inclusive: rows where the field is NULL are kept. |
 | `order` | `order(...fields: (string \| OrderBy)[])` | Replace the order. `'name'` asc, `'-name'` desc, `'customer__name'` across a relation, an annotation name, or `F('x').desc({ nulls: 'last' })`. |
 | `search` | `search(term: string, fields?: string[])` | Case-insensitive substring match OR-ed over `fields` (default: the model's `searchable` fields; throws if none). |
-| `slice` | `slice(start: number, end?: number)` | `LIMIT` / `OFFSET` (Django `qs[start:end]`). Non-negative integers. A slice of a slice narrows it. |
+| `slice` | `slice(start: number, end?: number)` | `LIMIT` / `OFFSET`. Non-negative integers. A slice of a slice narrows it. |
 | `limit` | `limit(n)` | `slice(0, n)` |
 | `offset` | `offset(n)` | `slice(n)` |
 | `annotate` | `annotate({ name: Expression, ... })` | Add computed columns. Names must be identifiers without `__` and must not clash with field names. An aggregate makes the query grouped. |
@@ -89,7 +89,7 @@ A filter key is `path` or `path__lookup`. `path` is a field name (an fk may be w
 | `orders__isnull: true` | "has no related row" | customers with no orders |
 | `orders` (bare) | the related pk | `Customer.objects.filter({ orders__in: [1, 2] })` |
 
-Filters across relations compile to `IN (SELECT ...)` subqueries, so a row is never duplicated by a to-many relation. Inside ONE `filter()` call (or one `Q` AND node), several lookups through the same to-many relation must all hold for the SAME related row; separate `filter()` calls are independent (Django semantics).
+Filters across relations compile to `IN (SELECT ...)` subqueries, so a row is never duplicated by a to-many relation. Inside ONE `filter()` call (or one `Q` AND node), several lookups through the same to-many relation must all hold for the SAME related row; separate `filter()` calls are independent.
 
 ### Values compared to fields and expressions
 
@@ -104,7 +104,7 @@ q.or(...others): QNode
 q.not(): QNode
 ```
 
-TypeScript has no `&` `|` `~` overloading: use `.and`, `.or`, `.not`. `exclude(Q(...))` negates the whole Q (Django semantics). Negation is null-inclusive.
+TypeScript has no `&` `|` `~` overloading: use `.and`, `.or`, `.not`. `exclude(Q(...))` negates the whole Q. Negation is null-inclusive.
 
 ## Expressions (`data/expressions.ts`)
 
@@ -138,11 +138,11 @@ Count(x = '*', { distinct?, filter? })
 | Option | Meaning |
 |---|---|
 | `distinct` | Aggregate distinct values only. |
-| `filter` | Lookups or `Q`: only matching rows count (Django `filter=`). |
+| `filter` | Lookups or `Q`: only matching rows count. |
 
 Results: `Count` is `0` on no rows; `Sum` / `Avg` / `Min` / `Max` are `null`. `Avg` is a float (on money: rounded to whole cents). `Sum` / `Avg` need a numeric field. On money they return `{ value, currency }`; if the rows mix currencies, reading the result throws `invalid_param` ("mixes currencies"): filter on `<field>__currency` or group by it. Aggregates cannot be nested. `aggregate()` is not supported over `values()`, `distinct()` or aggregate annotations.
 
-Grouping (Django `values().annotate()`): `values(...)` names become `GROUP BY` columns when an annotation is an aggregate. Without `values()`, an aggregate annotation groups per row of the model.
+Grouping (`values(...)` then `annotate(...)`): `values(...)` names become `GROUP BY` columns when an annotation is an aggregate. Without `values()`, an aggregate annotation groups per row of the model.
 
 ## Pagination
 

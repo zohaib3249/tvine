@@ -77,7 +77,7 @@ export const dashboard = defineAction('dashboard', z.object({ range: rangeParam.
     const data = readFn(w) ? { id: 'admin.widget', params: { id: w.id } } : w.data ? { id: (w.data as { id: string }).id } : undefined
     out.push({ id: w.id, title: w.title, size: w.size, type: w.type ?? (w.component ? 'custom' : 'stat'), ...(data && { data }), ...(w.refreshMs && { refreshMs: w.refreshMs }), ...(w.component && { component: w.component }) })
   }
-  // settings order first (Django-style project default), then the rest as built
+  // settings order first (the project default), then the rest as built
   const first = s.dashboard.widgets
   out.sort((x, y) => (first.indexOf(x.id) < 0 ? 1e6 : first.indexOf(x.id)) - (first.indexOf(y.id) < 0 ? 1e6 : first.indexOf(y.id)))
   const pref = await AdminPref.objects.filter({ userId: String(ctx.request.user.id ?? ''), key: 'dashboard.layout' }).first()   // scope: ok (own prefs)

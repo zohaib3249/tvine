@@ -78,7 +78,7 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
     create: async data => insertRow(def, prepare(data as Record<string, unknown>)),
     get: id => source.get(id),
     async update(id, patch) {
-      // Django auto_now: Model.update is save(); a QuerySet.update() leaves the field alone (Django too)
+      // autoNow: Model.update is save(); a QuerySet.update() leaves the field alone
       const now: Record<string, unknown> = {}
       for (const [n, f] of concrete(fields)) if (f.opts.autoNow && !(keyOf(n, f) in patch)) now[keyOf(n, f)] = new Date()
       const data = { ...now, ...patch }
@@ -92,7 +92,7 @@ export function defineModel<const F extends Fields>(name: string, fields: F, met
   }
   trackMethods(model as never, ['get'], false)
   trackMethods(model as never, ['create', 'update', 'delete'], true)
-  defineChecked(def, model)   // reverse-name clashes are a definition error (Django's system check)
+  defineChecked(def, model)   // reverse-name clashes are a definition error (checked at definition)
   registry.set(name, model)
   return model
 }

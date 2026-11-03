@@ -1,4 +1,4 @@
-// Admin URLs ↔ routes (Django admin layout). Query params follow Django where sensible:
+// Admin URLs ↔ routes. Query params:
 // q = search, o = ordering (comma list, `-` desc), p = page, all = show all; every other key is a filter.
 export type Route =
   | { name: 'index' }
@@ -18,7 +18,7 @@ export const SYSTEM = ['health', 'traffic', 'metrics', 'agents', 'search', 'page
 export type SystemPage = (typeof SYSTEM)[number]
 type Urls = { name: string; path: string }[]
 
-// <int:id>/refund/ → regex with named groups (Django path converters).
+// <int:id>/refund/ → regex with named groups (path converters).
 const pattern = (p: string) => new RegExp('^' + p.replace(/^\/|\/$/g, '').replace(/<(?:\w+:)?(\w+)>/g, '(?<$1>[^/]+)') + '$')
 
 export function parse(segments: string[], o: { pages?: { path: string }[]; urls?: (model: string) => Urls | undefined } = {}): Route {
@@ -39,7 +39,7 @@ export function parse(segments: string[], o: { pages?: { path: string }[]; urls?
     const m = pattern(u.path).exec(rest.join('/'))
     if (m) return { name: 'url', model, url: u.name, args: { ...m.groups } }
   }
-  if (rest.length === 1) return { name: 'change', model, pk: rest[0] }   // Django: /<pk>/ redirects to change
+  if (rest.length === 1) return { name: 'change', model, pk: rest[0] }   // /<pk>/ redirects to change
   return { name: 'notFound' }
 }
 
@@ -84,7 +84,7 @@ export function queryOf(p: Omit<ListParams, 'model'>): Query {
   if (p.all) q.all = '1'
   return { ...q, ...p.filters }
 }
-// Multi-sort like Django: clicking a column makes it primary; clicking the primary flips it; others keep their order.
+// Multi-sort: clicking a column makes it primary; clicking the primary flips it; others keep their order.
 export function toggleSort(o: string[], col: string, multi = true): string[] {
   const cur = o.find((x) => x.replace(/^-/, '') === col)
   const rest = o.filter((x) => x.replace(/^-/, '') !== col)

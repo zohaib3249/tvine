@@ -1,4 +1,4 @@
-// Node handler Warp mounts at settings.admin.path when `tvine.admin` is installed (Django's admin.site.urls):
+// Node handler Warp mounts at settings.admin.path when `tvine.admin` is installed:
 // the app ships no admin files. Every page under <path>/ gets the same HTML shell; the prebuilt client bundle and
 // the compiled CSS are served from <path>/_static/. The shell's script carries the request's CSP nonce
 // (security headers put it on req.headers['x-nonce']). No React on the server: the client renders, data via api.*.

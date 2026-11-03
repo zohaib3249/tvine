@@ -1,6 +1,6 @@
 # Tvine guides
 
-Tvine is the agent-native web framework: Django-style TypeScript backend, Next.js frontend, and a built-in MCP
+Tvine is the agent-native web framework: a TypeScript backend with models, migrations, auth and admin, a Next.js frontend, and a built-in MCP
 server so AI agents can use your app. npm package `tvinejs`, imported and run as `tvine`.
 
 | Guide | What it covers |

@@ -1,6 +1,6 @@
 # Admin panel
 
-Tvine ships a Django-style admin at `/admin`. You register models in `apps/<app>/admin.ts`, and Warp serves a
+Tvine ships an admin panel at `/admin`. You register models in `apps/<app>/admin.ts`, and Warp serves a
 modern, responsive panel: changelists with filters, search, bulk actions and charts, change forms with inlines,
 a dashboard, and a System section (health, traffic, agents, queries, jobs, logs, security).
 
@@ -60,7 +60,7 @@ A small working example: [examples/notes/apps/notes/admin.ts](../examples/notes/
 
 ## ModelAdmin options
 
-Django names, camelCased.
+Option names are camelCase.
 
 | Option | Default | What it does |
 |---|---|---|

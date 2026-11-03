@@ -2,7 +2,7 @@
 
 ## What it is
 
-Tvine's mail module is Django's `django.core.mail`: `sendMail`, `sendMassMail`, `mailAdmins`, the `EmailMessage`
+Tvine's mail module: `sendMail`, `sendMassMail`, `mailAdmins`, the `EmailMessage`
 / `EmailMultiAlternatives` classes, and backends picked by `settings.email.backend` (console, SMTP, file, memory,
 dummy). It has its own small SMTP client (STARTTLS or implicit TLS, AUTH PLAIN / LOGIN). Messages are built
 7-bit clean; any CR or LF in a header or address is refused (`BadHeaderError`). There is no template engine: you

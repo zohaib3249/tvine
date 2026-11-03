@@ -1,6 +1,6 @@
 # AGENTS.md: building with Tvine
 
-This project uses **Tvine**: Django for TypeScript, with Next.js pages, and a UI that AI agents can read and drive.
+This project uses **Tvine**: a TypeScript web framework (models, migrations, admin, auth), with Next.js pages, and a UI that AI agents can read and drive.
 The npm package is `tvinejs`, but you always import it and run it as `tvine`.
 Read this file before you write any code. It covers the layout, the commands, copy-paste recipes and the rules.
 
@@ -34,8 +34,8 @@ Every settings key with its default: `docs/settings-and-env.md` → "Reference: 
 ## Mental model
 
 - **One process.** `tvine dev` runs the backend (**Warp**) and Next.js (**Weft**) on one port.
-- **Warp is Django.** Apps, `defineModel` + ORM, migrations, `installedApps`, `urls.ts`, admin, auth, middleware,
-  tasks (Celery-like), and a test client. Django names are kept, in camelCase (`listDisplay`, `getQueryset`).
+- **Warp is the backend.** Apps, `defineModel` + ORM, migrations, `installedApps`, `urls.ts`, admin, auth, middleware,
+  tasks (background jobs), and a test client. Names are camelCase (`listDisplay`, `getQueryset`).
 - **Every action is four things at once.** Each function or method in `apps/<app>/views.ts` is an *action* with
   id `<app>.<name>`:
   1. `api.<app>.<name>(params)` for pages
@@ -52,7 +52,7 @@ Every settings key with its default: `docs/settings-and-env.md` → "Reference: 
 
 ```
 config/
-  settings/base.ts      shared settings: installedApps, middleware, mcp, db, auth (Django settings.py)
+  settings/base.ts      shared settings: installedApps, middleware, mcp, db, auth
   settings/dev.ts       base + debug + local hosts (used by tvine dev, migrate, shell, test)
   settings/prod.ts      base + secrets from the env (used by tvine start / NODE_ENV=production)
   settings/local.ts     optional, git-ignored, merged over dev.ts (copy local.example.ts)
@@ -401,7 +401,7 @@ Run it with `pnpm tvine test`.
 - **Imports** are `tvine`, `tvine/weft`, `tvine/widgets`, `tvine/api`, `tvine/forms`, `tvine/auth`, `tvine/tasks`,
   `tvine/testing` and `tvine/contrib/admin`. **Never `tvinejs`**: that is only the npm name.
   App files import each other as `./models.ts`, with the extension.
-- **Every request is one transaction** (Django `ATOMIC_REQUESTS`). If the action throws, everything rolls back.
+- **Every request is one transaction** (`settings.db.atomicRequests`). If the action throws, everything rolls back.
   Opt out with `rules: { atomic: false }`. In scripts, use `atomic(async () => ...)`.
 - **Await reads; writes may skip await.** Building a queryset runs no SQL. `count/first/get/list` need `await`.
   An un-awaited write inside a request still runs before commit. `tvine check` flags an un-awaited read.

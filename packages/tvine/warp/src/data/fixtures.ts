@@ -1,4 +1,4 @@
-// dumpdata / loaddata (Django's fixtures, BACKLOG #6): JSON `[{ model: 'app.model', pk, fields }]`,
+// dumpdata / loaddata (fixtures, BACKLOG #6): JSON `[{ model: 'app.model', pk, fields }]`,
 // models in fk dependency order, loaded inside ONE atomic() block, upserted by pk through the model
 // API (so money / datetime / json go through their fields). m2m fields dump as id lists.
 import { DomainError } from '../core/errors.js'

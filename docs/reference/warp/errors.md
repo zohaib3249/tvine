@@ -25,7 +25,7 @@ interface FieldError { field: string; code?: string; message: string }
 | `code` | Your machine-readable reason (`'out_of_stock'`, `'not_found'`, `'forbidden'`). |
 | `message` | Shown to the user / agent. Write it as the business rule. |
 | `field` | The param at fault (forms highlight it). |
-| `errors` | Several bad fields at once (Django `ValidationError({field: [...]})`). |
+| `errors` | Several bad fields at once. |
 
 How a thrown `DomainError` becomes an `err`:
 

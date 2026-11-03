@@ -65,7 +65,7 @@ function Money(p: FieldWidgetProps) {
 }
 
 function Bool(p: FieldWidgetProps) {
-  if (p.meta.nullable) {   // Django NullBooleanSelect
+  if (p.meta.nullable) {   // yes / no / unknown select
     return <select className="tf-input" value={p.value == null ? '' : String(p.value)} onChange={(e) => p.onChange(e.target.value === '' ? null : e.target.value === 'true')} {...common(p)}>
       <option value="">Unknown</option><option value="true">Yes</option><option value="false">No</option>
     </select>
@@ -120,7 +120,7 @@ const listed = (p: FieldWidgetProps) => (p.meta.relation && !p.meta.relation.aut
 const labelled = (r: SearchResult, choices?: Opt[]): Opt => choices?.find((c) => c.value === String(r.pk)) ?? toOpt(r)
 function Fk(p: FieldWidgetProps) {
   const v = p.value as SearchResult | null, choices = listed(p)
-  if (p.meta.relation?.rawId || (!choices && !p.search)) {   // Django raw_id_fields: type the pk
+  if (p.meta.relation?.rawId || (!choices && !p.search)) {   // raw id: type the pk
     return <input className="tf-input" type="text" inputMode="numeric" value={v?.pk ?? ''} placeholder="id"
       onChange={(e) => p.onChange(e.target.value ? { pk: e.target.value, text: e.target.value } : null)} {...common(p)} />
   }
@@ -148,7 +148,7 @@ export const BUILTIN: Record<FieldKind, FieldWidget> = {
   list: (p) => <I.List {...p} widgetFor={(m) => { const W = BUILTIN[m.kind] ?? TextInput; return (q) => <W {...q} /> }} blank={(m) => fromApi(m, undefined)} />,
 }
 
-// Read-only display (Django readonly_fields): text, never an input.
+// Read-only display: text, never an input.
 export function display(p: FieldWidgetProps): ReactElement {
   const m = p.meta, v = p.value
   let t: string
@@ -160,7 +160,7 @@ export function display(p: FieldWidgetProps): ReactElement {
     case 'm2m': t = (v ?? []).map((r: SearchResult) => r.text).join(', '); break
     case 'password': t = v ? '••••••••' : '—'; break
     case 'file': case 'image': t = fileName(v); break
-    // in the viewer's locale (Django formats read-only dates with the active locale); SSR may differ from the tab
+    // in the viewer's locale; SSR may differ from the tab
     case 'date': case 'datetime': {
       const d = v ? new Date(m.kind === 'date' ? `${String(v).slice(0, 10)}T00:00:00Z` : v) : undefined
       t = !d || isNaN(+d) ? String(v ?? '') : m.kind === 'date' ? d.toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })

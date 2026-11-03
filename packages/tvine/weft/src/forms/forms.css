@@ -52,7 +52,7 @@
 }
 :where(.tf-field[data-kind=bool]) { padding: .3rem 0; }
 
-/* aligned: label beside the control on wide screens (Django admin) */
+/* aligned: label beside the control on wide screens (as in the admin) */
 @media (min-width: 48rem) {
   :where(.tf-form[data-layout=aligned] .tf-fieldset .tf-field:not([data-kind=bool])) { grid-template-columns: var(--tf-label-w) minmax(0, 1fr); column-gap: var(--tf-gap); }
   :where(.tf-form[data-layout=aligned] .tf-fieldset .tf-field:not([data-kind=bool]) > :not(.tf-label)) { grid-column: 2; }

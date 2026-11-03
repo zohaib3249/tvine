@@ -1,17 +1,17 @@
-// Django Paginator over a QuerySet: page numbers through OFFSET / LIMIT (qs.slice). Cursor paging
+// Paginator over a QuerySet: page numbers through OFFSET / LIMIT (qs.slice). Cursor paging
 // (qs.page({ cursor })) stays the default for lists; use this when a UI needs "page 3 of 12".
-// count / numPages are async (one COUNT query, cached) — Django's are lazy properties.
+// count / numPages are async (one COUNT query, cached).
 import { DomainError } from '../core/errors.js'
 import type { QuerySet } from './queryset.js'
 
 export interface Page<T> {
-  items: T[]                 // Django object_list
+  items: T[]                 // the rows on this page
   number: number
   numPages: number
   count: number
   hasNext: boolean
   hasPrevious: boolean
-  startIndex: number         // 1-based index of the first item (0 when empty), Django start_index()
+  startIndex: number         // 1-based index of the first item (0 when empty)
   endIndex: number
 }
 
@@ -34,7 +34,7 @@ export class Paginator<T extends object> {
     return Math.max(1, Math.ceil(Math.max(1, n - this.orphans) / this.perPage))
   }
 
-  // Django validate_number: PageNotAnInteger / EmptyPage → invalid_param on `page`
+  // validate the number: not an integer / empty page → invalid_param on `page`
   async validateNumber(n: unknown): Promise<number> {
     const v = typeof n === 'string' && /^\d+$/.test(n.trim()) ? Number(n) : n
     if (typeof v !== 'number' || !Number.isInteger(v)) throw new DomainError('invalid_param', 'page: that page number is not an integer', 'page')

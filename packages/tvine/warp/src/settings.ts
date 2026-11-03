@@ -32,9 +32,9 @@ export function redisFromEnv(): Settings['redis'] {
   return { default: { url: env } }
 }
 
-// Django MIDDLEWARE defaults: secure without configuring anything (middleware/index.ts has the catalog)
+// HTTP middleware defaults: secure without configuring anything (middleware/index.ts has the catalog)
 export const DEFAULT_MIDDLEWARE = ['RequestId', 'AllowedHosts', 'Security', 'Cors', 'GZip'].map((n) => `tvine.middleware.${n}`)
-// Django's DEBUG ALLOWED_HOSTS: what dev (and tests) accept when settings.allowedHosts is empty
+// dev allowed hosts: what dev (and tests) accept when settings.allowedHosts is empty
 export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
 
 export const CACHE_DEFAULTS: CacheSettings = { backend: 'memory', redis: 'default', timeout: 300, keyPrefix: '', version: 1, maxEntries: 300 }
@@ -66,7 +66,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   media: { dir: './media', route: '/media' },
   snapshotCache: { ttlMs: 60_000, backend: 'memory', redis: 'default' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
-  // Relative to process.cwd() (Django-style), not to the settings file. Real value is resolved in defineSettings.
+  // Relative to process.cwd() , not to the settings file. Real value is resolved in defineSettings.
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true, slowQueryMs: 500 },
   logging: 'json',
   agent: { shape: 'v2', budget: 1500, rowsL1: 10, inTab: 'on' },
@@ -101,7 +101,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   tasks: { leaseMs: 30_000, pollMs: 500, relayMs: 250, graceMs: 30_000, resultTtlMs: 86_400_000, redis: 'default', file: './tasks.db', durable: false, claimBatch: 10 },
   admin: { path: '/admin', theme: { dark: 'auto' }, dashboard: { widgets: [], autoCharts: true }, stats: { enabled: true, retentionDays: 30, flushMs: 60_000, searches: { enabled: true, minCount: 3 }, pages: { enabled: true, keepParams: [] } } },
   caches: { default: CACHE_DEFAULTS },
-  // backend: 'console' in dev, 'memory' under tests (Django's locmem swap), 'smtp' in production (defineSettings)
+  // backend: 'console' in dev, 'memory' under tests, 'smtp' in production (defineSettings)
   email: { backend: 'console', host: 'localhost', port: 25, user: '', password: '', useTls: false, useSsl: false, allowPlainAuth: false, timeoutMs: 10_000,
     defaultFrom: 'webmaster@localhost', serverEmail: 'root@localhost', admins: [], subjectPrefix: '[Tvine] ', filePath: './mail' },
   metrics: { enabled: false, path: '/tvine/metrics', allowIps: [] },
@@ -314,7 +314,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   // production: DEBUG only from the real environment, never from a .env file that shipped with the code
   const debugEnv = env.has('TVINE_DEBUG') && !(prod && fromDotenv.has('TVINE_DEBUG'))
   if (rest.debug === undefined) merged.debug = debugEnv ? env.bool('TVINE_DEBUG') : ['development', 'test'].includes(process.env.NODE_ENV ?? '')
-  // Django: with DEBUG and no ALLOWED_HOSTS, localhost works; in production an empty list is a boot error (checkHosts)
+  // with debug and no allowedHosts, localhost works; in production an empty list is a boot error (checkHosts)
   if (!(merged.allowedHosts as string[]).length && !prod) merged.allowedHosts = DEV_HOSTS
   // settings.admin.allowIps also guards the panel's pages (the admin actions check it themselves: contrib/admin/hardening.ts)
   const adminIps = (merged.admin as { allowIps?: string[]; path?: string } | undefined)
@@ -329,7 +329,7 @@ export function defineSettings(input: SettingsInput & { secret?: string | string
   return settings
 }
 
-// Django parity: smtp in production, the in-memory outbox under tests (locmem), console in dev
+// smtp in production, the in-memory outbox under tests (locmem), console in dev
 export function emailBackendDefault(): 'smtp' | 'memory' | 'console' {
   if (process.env.NODE_ENV === 'production') return 'smtp'
   return process.env.NODE_ENV === 'test' || process.env.VITEST ? 'memory' : 'console'
@@ -346,7 +346,7 @@ export function redisUsers(s: Settings): { key: string; alias: string }[] {
   if (s.tasks.broker === 'redis') out.push({ key: 'settings.tasks.broker', alias: s.tasks.redis })
   return out
 }
-// AllowedHosts on, production, no hosts: every request would be a 400 — fail at boot instead (Django check --deploy)
+// AllowedHosts on, production, no hosts: every request would be a 400 — fail at boot instead
 export function checkHosts(s: Settings): void {
   const on = s.middleware.some((m) => m === 'tvine.middleware.AllowedHosts' || (Array.isArray(m) && m[0] === 'tvine.middleware.AllowedHosts'))
   if (on && isProduction() && !s.allowedHosts.length) throw new Error("settings.allowedHosts is empty in production: list your domains (e.g. ['shop.example.com', '.example.com']) or set TVINE_ALLOWED_HOSTS=shop.example.com")

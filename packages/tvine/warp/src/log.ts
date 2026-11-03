@@ -1,4 +1,4 @@
-// log — Django LOGGING without a dependency (docs/design/conventions/logging.md).
+// log — logging config without a dependency (docs/design/conventions/logging.md).
 // getLogger('tvine.request').info('msg', { fields }) → every handler whose level lets it through. Named loggers
 // are dotted (Python logging): the most specific `loggers` entry wins ('tvine.db' covers 'tvine.db.slow').
 // Every record is redacted (passwords, tokens, cookies, authorization, secrets, + logging.redact) before any handler.

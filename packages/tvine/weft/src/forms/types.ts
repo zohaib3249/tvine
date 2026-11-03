@@ -20,7 +20,7 @@ export interface FieldMeta {
   step?: number                 // range / percent
   palette?: string[]            // color: preset swatches
   language?: string             // code: json | js | sql | html | css
-  from?: string                 // slugAuto: the field it is built from (Django prepopulated_fields)
+  from?: string                 // slugAuto: the field it is built from
   of?: Partial<FieldMeta>       // list: the item kind (default text)
   free?: boolean                // tags with choices: free text allowed too
   humanOnly?: boolean           // any kind: locked for agents (the ORM field's humanOnly; signature defaults to true, false exposes `clear`)
@@ -29,7 +29,7 @@ export interface FieldMeta {
 
 export interface InlineMeta {
   name: string; kind: 'tabular' | 'stacked'; model: string; fk: string; fields: string[]
-  verboseName?: string; verboseNamePlural?: string   // heading (Django inline verbose_name_plural); default: the name
+  verboseName?: string; verboseNamePlural?: string   // heading; default: the name
   extra: number; max: number; min: number; canDelete: boolean
   meta: Record<string, FieldMeta> | { fields: Record<string, FieldMeta> }   // §2 leaves it open: both accepted
 }

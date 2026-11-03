@@ -2,7 +2,7 @@
 
 ## What it is
 
-`tvine.auth` is the built-in users app, modelled on Django's `django.contrib.auth`. It gives you a `User` model,
+`tvine.auth` is the built-in users app. It gives you a `User` model,
 password hashing and validation, sign-in through session cookies or Bearer API tokens, groups and permissions,
 two-factor sign-in (TOTP plus recovery codes), a list of signed-in sessions, mail alerts about account security, and
 a data export and erase flow for privacy requests. Every flow is an ordinary action (`auth.login`, `auth.me`…), so
@@ -372,11 +372,11 @@ for that user only.
 | Export | Meaning |
 |---|---|
 | `scryptHasher({ N?, r?, p? })` | default; `N = 2^15`, `r = 8`, `p = 1`; format `scrypt$N$r$p$salt$hash` |
-| `pbkdf2Hasher({ iterations? })` | Django's `pbkdf2_sha256$…` format (Django hashes verify as-is); default 600 000, minimum 100 000 |
+| `pbkdf2Hasher({ iterations? })` | `pbkdf2_sha256$…` format (existing hashes in that format verify as-is); default 600 000, minimum 100 000 |
 | `makePassword(raw, settings)` / `checkPassword(raw, encoded, settings)` | `checkPassword` returns `{ ok, upgrade }` |
 | `minLength(n = 8)` | too short |
 | `numericPassword()` | only digits |
-| `commonPassword(list?)` | Django's 20 000 common passwords, or your list |
+| `commonPassword(list?)` | the built-in 20 000 common passwords, or your list |
 | `userAttributeSimilarity(attrs = ['username', 'email'], max = 0.7)` | too close to a user attribute |
 | `DEFAULT_VALIDATORS` | `[userAttributeSimilarity(), minLength(8), commonPassword(), numericPassword()]` |
 | `validatePassword(raw, settings, user?)` | the list of problems (empty = ok) |

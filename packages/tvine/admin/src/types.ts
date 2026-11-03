@@ -32,10 +32,10 @@ export type Row = { pk: string; values: Record<string, Display> }
 export type Facet = { value: string; label: string; count: number }
 export type ListResult = { rows: Row[]; count: number; page: number; pages: number; facets?: Record<string, Facet[]> }
 export type ObjectData = { pk: string; values: Record<string, unknown>; display: string; inlines?: Record<string, { rows: Record<string, unknown>[] }>; perms?: Perms }
-// admin.deletePreview (Django NestedObjects): objects = the cascade tree, protected = rows that block the delete
+// admin.deletePreview: objects = the cascade tree, protected = rows that block the delete
 export type DeleteNode = { model: string; pk: string; repr: string; children?: DeleteNode[]; field?: string }
 export type DeletePreview = { objects: DeleteNode[]; protected?: DeleteNode[]; summary?: Record<string, number>; permsNeeded?: string[] }
-// changeMessage = Django's JSON list: [{added:{}}, {changed:{fields:[…]}}, {deleted:{…}}, {action:'markShipped'}]
+// changeMessage = a JSON list: [{added:{}}, {changed:{fields:[…]}}, {deleted:{…}}, {action:'markShipped'}]
 export type LogEntry = { id: string | number; actionTime: string; user: { id: string; name: string }; actionFlag: number; action: 'add' | 'change' | 'delete' | string; objectRepr?: string; changeMessage?: unknown }
 export type ActionResult = { message?: string; level?: 'success' | 'info' | 'warning' | 'error'; download?: string | { url?: string; data?: string; filename?: string; contentType?: string } }
 export type FieldErrors = Record<string, string>

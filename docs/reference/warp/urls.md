@@ -1,6 +1,6 @@
 # URLs (`urls.ts`, `path`, `include`, `reverse`)
 
-`urls.ts` is Django's URLconf for REST-style paths. It is optional: without it every action still answers at
+`urls.ts` is the URL table for REST-style paths. It is optional: without it every action still answers at
 `POST /tvine/api/<app>.<name>`. Each route maps a URL pattern (and HTTP methods) to an action that discovery
 already registered; a matched request runs that action exactly as `POST /tvine/api/<id>` does (same caller
 check, permissions, rate limits, idempotency, `humanOnly`, origin / CORS, same JSON result). Pages are not routed
@@ -12,7 +12,7 @@ here: pages are your Next.js `app/` folder, and Warp reads that route table itse
 
 | File | Role |
 |---|---|
-| `config/urls.ts`, else `urls.ts` (project root = the folder above `apps/`) | The root URLconf (Django `ROOT_URLCONF`). Exports `urlpatterns`. |
+| `config/urls.ts`, else `urls.ts` (project root = the folder above `apps/`) | The root URL table. Exports `urlpatterns`. |
 | `settings.rootUrlconf` | Another root, a path from the project root without extension (`'config/api_urls'`). Must exist, else boot error. |
 | `apps/<app>/urls.ts` | An app's patterns, pulled in with `include('<app>.urls')`. Exports `urlpatterns` and optionally `appName` (the default namespace). |
 | `include('tvine.auth.urls')` | A built-in app's patterns (`tvine.<label>.urls`), when that app is installed. |
@@ -27,12 +27,12 @@ function path(route: string, view: ActionDef | ViewClass | Include, opts?: { nam
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `route` | `string` | — | Django syntax: `'products/<int:id>/'`. No leading `/` (boot error). Matched against the decoded request path. |
+| `route` | `string` | — | Path syntax with converters: `'products/<int:id>/'`. No leading `/` (boot error). Matched against the decoded request path. |
 | `view` | action def, `View.action('name')`, a View class, or `include(...)` | — | What runs. |
 | `opts.name` | `string` | unset | URL name for `reverse`; prefixed by the namespaces (`'catalog:product-detail'`). |
 | `opts.methods` | `string[]` | `['GET']` for a `readOnly` action, else `['POST']` | Methods for an action view. Ignored for a View class (it maps its own). |
 
-A View class as `view` (Django `as_view()`): on a route **with** the view's `lookupParam` → `GET` get,
+A View class as `view`: on a route **with** the view's `lookupParam` → `GET` get,
 `PUT`/`PATCH` update, `DELETE` delete; on a route **without** it → `GET` list, `POST` create (whichever the class
 generates). A route that maps no method fails at boot.
 

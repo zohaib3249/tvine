@@ -1,6 +1,6 @@
-// Email (Django django.core.mail; docs/design/conventions/email.md). settings.email picks the backend:
+// Email (docs/design/conventions/email.md). settings.email picks the backend:
 // console (dev: prints to stdout), smtp (mail/smtp.ts), file (one .log per send under email.filePath),
-// memory (mail.outbox, the default under tests: Django's locmem), dummy (drops everything).
+// memory (mail.outbox, the default under tests), dummy (drops everything).
 //
 // Messages are built 7-bit clean: RFC 2047 encoded-words for non-ASCII headers / display names, quoted-printable
 // text bodies when needed, base64 attachments. A CR or LF in any header value or address is refused (BadHeaderError).
@@ -229,7 +229,7 @@ async function deliver(conf: EmailSettings, msgs: EmailMessage[]): Promise<numbe
   }
 }
 
-// one connection for the batch (Django get_connection().send_messages)
+// one connection for the batch
 export async function sendMessages(msgs: EmailMessage[], failSilently = false): Promise<number> {
   const todo = msgs.filter((m) => m.recipients().length)
   if (!todo.length) return 0
@@ -259,7 +259,7 @@ const build = (o: SendMailOpts): EmailMessage => {
   return m
 }
 
-// Django send_mail. { background: true }: the tvine.tasks `tasks.sendMail` task when tvine.tasks is installed
+// sendMail. { background: true }: the tvine.tasks `tasks.sendMail` task when tvine.tasks is installed
 // (enqueued after commit, retried); otherwise sent after commit in this process, failures logged.
 export function sendMail(o: SendMailOpts): Promise<number>
 export function sendMail(o: SendMailOpts, opts: { background: true }): Promise<MailPending>
@@ -278,12 +278,12 @@ async function background(m: EmailMessage): Promise<MailPending> {
   return { pending: true }
 }
 
-// Django send_mass_mail: [subject, message, from, to][] over one connection
+// sendMassMail: [subject, message, from, to][] over one connection
 export async function sendMassMail(data: [string, string, string | undefined, string[]][], failSilently = false): Promise<number> {
   return sendMessages(data.map(([subject, body, from, to]) => new EmailMessage({ subject, body, from, to })), failSilently)
 }
 
-// Django mail_admins: settings.email.admins, from serverEmail, subject prefixed
+// mailAdmins: settings.email.admins, from serverEmail, subject prefixed
 export async function mailAdmins(subject: string, message: string, o: { html?: string; failSilently?: boolean } = {}): Promise<number> {
   const c = reg.conf
   if (!c.admins.length) return 0

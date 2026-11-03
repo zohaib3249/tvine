@@ -1,4 +1,4 @@
-// tvine.auth in tvine.admin (Django UserAdmin / GroupAdmin). Loaded by the admin's autodiscover only when
+// tvine.auth in tvine.admin (UserAdmin / GroupAdmin). Loaded by the admin's autodiscover only when
 // 'tvine.admin' is installed. The password is hashed by the admin's save (any model's password field goes through
 // tvine.auth's hasher) and never read back
 // (a hidden field: never in admin values); the add form sets the first one, the set-password view every later one.
@@ -68,7 +68,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
 
   async saveModel(ctx: Ctx, obj: UserRow | undefined, values: Record<string, unknown>): Promise<UserRow> {
     if (!obj && typeof values.password !== 'string') throw new DomainError('invalid_param', 'password: This field is required.', 'password')
-    // Django ReadOnlyPasswordHashField: an existing user's password changes only through the password view, so every
+    // read-only password hash: an existing user's password changes only through the password view, so every
     // admin password change runs setPassword once (validators + passwordChanged: tokens revoked, own session kept)
     if (obj && 'password' in values) throw new DomainError('invalid_param', 'password: use the Change password form', 'password')
     if (SENSITIVE.some((k) => k in values && (!obj || values[k] !== (obj as Record<string, unknown>)[k]))) sudo(ctx)
@@ -81,7 +81,7 @@ export class UserAdmin extends ModelAdmin<UserRow> {
   getUrls() {
     return [path('<int:id>/password/', this.view(this.userChangePassword, { permission: 'change', title: 'Change password' }), { name: 'password_change' })]
   }
-  // Django user_change_password: validators run, the hasher encodes
+  // change password: validators run, the hasher encodes
   async userChangePassword(params: Record<string, unknown>, ctx: Ctx) {
     const id = Number(params.id), pw = params.password
     if (!Number.isInteger(id) || typeof pw !== 'string' || !pw) throw new DomainError('invalid_param', 'password: This field is required.', 'password')
@@ -100,7 +100,7 @@ export class GroupAdmin extends ModelAdmin {
   ordering = ['name']
 }
 
-// Django UserAdmin on get_user_model(), adapted to it: its usernameField, and a custom model's own fields in an
+// UserAdmin on getUserModel(), adapted to it: its usernameField, and a custom model's own fields in an
 // "Additional info" fieldset / the list. A project that registers its user model in its own admin.ts (project apps
 // load first) keeps that registration.
 export function userAdminFor(model: typeof User): typeof UserAdmin {

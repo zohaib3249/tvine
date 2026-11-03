@@ -120,7 +120,7 @@ export function pgDriver(url: string, opts: PoolOpts): Driver & { stats(): PoolS
 // mysql2/promise pool: acquire → run → release per statement; waiters are served FIFO by the pool,
 // acquireMs is enforced here (mysql2 has no acquire timeout). Every new connection gets a pinned
 // session first: strict sql_mode WITHOUT NO_BACKSLASH_ESCAPES / ANSI_QUOTES (the dialect's literals
-// rely on it), UTC, utf8mb4_bin, READ COMMITTED (as postgres / Django). Statements with params use server-side prepared statements
+// rely on it), UTC, utf8mb4_bin, READ COMMITTED (as postgres). Statements with params use server-side prepared statements
 // (execute); dates and JSON travel as strings (the datetime / json fields own the format).
 // `mysql2` is an optional peer dependency, imported on the first query.
 type MyPool = import('mysql2/promise').Pool

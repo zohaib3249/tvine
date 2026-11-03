@@ -575,7 +575,7 @@ type Outcome = { result: unknown } | { goto: string }
 async function execute(def: ActionDef, params: unknown, ctx: ActionCtx, server: ServerCtx, hold: Hold): Promise<Outcome> {
   const { handlerMs } = server.settings.limits
   const call = async (): Promise<Outcome> => {
-    // rules.cache (Django cache_page): a fresh stored result skips the handler; errors are never stored. A cache hit
+    // rules.cache: a fresh stored result skips the handler; errors are never stored. A cache hit
     // is still an audited command (the audit write below runs either way)
     const handler = () => scope.run(ctx, () => def.run(params, ctx))
     let out: Outcome

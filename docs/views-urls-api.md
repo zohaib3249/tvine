@@ -89,7 +89,7 @@ export class ProductDetail extends DetailView<Product> { // → catalog.get
 | Option | Default | Meaning |
 |---|---|---|
 | `model` | required | a `defineModel` model |
-| `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | Django lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
+| `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | field lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
 | `searchFields` | `[]` | fields searched by `q` |
 | `ordering` | `[]` | allowed `sort` values (`-price` = descending) |
 | `pageSize` / `maxPageSize` | 25 / 100 | page size |

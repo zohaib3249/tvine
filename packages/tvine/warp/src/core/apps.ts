@@ -1,4 +1,4 @@
-// Installed apps (Django INSTALLED_APPS): exactly what settings.installedApps lists. A plain name 'blog' is the
+// Installed apps: exactly what settings.installedApps lists. A plain name 'blog' is the
 // project app apps/blog/; 'tvine.<name>' is a built-in app, <warp>/src|dist/contrib/<name>/, shaped like a project
 // app (models, views, rules, serializers, middleware, hooks, migrations/); its app label is <name>. Contrib
 // migrations ship with the package: makemigrations never writes them. A folder in apps/ that is not listed is

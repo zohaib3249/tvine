@@ -36,7 +36,7 @@ node packages/tvine/warp/bin/tvine.js startproject x ../x --local   # a scratch 
 
 ## Conventions
 
-- Django and DRF parity: use their names and behavior, in camelCase (`listDisplay`, `getQueryset`, `atomicRequests`).
+- Keep the existing API names and behavior, in camelCase (`listDisplay`, `getQueryset`, `atomicRequests`).
 - No ORM or other heavy dependencies. Stay with the stdlib, the native platform, and what is already installed.
 - Code is ESM TypeScript. Relative imports use `.js` in package source and `.ts` in projects and examples.
 - Code that changes behavior comes with a vitest test next to similar tests in `warp/test/` (or the package's `test/`).

@@ -1,6 +1,6 @@
 # Getting started: a notes app in 15 minutes
 
-You know Django and Next.js. Tvine is both in one TypeScript process: Django-style backend (Warp) and
+Tvine is a backend and a frontend in one TypeScript process: a backend with models, migrations, auth and admin (Warp) and
 Next.js pages (Weft). Every action you write is also an agent tool (MCP), and every page also has a JSON view for agents.
 
 We build `examples/notes/` — it is in the repo, finished, so you can copy from it or compare.
@@ -34,14 +34,14 @@ mysite/
 │  │  ├─ prod.ts            base + env-driven secret / allowedHosts / db (tvine start)
 │  │  └─ local.example.ts   copy to local.ts (git-ignored) for machine-only overrides
 │  ├─ middleware/           your HTTP middleware: index.ts + example.ts (off until listed)
-│  ├─ urls.ts               Django ROOT_URLCONF (settings.rootUrlconf)
+│  ├─ urls.ts               root URL table (settings.rootUrlconf)
 │  └─ tasks.ts              Celery-like: worker queues, beatSchedule (settings.tasksModule)
-├─ apps/                    your Django apps, each listed in installedApps
+├─ apps/                    your apps, each listed in installedApps
 ├─ app/                     Next.js pages (the welcome page)
 ├─ .env.example  package.json  tsconfig.json  next.config.ts  README.md  .gitignore
 ```
 
-**Which settings file runs** (Django `DJANGO_SETTINGS_MODULE`): `TVINE_SETTINGS=config/settings/prod` or
+**Which settings file runs**: `TVINE_SETTINGS=config/settings/prod` or
 `tvine <cmd> --settings config/settings/prod`. Without it: `config/settings/prod` when `NODE_ENV=production`
 (`tvine start` sets that), else `config/settings/dev` plus `config/settings/local.ts` if present. A project without
 `config/settings/` (like examples/notes) uses its root `settings.ts`.
@@ -54,10 +54,10 @@ The rest of this guide builds `examples/notes/` by hand, file by file. It keeps 
 ```
 examples/notes/
 ├─ package.json        deps: tvine, tvine/weft, tvine/admin, next, react, zod
-├─ settings.ts         Django settings.py
-├─ urls.ts             Django ROOT_URLCONF (optional)
+├─ settings.ts         all settings, one file
+├─ urls.ts             root URL table (optional)
 ├─ next.config.ts
-├─ apps/notes/         one Django app: models, views, urls, admin, tasks
+├─ apps/notes/         one app: models, views, urls, admin, tasks
 ├─ app/                Next.js pages
 └─ components/
 ```
@@ -80,9 +80,9 @@ export default defineSettings({
 })
 ```
 
-`'notes'` is the project app in `apps/notes/`: like Django's `INSTALLED_APPS`, only listed apps load.
+`'notes'` is the project app in `apps/notes/`: only listed apps load.
 
-`tvine startapp blog` creates empty Django-style stubs, adds `'blog'` to `installedApps` in
+`tvine startapp blog` creates empty app stubs, adds `'blog'` to `installedApps` in
 `config/settings/base.ts` and `path('blog/', include('blog.urls'))` to `config/urls.ts` (it prints the line instead
 when the file has a shape it does not recognise; an entry already there is left alone):
 
@@ -106,7 +106,7 @@ Optional app files (create them when you need them):
 | `tasks.ts` | background tasks (`defineTask`) |
 | `hooks.ts` | `postMigrate` and other app hooks |
 
-**installedApps** is Django's `INSTALLED_APPS`: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
+**installedApps** lists the apps that load: project apps by name (`'blog'` = `apps/blog/`), built-in apps as
 `'tvine.<name>'`. Only listed apps load. A listed app with no folder, or a name listed twice, fails at boot;
 `tvine check` warns about a folder in `apps/` that is not listed.
 
@@ -144,7 +144,7 @@ pnpm exec tvine makemigrations     # → created notes/migrations/0001_initial.t
 pnpm exec tvine migrate            # → applied admin.0001_initial, auth…, notes.0001_initial, tasks…
 ```
 
-Same as Django: migrations are code files you commit; `showmigrations`, `sqlmigrate`, `migrate <app> <target>`
+Migrations are code files you commit; `showmigrations`, `sqlmigrate`, `migrate <app> <target>`
 (rollback) all exist. Run `pnpm exec tvine` for the full command list.
 
 ## 3. Views: a ListView plus `@action`
@@ -184,7 +184,7 @@ export const clearAll = defineAction('clearAll', z.object({}), async () => ({ de
   { humanOnly: 'Deleting every note', destructive: true })   // → notes.clearAll (humans only, see §7)
 ```
 
-Action ids are `<app folder>.<name>`. Each request is one transaction (Django `ATOMIC_REQUESTS`). Params are
+Action ids are `<app folder>.<name>`. Each request is one transaction (`settings.db.atomicRequests`). Params are
 validated by the zod schema before your code runs. Generic views and every DRF hook:
 [views-urls-api.md](views-urls-api.md).
 

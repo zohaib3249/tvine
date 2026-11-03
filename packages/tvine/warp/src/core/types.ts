@@ -48,14 +48,14 @@ export interface Command {
   agentCmd?: { cmdId?: string; via?: string }
 }
 
-// one bad field of an err (Django ValidationError: field → messages). code: the validator ('invalid_type', 'too_small', 'unknown', …)
+// one bad field of an err (field → messages). code: the validator ('invalid_type', 'too_small', 'unknown', …)
 export interface FieldError { field: string; code?: string; message: string }
 
 export type Event =
   | { kind: 'snapshot'; snapshot: Snapshot }
   | { kind: 'ok'; action: ActionId; result?: unknown }
   | { kind: 'err'; code: ErrCode; field?: string; message: string; snapshot?: Snapshot
-      errors?: FieldError[]         // every bad field (Django ValidationError dict); `field` = the first, kept for compatibility
+      errors?: FieldError[]         // every bad field; `field` = the first, kept for compatibility
       reason?: string               // the DomainError code behind err domain/invalid_param/internal ('forbidden', 'not_found', …)
       retryAfterMs?: number         // rate_limited
       confirm?: ConfirmAsk }        // confirm_required
@@ -95,7 +95,7 @@ export interface ReadonlyHeaders {
   get(name: string): string | null     // read-only: no set/delete
 }
 
-// request.md: request.user (Django request.user). Always present on Request.
+// request.md: request.user. Always present on Request.
 export interface TvineUser {
   isAuthenticated: boolean
   isAnonymous?: boolean
@@ -197,7 +197,7 @@ export interface ActionRules {
   audit?: boolean                   // false = never write a tvine.audit row for this action (settings.audit)
   search?: string                   // the param that is a visitor's search term (admin dashboard Top searches): e.g. 'q'
   humanAttention?: true | string    // RESERVED placeholder (BACKLOG #2): carried to ActionHandle.attention + hook events; no behaviour
-  // Django cache_page (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
+  // result cache (conventions/cache.md): readOnly actions only (boot error otherwise). timeout in seconds;
   // varyOn default ['user']; 'session' | 'query' | a header name add to the key. Errors are never cached.
   cache?: { timeout: number; varyOn?: string[]; cache?: string; tags?: string[] }   // tags: cache.invalidateTags([...]) drops them
 }
@@ -259,13 +259,13 @@ export interface Settings {
   }
   socket: boolean
   mcp: { tools: 'both' | 'generic' | 'typed'; exclude: string[]; maxTools: number }
-  // HTTP middleware (Django MIDDLEWARE), outermost first: 'tvine.middleware.<Name>', a defineMiddleware({...}), a class,
+  // HTTP middleware, outermost first: 'tvine.middleware.<Name>', a defineMiddleware({...}), a class,
   // or [one of those, options] (middleware/index.ts). Only listed ones run. Action middleware: actionMiddleware.
   middleware: unknown[]
   actionMiddleware: Middleware[]    // around dispatch (core/middleware.ts); settings.middleware functions land here
-  allowedHosts: string[]            // Django ALLOWED_HOSTS ('*', '.example.com'); required in production
+  allowedHosts: string[]            // allowed hosts ('*', '.example.com'); required in production
   dev: { allowedHosts: string[] }   // debug only, never production: extra hosts (port forwarding: '*.devtunnels.ms') on top of localhost / LAN IPs / hostname
-  debug: boolean                    // Django DEBUG: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
+  debug: boolean                    // debug mode: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string; auditAccess?: boolean }   // auditAccess: an audit row per private-file read
   snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
@@ -273,10 +273,10 @@ export interface Settings {
   db: {
     url: string
     pool: { max: number; acquireMs: number; idleMs: number }
-    atomicRequests: boolean         // Django ATOMIC_REQUESTS: each non-readOnly action = one transaction
+    atomicRequests: boolean         // each non-readOnly action = one transaction
     slowQueryMs: number             // a statement slower than this is logged on tvine.db (warn); 0 = off
   }
-  logging: LoggingSetting           // 'json' | 'pretty' | 'none' or Django LOGGING (log.ts)
+  logging: LoggingSetting           // 'json' | 'pretty' | 'none' or a logging config (log.ts)
   // snapshot shape (progressive-disclosure.md): v2 default; 'v1' = the pre-v2 bytes, kept for one release
   // inTab (security.md): 'on' = agents may control a human's tab (WebMCP in-tab, remote after one Allow); 'off' = never
   agent: { shape: 'v1' | 'v2'; budget: number /* tokens */; rowsL1: number; inTab: 'on' | 'off' }
@@ -294,10 +294,10 @@ export interface Settings {
   // SIGTERM grace, how long final job rows are kept
   // broker: the job store (tvine.tasks picks the default: 'file'); redis: the settings.redis alias a 'redis' broker
   // uses; file / durable: the file broker's tasks.db path and power-cut durability; claimBatch: jobs per claim
-  // conventions/cache.md: named caches (Django CACHES). timeout in seconds (null = forever); location: the file
+  // conventions/cache.md: named caches. timeout in seconds (null = forever); location: the file
   // backend's directory; redis: the settings.redis alias of a 'redis' cache
   caches: Record<string, CacheSettings>
-  email: EmailSettings              // conventions/email.md (Django EMAIL_*)
+  email: EmailSettings              // conventions/email.md
   tasks: { leaseMs: number; pollMs: number; relayMs: number; graceMs: number; resultTtlMs: number
     broker?: 'db' | 'file' | 'memory' | 'redis'; redis: string; file: string; durable: boolean; claimBatch: number }
   // tvine.admin (docs/design/contrib/admin.md §1): where the panel mounts, its title, its theme
@@ -314,8 +314,8 @@ export interface Settings {
   // BACKLOG #11: /robots.txt when the app ships none (public/robots.txt or an app/robots route wins). allow/disallow:
   // extra path rules for every agent; extra: raw lines appended; sitemap: an absolute url (else /sitemap.xml if the app has one)
   robots: { allow: string[]; disallow: string[]; extra: string[]; sitemap?: string }
-  installedApps: string[]           // Django INSTALLED_APPS: project apps 'blog' (apps/blog/) and built-in 'tvine.auth', … (core/apps.ts)
-  rootUrlconf?: string              // Django ROOT_URLCONF, a path from the project root without extension (default config/urls, else urls)
+  installedApps: string[]           // project apps 'blog' (apps/blog/) and built-in 'tvine.auth', … (core/apps.ts)
+  rootUrlconf?: string              // the root URL table, a path from the project root without extension (default config/urls, else urls)
   tasksModule?: string              // queues / beatSchedule for tvine worker (default config/tasks)
   // encrypted model fields: AES-256-GCM root keys, newest first (rotation); empty = derived from secret (HKDF)
   encryption: { keys: string[] }
@@ -340,9 +340,9 @@ export interface RedisConnection { url: string; tls?: boolean; prefix?: string; 
 // (docs/design/contrib/auth.md). Typed loosely here: core does not depend on contrib.
 export interface AuthSettings {
   user?: (req: Request) => Promise<TvineUser | null>   // null/absent → tvine.auth (if installed) or ANONYMOUS
-  // Django AUTH_USER_MODEL: 'app.Model' (default 'auth.User'); pick it before the first migrate
+  // the user model: 'app.Model' (default 'auth.User'); pick it before the first migrate
   userModel?: string
-  // Django AUTHENTICATION_BACKENDS, tried in order: 'tvine.auth.ModelBackend' (default), 'tvine.auth.EmailBackend', a
+  // authentication backends, tried in order: 'tvine.auth.ModelBackend' (default), 'tvine.auth.EmailBackend', a
   // dotted path 'accounts.backends.LdapBackend' (an export of apps/accounts/backends.ts), or the object / class
   backends?: unknown[]
   hashers?: PasswordHasher[]           // first = preferred; others verify (and get upgraded on login)

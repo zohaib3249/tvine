@@ -6,7 +6,7 @@ import { gunzipSync } from 'node:zlib'
 import type { PasswordHasher, PasswordValidator, Settings } from '../../core/types.js'
 import { same } from './crypto.js'
 
-export const UNUSABLE = '!'   // prefix of a password that can never match (Django set_unusable_password)
+export const UNUSABLE = '!'   // prefix of a password that can never match
 export const MAX_PASSWORD = 4096
 
 const scryptP = (pw: string, salt: Buffer, len: number, o: ScryptOptions) =>
@@ -44,7 +44,7 @@ export function scryptHasher(o: { N?: number; r?: number; p?: number } = {}): Pa
   }
 }
 
-// Django's format: pbkdf2_sha256$<iterations>$<salt>$<hash b64> (hashes migrated from Django verify as-is)
+// format: pbkdf2_sha256$<iterations>$<salt>$<hash b64> (existing hashes in this format verify as-is)
 export function pbkdf2Hasher(o: { iterations?: number } = {}): PasswordHasher {
   const iterations = o.iterations ?? 600_000
   if (!Number.isInteger(iterations) || iterations < 100_000) throw new Error('pbkdf2Hasher: iterations must be >= 100000 (OWASP 2023: 600000 for sha256)')
@@ -100,13 +100,13 @@ export async function checkPassword(pw: string, enc: string | null | undefined, 
 }
 export const dummyCheck = (pw: string, s: Settings) => dummy(pw, s)
 
-// ---- validators (Django AUTH_PASSWORD_VALIDATORS) ------------------------------------------------
+// ---- password validators -----------------------------------------------------------------------
 export const minLength = (n = 8): PasswordValidator => (pw) =>
   pw.length < n ? [`This password is too short. It must contain at least ${n} characters.`] : []
 
 export const numericPassword = (): PasswordValidator => (pw) => (/^\d+$/.test(pw) ? ['This password is entirely numeric.'] : [])
 
-// Django's common-passwords list (20k entries, ~80 KB gzipped, BSD; packages/warp/data), read on first use.
+// The common-passwords list (20k entries, ~80 KB gzipped, BSD; packages/warp/data), read on first use.
 // The same path resolves from src/ and dist/.
 let common: Set<string> | undefined
 const COMMON_FILE = new URL('../../../data/common-passwords.txt.gz', import.meta.url)
@@ -140,7 +140,7 @@ export async function validateNewPassword(pw: string, s: Settings, user?: Record
   return []
 }
 
-// Django UserAttributeSimilarityValidator: SequenceMatcher.quick_ratio (multiset character overlap) of the
+// user-attribute similarity: SequenceMatcher.quick_ratio (multiset character overlap) of the
 // password against each attribute and its \W-separated parts.
 const quickRatio = (a: string, b: string) => {
   const left = new Map<string, number>()

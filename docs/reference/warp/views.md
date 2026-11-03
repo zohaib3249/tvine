@@ -1,6 +1,6 @@
 # Class views, ViewSets, `@action` and routers
 
-Class views are Django REST Framework's generic views in TypeScript. You export a class from
+Class views are generic CRUD views. You export a class from
 `apps/<app>/views.ts`; at boot Warp creates it once, checks its config against the model, and turns it into
 ordinary actions: `list`, `get`, `create`, `update`, `delete` (whichever the base class generates) plus one action
 per `@action` method. Those actions are registered exactly like `defineAction` ones (same ids, rules, MCP tools,
@@ -67,8 +67,8 @@ List result:
 | `permissions` | `Permission[]` | `[]` | Checked per call by `checkPermissions` (before params are validated). Ones that deny agents (`denyAgents`) are also copied into the action rules (MCP hiding), unless you override `getPermissions`. |
 | `pageSize` | `number` | `25` | Page size (capped by `maxPageSize`). |
 | `maxPageSize` | `number` | `100` | Upper cap. |
-| `pagination` | `'cursor' \| 'page'` | `'cursor'` | `'cursor'`: keyset, stable under inserts. `'page'`: Django `Paginator`, `?page=N`. |
-| `filters` | `string[]` | the model's enum fields and indexed fields (never hidden / writeOnly) | Django lookups allowed as params: `'status'`, `'price__lte'`, `'tags__in'`, `'name__contains'`. Suffixes: exact, `__lt`, `__lte`, `__gt`, `__gte`, `__in` (comma list or array), `__contains` (text/email/url/slug only, max 200 chars), `__ne`. Unknown field or suffix → boot error. |
+| `pagination` | `'cursor' \| 'page'` | `'cursor'` | `'cursor'`: keyset, stable under inserts. `'page'`: page numbers, `?page=N`. |
+| `filters` | `string[]` | the model's enum fields and indexed fields (never hidden / writeOnly) | Field lookups allowed as params: `'status'`, `'price__lte'`, `'tags__in'`, `'name__contains'`. Suffixes: exact, `__lt`, `__lte`, `__gt`, `__gte`, `__in` (comma list or array), `__contains` (text/email/url/slug only, max 200 chars), `__ne`. Unknown field or suffix → boot error. |
 | `searchFields` | `string[]` | the model's `searchable` fields | Fields `?q=` searches (max 200 chars). A money field cannot be searched. |
 | `ordering` | `string[]` | `[]` | Allowed `sort` values; each also allowed as `-field` (descending). |
 | `shapers` | `Shapers` | from `apps/<app>/serializers.ts` | Set by discovery; output shapers by model name. See [serializers.md](./serializers.md). |

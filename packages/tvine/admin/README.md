@@ -1,6 +1,6 @@
 # tvine/admin
 
-Django-admin-style panel for Tvine, built on Weft widgets and the admin API (`docs/design/contrib/admin.md`).
+The admin panel for Tvine, built on Weft widgets and the admin API (`docs/design/contrib/admin.md`).
 It talks to the backend only through `api.admin.*` / `api.auth.*`. It never touches models or the ORM.
 
 ## Mount
@@ -46,7 +46,7 @@ export { default } from 'tvine/admin/layout'
 | `…/<getUrls path>` | Custom `getUrls` view. Renders the component registered as `'<app>.<model>:<url name>'`, with `args` taken from the path |
 | `/admin/<page path>/` | `admin.site.registerPage` page. Renders the component registered under its `component` string |
 
-Changelist query parameters follow Django:
+Changelist query parameters:
 
 | Param | Meaning |
 |---|---|

@@ -1,4 +1,4 @@
-// date / time / duration (Django DateField, TimeField, DurationField). JS has no date-only or
+// date / time / duration. JS has no date-only or
 // time-only type, so values are ISO strings; a duration is a number of milliseconds.
 import { z } from 'zod'
 import { byDb, Field } from './base.js'
@@ -9,7 +9,7 @@ const isDate = (s: string) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toIS
 // a Date → its UTC calendar day (the zone every datetime here is stored and truncated in)
 const utcDay = (d: Date) => d.toISOString().slice(0, 10)
 
-// 'YYYY-MM-DD'. sqlite: TEXT (Django's own sqlite storage, so text order = date order); postgres / mysql: DATE.
+// 'YYYY-MM-DD'. sqlite: TEXT (text order = date order); postgres / mysql: DATE.
 // A Date given on write or in a filter means its UTC day.
 export class DateField extends Field<string, boolean, 'date', boolean> {
   readonly kind = 'date' as const
@@ -46,7 +46,7 @@ export class TimeField extends Field<string, boolean, 'time', boolean> {
 }
 
 // milliseconds (a number; fractions keep microseconds). Stored as BIGINT microseconds on every engine
-// (Django's non-postgres storage; one integer form keeps sums, ordering and comparisons exact everywhere,
+// (one integer form keeps sums, ordering and comparisons exact everywhere,
 // where a pg INTERVAL would need its own parser).
 export class DurationField extends Field<number, boolean, 'duration', boolean> {
   readonly kind = 'duration' as const

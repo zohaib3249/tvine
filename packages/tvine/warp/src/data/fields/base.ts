@@ -1,6 +1,6 @@
 // A Field knows how it behaves in every database: its column(s), per-dialect SQL type, how its
 // values travel to the driver (params only, never SQL text), how they come back, and how it is
-// filtered. Tables only collect fields. (Django's db_type / get_db_prep_value / from_db_value.)
+// filtered. Tables only collect fields.
 import type { z } from 'zod'
 import { and, bin, castText, fn, FALSE, inList, isNotNull, isNull, like, or, param, type Expr } from '../sql/ast.js'
 import type { Dialect } from '../sql/dialect.js'
@@ -22,12 +22,12 @@ export interface Opts {
   readOnly?: boolean                    // generic views: never accepted as create/update input
   writeOnly?: boolean                   // generic views: accepted as input, never output (overrides hidden's write-protect)
   auto?: boolean                        // datetime only: default now (= autoNowAdd)
-  autoNowAdd?: boolean                  // date / datetime: set to now on create (Django auto_now_add)
-  autoNow?: boolean                     // date / datetime: set to now on create and on Model.update (Django auto_now)
-  maxLength?: number                    // email / url / slug (Django max_length; defaults 254 / 200 / 50)
-  maxDigits?: number                    // decimal (Django max_digits, default 12)
-  decimalPlaces?: number                // decimal (Django decimal_places, default 2)
-  uploadTo?: string                     // file / image: storage key prefix, e.g. 'avatars' (Django upload_to)
+  autoNowAdd?: boolean                  // date / datetime: set to now on create
+  autoNow?: boolean                     // date / datetime: set to now on create and on Model.update
+  maxLength?: number                    // email / url / slug (defaults 254 / 200 / 50)
+  maxDigits?: number                    // decimal (default 12)
+  decimalPlaces?: number                // decimal (default 2)
+  uploadTo?: string                     // file / image: storage key prefix, e.g. 'avatars'
   onDelete?: OnDelete                   // fk only (default RESTRICT); orm-advanced.md §4
   relatedName?: string                  // fk / m2m: the reverse accessor name (default `<model>_set`); no DDL
   language?: string                     // code: 'json' | 'js' | 'sql' | 'html' | 'css' (json is validated)
