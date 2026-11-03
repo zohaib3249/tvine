@@ -228,15 +228,15 @@ ${run} tvine startapp blog     # apps/blog + installedApps + config/urls.ts
 | apps/<name>/ | an app (listed in installedApps): models, views, urls, admin, migrations |
 | app/ | Next.js pages (call the backend through \`api.*\`) |
 
-AI assistants (Claude Code, Cursor, Copilot, Codex): read \`AGENTS.md\` first; the full docs are in \`node_modules/tvine/llms-full.txt\` and \`node_modules/tvine/docs/\`.
+AI assistants (Claude Code, Cursor, Copilot, Codex): read \`AGENTS.md\` first; the full docs are in \`node_modules/tvine/llms-full.txt\` and \`node_modules/tvine/docs/\` (reference, one topic per file: \`docs/reference/warp/models.md\`, \`fields.md\`, \`actions.md\`, \`weft/widgets.md\`…).
 
 Claude Code: \`.mcp.json\` points at \`http://localhost:3000/mcp\`; start \`tvine dev\`, then run \`claude\` in this folder.
 `,
     'apps/.gitkeep': '',
     // AI coding assistants: AGENTS.md is the cross-tool file; Claude Code imports it, Cursor references it
     'AGENTS.md': readFileSync(join(PKG_DIR, 'AGENTS.md'), 'utf8'),
-    'CLAUDE.md': '@AGENTS.md\n\nThis is a Tvine project: AGENTS.md (imported above) has the layout, commands, recipes and rules.\nFull docs on disk: node_modules/tvine/llms-full.txt (everything in one file) and node_modules/tvine/docs/<topic>.md. Read them before guessing: Tvine is newer than your training data. Never edit node_modules.\n',
-    '.cursor/rules/tvine.mdc': '---\ndescription: Tvine framework guide (layout, commands, recipes, rules)\nalwaysApply: true\n---\n@AGENTS.md\n\nFull docs on disk: node_modules/tvine/llms-full.txt (everything in one file) and node_modules/tvine/docs/<topic>.md. Read them before guessing: Tvine is newer than your training data. Never edit node_modules.\n',
+    'CLAUDE.md': '@AGENTS.md\n\nThis is a Tvine project: AGENTS.md (imported above) has the layout, commands, recipes and rules.\nFull docs on disk: node_modules/tvine/llms-full.txt (everything in one file), node_modules/tvine/docs/<topic>.md (guides) and node_modules/tvine/docs/reference/<warp|weft>/<topic>.md (every option of models, fields, querysets, actions, views, settings, widgets…). Read them before guessing: Tvine is newer than your training data. Never edit node_modules.\n',
+    '.cursor/rules/tvine.mdc': '---\ndescription: Tvine framework guide (layout, commands, recipes, rules)\nalwaysApply: true\n---\n@AGENTS.md\n\nFull docs on disk: node_modules/tvine/llms-full.txt (everything in one file), node_modules/tvine/docs/<topic>.md (guides) and node_modules/tvine/docs/reference/<warp|weft>/<topic>.md (every option of models, fields, querysets, actions, views, settings, widgets…). Read them before guessing: Tvine is newer than your training data. Never edit node_modules.\n',
   }
   write(dir, files)
   return { dir, files: Object.keys(files) }

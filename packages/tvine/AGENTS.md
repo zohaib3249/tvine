@@ -12,6 +12,7 @@ The full docs ship inside the package. Read them from disk, not from memory:
 |---|---|
 | `node_modules/tvine/llms-full.txt` | everything in one file: this guide + every guide (search it for a setting, command or header) |
 | `node_modules/tvine/docs/<topic>.md` | one guide: `installation`, `getting-started`, `settings-and-env`, `models-and-orm`, `views-urls-api`, `frontend-weft`, `agents-and-mcp`, `admin`, `auth-and-security`, `shield`, `tasks-cache-email`, `testing`, `cli`, `deploy` |
+| `node_modules/tvine/docs/reference/<area>/<topic>.md` | the reference, one topic per file with every option and default: `warp/models.md`, `warp/fields.md`, `warp/queryset.md`, `warp/actions.md`, `warp/views.md`, `warp/settings.md`, `warp/contrib/auth.md`, `weft/widgets.md`, `weft/forms.md`… (index: `docs/reference/README.md`) |
 | `node_modules/tvine/llms.txt` | the index of those guides |
 | `pnpm tvine docs --ai` | prints this guide |
 

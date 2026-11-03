@@ -195,6 +195,7 @@ Building a Tvine app with Claude Code, Cursor, Copilot or Codex? Tvine is newer 
 | `AGENTS.md` (project root) | layout, commands, recipes, the 10 rules. `startproject` writes it, plus `CLAUDE.md` and `.cursor/rules/tvine.mdc` that point at it |
 | `node_modules/tvine/llms-full.txt` | every guide in one file: search it for a setting, command or header |
 | `node_modules/tvine/docs/<topic>.md` | one guide, e.g. `settings-and-env.md`, `cli.md`, `shield.md` |
+| `node_modules/tvine/docs/reference/<area>/<topic>.md` | the reference, one topic per file with every option and default: `warp/models.md`, `warp/fields.md`, `warp/queryset.md`, `warp/actions.md`, `warp/views.md`, `warp/settings.md`, `warp/contrib/auth.md`, `weft/widgets.md`, `weft/forms.md`… (index: `docs/reference/README.md`) |
 | [llms.txt](llms.txt) / [llms-full.txt](llms-full.txt) | the same, in this repo |
 
 The short version: apps live in `apps/<app>/`, settings in `config/settings/`. Add an app with `tvine startapp`. Change models, then run `makemigrations` + `migrate`.
