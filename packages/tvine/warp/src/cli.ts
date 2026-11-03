@@ -18,7 +18,7 @@ import { createAgentServer, loadSettings, type AgentServerOptions } from './serv
 import type { Settings } from './core/types.js'
 import { mcpEnabled } from './transport/mcp.js'
 import { backendTable } from './backends/index.js'
-import { rateOverlap, redisUsers } from './settings.js'
+import { customKeyWarnings, rateOverlap, redisUsers } from './settings.js'
 import { redis } from './redis/index.js'
 import type { AddressInfo } from 'node:net'
 import { defaultEnv, defaultNodeEnv, env, envReport, isProduction, loadDotenv } from './env.js'
@@ -462,6 +462,7 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         for (const a of unlistedApps(apps, installed)) io.err(`tvine check: warning: app '${a}' exists but is not in installedApps`)
         const overlap = rateOverlap(srv.ctx.settings)
         if (overlap) io.err(`tvine check: warning: ${overlap}`)
+        for (const w of customKeyWarnings(srv.ctx.settings)) io.err(`tvine check: warning: ${w}`)
         const swapped = installed.includes('tvine.auth') ? await userModelChanged(url, apps, { installed }) : undefined
         if (swapped) { io.err(`tvine check: ${swapped}`); return 1 }
         if (hasModels(apps, installed) && !(await migrateCheck(url, apps, { installed }))) { io.err(`tvine check: ${await pending(url, apps, installed)}`); return 1 }

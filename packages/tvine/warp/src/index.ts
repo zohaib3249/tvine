@@ -21,7 +21,7 @@ export type {
   ReadonlyHeaders, TvineUser, UploadedFile, Request, Session, ActionCtx, PermissionCtx, Permission,
   Middleware, ActionDef, ActionRules, Settings, Paginated, AuthSettings, PasswordHasher, PasswordValidator,
 } from './core/types.js'
-export { defineSettings, type SettingsInput } from './settings.js'
+export { defineSettings, settings, type SettingsInput } from './settings.js'
 export { defineUpload, DiskStorage, media, type Storage, type UploadDef, type UploadOpts } from './media/index.js'
 export { allowAny, denyAgents, deniesAgents, isAuthenticated, isStaff, isSuperuser, hasPerm, modelPermissions, permCodename, allOf, anyOf, loginRequired, permissionRequired, userPassesTest, staffMemberRequired } from './security/permissions.js'
 export { authenticate, authBackend, cycleSession, setAuthBackend, type AuthBackend } from './core/auth.js'
@@ -50,7 +50,7 @@ export { SmtpError } from './mail/smtp.js'
 export { metrics } from './core/metrics.js'   // BACKLOG #9: apps may add counters/gauges to the same /tvine/metrics
 export { defineMiddleware, CATALOG as MIDDLEWARE_CATALOG, type HttpMiddleware, type MwRequest, type RequestState, type BuildCtx, type MiddlewareEntry } from './middleware/index.js'
 export { getLogger, configureLogging, type Logger, type LogRecord, type LogHandler, type LoggingConfig, type LoggingSetting, type Level } from './log.js'
-export { env, loadDotenv, FRAMEWORK_ENV } from './env.js'
+export { env, loadDotenv, loadEnv, FRAMEWORK_ENV } from './env.js'
 export { securityEvent } from './core/audit.js'
 export { signing, dumps, loads, Signer, TimestampSigner, BadSignature, SignatureExpired, configureSigning } from './security/signing.js'
 export { safeFetch, isPrivateAddress, SafeFetchError, type SafeFetchOpts } from './security/safe-fetch.js'

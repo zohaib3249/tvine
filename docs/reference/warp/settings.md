@@ -59,13 +59,25 @@ it reads `TVINE_API_URL`, `TVINE_SECRET`, `TVINE_TRUST_PROXY`, `TVINE_HEADER`, `
 
 Loaded by every `tvine` command, first match per variable wins, never over a variable already set:
 `.env.<NODE_ENV>.local`, `.env.local` (skipped under `NODE_ENV=test`), `.env.<NODE_ENV>`, `.env`. Not in
-production unless `TVINE_LOAD_DOTENV=1`.
+production unless `TVINE_LOAD_DOTENV=1`. `TVINE_ENV_FILES=a,b` (real env) adds files read after those, later wins.
+
+`loadEnv(files, { dir?, required? })`: loads `files` in order (call it at the top of `config/settings/base.ts`).
+Later file wins, and beats the automatic files; the real environment always wins; missing files are skipped
+(`required: true`: error naming the file); production: off unless `TVINE_LOAD_DOTENV=1`. Returns the files loaded.
 
 ### `env` helpers
 
 `env.str(name, d?)`, `env.int`, `env.bool` (`1/0`, `true/false`, `yes/no`, `on/off`), `env.list` (comma list),
 `env.url`, `env.json`, `env.required(name)`, `env.has(name)`. An empty value counts as unset; a missing one without
-a default throws naming the variable.
+a default throws naming the variable. Aliases: `env.get`, `env.getInt`, `env.getBool`, `env.getList`, `env.getUrl`,
+`env.getJson`.
+
+### Your own settings
+
+Unknown top-level keys are kept unvalidated (`PAYMENT_PROVIDER: 'stripe'`, `shop: {...}`) and merge through
+base → dev → local. Read: `ctx.settings.shop`, or `settings()` from `'tvine'` anywhere after boot (throws before).
+Type: `declare module 'tvine' { interface Settings { shop: { currency: string } } }`. A key within two edits of a
+framework key (any case) warns at boot and in `tvine check` ("did you mean 'allowedHosts'?").
 
 ## Every key
 

@@ -3,6 +3,7 @@ import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 import { env, fromDotenv, isProduction } from './env.js'
 import { LEVELS } from './log.js'
+import { loadedSettings } from './security/signing.js'
 import type { AuthSettings, CacheSettings, Settings, Permission, Middleware, PasswordHasher, PasswordValidator, TvineUser, Request } from './core/types.js'
 
 // Canonical shape: docs/design/conventions/settings.md. Validated at boot.
@@ -10,7 +11,8 @@ type Fn = (...args: never[]) => unknown
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends Fn | unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K]
 }
-export type SettingsInput = DeepPartial<Settings>
+// any other top-level key is a custom setting of the app (kept as given, not validated)
+export type SettingsInput = DeepPartial<Settings> & { [key: string]: unknown }
 
 export const DEFAULT_DB_URL = 'file:./tvine.db'
 
@@ -126,7 +128,7 @@ const alias = z.string().regex(/^[A-Za-z_][\w-]*$/, 'a connection alias is a pla
 // never echo the url in a validation error: it may carry a password
 const redisUrl = z.string().refine((u) => /^rediss?:\/\/./.test(u.trim()), 'redis url must start with redis:// or rediss://')
 
-const schema: z.ZodType<Settings> = z.object({
+const root = z.object({
   site: z.object({ name: z.string(), description: z.string() }),
   siteUrl: z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'an origin like https://shop.example').optional(),
   health: z.object({ token: z.string().min(16, 'health.token: at least 16 characters').optional() }).strict().optional(),
@@ -260,9 +262,39 @@ const schema: z.ZodType<Settings> = z.object({
     breachCheck: z.boolean().optional(),
     notify: z.object({ newLogin: z.boolean(), passwordChanged: z.boolean(), twoFactorDisabled: z.boolean(), tokenCreated: z.boolean(), emailChanged: z.boolean() }).partial().strict().optional(),
   }).strict().optional(),
-}).refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] })
+})
+// unknown top-level keys pass through unchanged: the app's own settings (ctx.settings.<key>, settings())
+const schema: z.ZodType<Settings> = root.passthrough().refine((s) => !s.audit.enabled || s.installedApps.includes('tvine.audit'), { message: "settings.audit.enabled needs 'tvine.audit' in settings.installedApps (its table and admin)", path: ['audit'] })
   .refine((s) => !(s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield') || s.installedApps.includes('tvine.shield'), { message: "tvine.middleware.Shield needs 'tvine.shield' in settings.installedApps (its rules, lists and events tables)", path: ['shield'] })
   .refine((s) => s.limits.rate.by !== 'shield' || (s.middleware as unknown[]).some((m) => (Array.isArray(m) ? m[0] : m) === 'tvine.middleware.Shield'), { message: "limits.rate.by 'shield' needs 'tvine.middleware.Shield' in settings.middleware", path: ['limits', 'rate', 'by'] }) as z.ZodType<Settings>
+
+// A custom key one or two edits from a framework key (case-insensitive) is most likely a typo: say so at boot and in tvine check
+const KNOWN = Object.keys(root.shape)
+export function customKeyWarnings(s: object): string[] {
+  const out: string[] = []
+  for (const k of Object.keys(s)) {
+    if (KNOWN.includes(k)) continue
+    const near = KNOWN.find((n) => editDistance(k.toLowerCase(), n.toLowerCase()) <= 2)
+    if (near) out.push(`settings: unknown key '${k}' — did you mean '${near}'? (kept as a custom setting)`)
+  }
+  return out
+}
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+    prev = cur
+  }
+  return prev[b.length]!
+}
+
+// The loaded settings, anywhere at runtime (set at boot by loadSettings, or configureSigning in scripts/tests)
+export function settings(): Settings {
+  const s = loadedSettings()
+  if (!s) throw new Error('settings() called before boot: settings are not loaded yet (loadSettings() / the server sets them)')
+  return s as Settings
+}
 
 // admin.allowIps entries must parse at boot (a typo must not silently lock everyone out, or let everyone in)
 function validCidr(e: string): boolean {
@@ -285,7 +317,7 @@ export function merge(base: Record<string, unknown>, over: Record<string, unknow
   return out
 }
 
-export function defineSettings(input: SettingsInput & { secret?: string | string[] }): Settings {
+export function defineSettings(input: SettingsInput): Settings {
   const prod = process.env.NODE_ENV === 'production'
   const { secret: given, ...rest } = input
   // explicit > TVINE_SECRET > (dev only) a random per-boot key; prod without one fails loudly below

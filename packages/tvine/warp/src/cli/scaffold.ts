@@ -66,6 +66,8 @@ export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
     'config/settings/base.ts': `// Shared settings (Django settings/base.py). dev.ts and prod.ts build on it; pick one with
 // TVINE_SETTINGS=config/settings/prod or tvine --settings (default: prod when NODE_ENV=production, else dev).
 // Environment: DATABASE_URL, TVINE_SECRET, TVINE_ALLOWED_HOSTS, TVINE_DEBUG (.env in development).
+// More .env files (in order, later wins): import { loadEnv } from 'tvine'; loadEnv(['.env.shared'])
+// Your own settings: any other key, e.g. shop: { currency: 'EUR' }, read as ctx.settings.shop or settings().shop
 import type { SettingsInput } from 'tvine'
 
 export const base = {

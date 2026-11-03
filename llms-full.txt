@@ -1264,7 +1264,9 @@ export default defineSettings({
 })
 ```
 
-Also `env.str`, `env.url`, `env.json`, `env.has`. An empty value counts as unset.
+Also `env.str`, `env.url`, `env.json`, `env.has`. An empty value counts as unset. The same readers have `get*`
+names: `env.get(key, default?)` (string), `env.getInt`, `env.getBool`, `env.getList` (comma list, trimmed),
+`env.getUrl`, `env.getJson`.
 
 ### Variables the framework reads
 
@@ -1307,7 +1309,62 @@ real environment is never overridden:
 3. `.env.<NODE_ENV>`
 4. `.env`
 
+`TVINE_ENV_FILES=.env.shared,.env.ci` (a real environment variable) adds files read after those four; a later
+file beats an earlier one.
+
 In production they load only with `TVINE_LOAD_DOTENV=1`.
+
+### Loading .env files yourself
+
+`loadEnv(files, { dir?, required? })` loads files in the order given, at the top of `config/settings/base.ts`
+(before any `env.*` read):
+
+```ts
+import { loadEnv } from 'tvine'
+loadEnv(['.env.shared', `.env.${process.env.TENANT}`])   // returns the files it loaded
+```
+
+The rules:
+
+1. Files load in order; when two define the same key, **the later file wins**.
+2. They also beat the automatic `.env` files above.
+3. A variable set by the **real environment** is never overridden.
+4. A missing file is skipped; with `required: true` it is a boot error naming the file.
+5. Production: off unless `TVINE_LOAD_DOTENV=1` (same rule as the automatic files; `required` is not checked then).
+
+Same syntax as the automatic files (Node's `.env` parser: `#` comments, quotes, `export KEY=`, multi-line quoted values).
+
+## Your own settings
+
+Any top-level key the framework does not know is kept as is: your app's own settings. Put them in
+`config/settings/base.ts`, override them in `dev.ts` / `local.ts` (objects deep-merge, arrays replace):
+
+```ts
+export const base = {
+  // ...framework keys...
+  PAYMENT_PROVIDER: env.get('PAYMENT_PROVIDER', 'stripe'),
+  shop: { currency: 'EUR', freeShippingOver: 50 },
+} satisfies SettingsInput
+```
+
+Read them with `ctx.settings.shop` in an action, or anywhere at runtime with `settings()` (throws before boot):
+
+```ts
+import { settings } from 'tvine'
+const { currency } = settings().shop
+```
+
+Type them once (anywhere in the project, e.g. `config/settings/types.ts`):
+
+```ts
+declare module 'tvine' {
+  interface Settings { PAYMENT_PROVIDER: string; shop: { currency: string; freeShippingOver: number } }
+}
+```
+
+Custom keys are not validated. Framework keys still are, and a custom key one or two letters away from a
+framework key (any case) is reported at boot and by `tvine check`:
+`settings: unknown key 'allowedHost' — did you mean 'allowedHosts'? (kept as a custom setting)`.
 
 ## Gotchas
 
@@ -7275,13 +7332,25 @@ it reads `TVINE_API_URL`, `TVINE_SECRET`, `TVINE_TRUST_PROXY`, `TVINE_HEADER`, `
 
 Loaded by every `tvine` command, first match per variable wins, never over a variable already set:
 `.env.<NODE_ENV>.local`, `.env.local` (skipped under `NODE_ENV=test`), `.env.<NODE_ENV>`, `.env`. Not in
-production unless `TVINE_LOAD_DOTENV=1`.
+production unless `TVINE_LOAD_DOTENV=1`. `TVINE_ENV_FILES=a,b` (real env) adds files read after those, later wins.
+
+`loadEnv(files, { dir?, required? })`: loads `files` in order (call it at the top of `config/settings/base.ts`).
+Later file wins, and beats the automatic files; the real environment always wins; missing files are skipped
+(`required: true`: error naming the file); production: off unless `TVINE_LOAD_DOTENV=1`. Returns the files loaded.
 
 ### `env` helpers
 
 `env.str(name, d?)`, `env.int`, `env.bool` (`1/0`, `true/false`, `yes/no`, `on/off`), `env.list` (comma list),
 `env.url`, `env.json`, `env.required(name)`, `env.has(name)`. An empty value counts as unset; a missing one without
-a default throws naming the variable.
+a default throws naming the variable. Aliases: `env.get`, `env.getInt`, `env.getBool`, `env.getList`, `env.getUrl`,
+`env.getJson`.
+
+### Your own settings
+
+Unknown top-level keys are kept unvalidated (`PAYMENT_PROVIDER: 'stripe'`, `shop: {...}`) and merge through
+base → dev → local. Read: `ctx.settings.shop`, or `settings()` from `'tvine'` anywhere after boot (throws before).
+Type: `declare module 'tvine' { interface Settings { shop: { currency: string } } }`. A key within two edits of a
+framework key (any case) warns at boot and in `tvine check` ("did you mean 'allowedHosts'?").
 
 ## Every key
 
