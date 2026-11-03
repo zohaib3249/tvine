@@ -22,7 +22,6 @@ trap 'kill $(cat "$B/logs/redis.pid") 2>/dev/null || true' EXIT
 sleep 0.5
 mv -f results.json "results.$(date +%s).json" 2>/dev/null || true
 (cd apps/node_app && npm install --silent) && .venv/bin/python seed.py load apps/node_app/app.db --create
-node bench.mjs info sanity main baseline scale allcores2 shield ramp profile
-node profile-report.mjs logs/prof/*.cpuprofile > profile.md
+node bench.mjs info sanity main baseline scale allcores2 shield ramp
 node summarize.mjs > summary.tables.md
 node report.mjs

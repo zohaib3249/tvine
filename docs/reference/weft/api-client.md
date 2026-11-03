@@ -232,6 +232,11 @@ The server always knows whether a call came from an agent:
 | A remote agent driving the tab: `api.*` calls made by *your* handlers during its step | **agent** — the browser does not add the mark, but the server marks every request of the session as agent while a forwarded command runs (and a short time after), whatever the client sends (`asAgent` in warp `core/dispatch.ts`) |
 | A server component rendered for an agent's snapshot | agent (split mode forwards the agent flag from `x-tvine` / the tvine `Accept` header) |
 
+The session mark is set (and awaited) before a forwarded command reaches the tab, so every request the command causes
+counts as agent. With Redis, a request reuses the mark count from its own session load (at most 1 s old) instead of
+asking Redis again, so a request that was already in flight when another worker set the mark can still count as
+human. Requests the agent's step causes are never affected.
+
 The marker is downgrade-only: page code can mark its own call as agent, never turn an agent call into a
 human one. `rules.humanOnly`, `denyAgents` and `mcp: false` are enforced on the server for agent calls.
 

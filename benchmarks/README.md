@@ -17,6 +17,6 @@ Needs Node 22.15+, Python 3.14 with `uv`, and `redis-server`. It starts its own 
 | `bench.mjs` | starts each app, runs each section, records every run in `results.json` |
 | `load.mjs` | load clients: autocannon, and an open-loop fixed-rate client for the ramp |
 | `seed.py` | generates and loads the same 10,000 rows into each app's SQLite file |
-| `summarize.mjs`, `profile-report.mjs` | turn `results.json` and the CPU profile into tables |
+| `summarize.mjs` | turns `results.json` into tables |
 | `results.json` | the published run: every number, versions and settings |
 | `report.mjs` | builds `docs/benchmark.html` (data embedded, no libraries) from `results.json`: `node report.mjs` |

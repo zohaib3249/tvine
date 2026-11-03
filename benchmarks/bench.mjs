@@ -37,9 +37,8 @@ const SERVERS = {
   tvine_proxy: { port: 5157, cwd: TV, cmd: ['node', [tvBin, 'start', '--port', '5157', '--host', '127.0.0.1']], env: tvEnv({ BENCH_TRUST_PROXY: '1' }), db: join(TV, 'tvine.db'), fw: 'tvine', desc: 'tvine start, Shield OFF, trustProxy 1 (baseline for Shield)' },
   node: { port: 5162, cwd: join(B, 'apps/node_app'), cmd: ['node', ['server.mjs']], env: { NODE_ENV: 'production', PORT: '5162', REDIS_URL: REDIS }, db: join(B, 'apps/node_app/app.db'), fw: 'node', desc: 'raw node:http baseline, 1 process' },
   node_x8: { port: 5163, cwd: join(B, 'apps/node_app'), cmd: ['node', ['cluster.mjs']], env: { NODE_ENV: 'production', PORT: '5163', WORKERS: '8', REDIS_URL: REDIS }, db: join(B, 'apps/node_app/app.db'), fw: 'node', desc: 'raw node:http, node:cluster x8' },
-  tvine_prof: { port: 5164, cwd: TV, cmd: ['node', ['--cpu-prof', '--cpu-prof-dir', join(B, 'logs/prof'), tvBin, 'start', '--port', '5164', '--host', '127.0.0.1']], env: tvEnv(), db: join(TV, 'tvine.db'), fw: 'tvine', desc: 'tvine start under node --cpu-prof (same settings as main)' },
   // all-cores variants
-  tvine_x8: { port: 5158, cwd: TV, cmd: ['node', ['cluster.mjs', 'start', '--port', '5158', '--host', '127.0.0.1']], env: tvEnv({ WORKERS: '8' }), db: join(TV, 'tvine.db'), fw: 'tvine', desc: 'node:cluster wrapper (apps/tvine_app/cluster.mjs) x8 tvine start — not a built-in Tvine feature' },
+  tvine_x8: { port: 5158, cwd: TV, cmd: ['node', [tvBin, 'start', '--workers', '8', '--port', '5158', '--host', '127.0.0.1']], env: tvEnv({ BENCH_REDIS: '1' }), db: join(TV, 'tvine.db'), fw: 'tvine', desc: 'tvine start --workers 8 (built-in node:cluster primary); session/limits/channels/snapshotCache/caches.default on Redis :6391 as --workers requires' },
   express_x8: { port: 5159, cwd: join(B, 'apps/express_app'), cmd: ['node', ['cluster.mjs']], env: { NODE_ENV: 'production', PORT: '5159', WORKERS: '8', REDIS_URL: REDIS }, db: join(B, 'apps/express_app/app.db'), fw: 'express', desc: 'node:cluster x8' },
   fastapi_x8: { port: 5160, cwd: join(B, 'apps/fastapi_app'), cmd: uv(5160, 8), env: { REDIS_URL: REDIS }, db: join(B, 'apps/fastapi_app/app.db'), fw: 'fastapi', desc: 'uvicorn --workers 8' },
   django_x8: { port: 5161, cwd: join(B, 'apps/django_app'), cmd: gu(5161, ['-w', '8', '--worker-class', 'gthread', '--threads', '4']), env: { REDIS_URL: REDIS }, db: join(B, 'apps/django_app/app.db'), fw: 'django', desc: 'gunicorn -w 8 --worker-class gthread --threads 4' },
@@ -339,7 +338,7 @@ async function baseline() {
 const KCLI = Number(process.env.KCLI ?? 4)
 async function allcores2() {
   results.machine.backgroundAtAllcores2 = bg(); save()
-  for (const name of ['node_x8', 'tvine_x8', 'express_x8', 'fastapi_x8', 'django_x8']) {
+  for (const name of process.env.AC_SERVERS?.split(',') ?? ['node_x8', 'tvine_x8', 'express_x8', 'fastapi_x8', 'django_x8']) {
     reseed(name); redisCli('flushall')
     const pid = await start(name)
     try { for (const kind of ['ping', 'get']) await bench('allcores2', name, pid, kind, 200, { reps: 1, k: KCLI, label: `8 server processes + ${KCLI} autocannon processes (${200 / KCLI} conns each), same 8 cores` }) } finally { await stop() }
@@ -349,7 +348,7 @@ async function allcores2() {
 async function ramp() {
   const others = results.runs.filter((r) => r.section === 'allcores2' && r.kind === 'get' && !['tvine_x8', 'node_x8'].includes(r.server))
   const other = others.sort((a, b) => b.median.reqPerSec - a.median.reqPerSec)[0]?.server ?? 'express_x8'
-  for (const name of ['tvine_x8', other]) {
+  for (const name of process.env.RAMP_SERVERS?.split(',') ?? ['tvine_x8', other]) {
     reseed(name); redisCli('flushall')
     const pid = await start(name)
     try {
@@ -372,14 +371,8 @@ async function ramp() {
     } finally { await stop() }
   }
 }
-async function profile() {
-  execFileSync('rm', ['-rf', join(B, 'logs/prof')]); execFileSync('mkdir', ['-p', join(B, 'logs/prof')])
-  reseed('tvine_prof'); redisCli('flushall')
-  const pid = await start('tvine_prof')
-  try { await bench('profile', 'tvine_prof', pid, 'get', 50, { reps: 1, label: 'node --cpu-prof, 15 s at 50 conns (profile covers warm-up + run)' }) } finally { await stop() }
-}
 
-const SECTIONS = { info, sanity, main: main_, scale, allcores, shield, floods, baseline, allcores2, ramp, profile }
+const SECTIONS = { info, sanity, main: main_, scale, allcores, shield, floods, baseline, allcores2, ramp }
 const want = process.argv.slice(2); const list = want.includes('all') ? Object.keys(SECTIONS) : want
 if (!results.machine && !list.includes('info')) list.unshift('info')
 try { for (const s of list) { log('== section', s); await SECTIONS[s]() } }

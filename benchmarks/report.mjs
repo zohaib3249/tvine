@@ -1,5 +1,5 @@
-// Builds docs/benchmark.html: a self-contained page (data embedded, no libraries, no network) from results.json +
-// profile.md. Run after ./run.sh:  node report.mjs
+// Builds docs/benchmark.html: a self-contained page (data embedded, no libraries, no network) from results.json.
+// Run after ./run.sh:  node report.mjs
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const here = (p) => new URL(p, import.meta.url)
@@ -28,7 +28,6 @@ const flood = latest(runs.filter((x) => x.section === 'shield-flood'), (x) => `$
   attack: /1,000/.test(x.label) ? '1,000 IPs' : 'One IP', connections: x.connections, shield: on(x.server), floodRps: Math.round(x.flood.reqPerSec), turnedAway: r1((x.flood.share429 ?? 0) * 100),
   visitorOk: r1((x.legitDuring?.successRate ?? 0) * 100), visitorRequests: x.legitDuring?.total ?? 0, visitorP50: x.legitDuring?.p50 != null ? r1(x.legitDuring.p50) : null, visitorP99: x.legitDuring?.p99 != null ? r1(x.legitDuring.p99) : null,
 }))
-const profile = [...readFileSync(here('./profile.md'), 'utf8').matchAll(/^\| ((?:tvine|sqlite|node:|zod|\()[^|]*?) \| (\d+) ms \| ([\d.]+)% \|$/gm)].map((m) => ({ part: m[1].trim(), ms: Number(m[2]), share: Number(m[3]) }))
 const m = r.machine, v = r.versions, l = r.settings.load
 const setup = [
   ['Machine', `${m.cpu}, ${m.cores} cores, ${m.memGB} GB; the load tool runs on the same machine`],
@@ -40,7 +39,7 @@ const setup = [
   ['Load', `autocannon ${v.autocannon}; ${l.warmupS} s warm-up, then ${l.reps} × ${l.durationS} s at 50 connections, median kept; an open-loop client for the fixed-rate ramp`],
   ['Data', 'the same 10,000 rows in every app; identical JSON responses checked before timing'],
 ].map(([item, value]) => ({ item, value }))
-const DATA = { main, allcores, scale, ramp, overhead, mcp, flood, profile, setup, at: runs.reduce((a, x) => (x.at > a ? x.at : a), '') }
+const DATA = { main, allcores, scale, ramp, overhead, mcp, flood, setup, at: runs.reduce((a, x) => (x.at > a ? x.at : a), '') }
 
 const html = `<!doctype html>
 <html lang="en">
@@ -113,7 +112,7 @@ const html = `<!doctype html>
   <section>
     <h2>All cores and rising load</h2>
     <div class="grid">
-      <div class="card"><h3>Eight processes each</h3><p class="note">200 connections from 4 load processes on the same 8 cores. Tvine runs tvine start --workers 8 with sessions and rate limits shared on Redis; that Redis bookkeeping (about 19 calls per request) is its limit here, the next speed task.</p><div class="legend" id="lg-cores"></div><div class="chart" id="ch-cores"></div></div>
+      <div class="card"><h3>Eight processes each</h3><p class="note">200 connections from 4 load processes on the same 8 cores. Tvine runs tvine start --workers 8 with sessions and rate limits shared on Redis.</p><div class="legend" id="lg-cores"></div><div class="chart" id="ch-cores"></div></div>
       <div class="card"><h3>One process, more connections</h3><p class="note">One row by id, from 10 to 500 open connections. A flat line means the process was already full at 10.</p><div class="legend" id="lg-scale"></div><div class="chart" id="ch-scale"></div></div>
     </div>
     <div class="card"><h3>Fixed-rate ramp, eight processes</h3><p class="note">The client sends at a fixed rate; a step fails when p99 goes over the dashed line or more than 1% of requests fail (red dots). 100,000 a second was not reachable here: the load processes ran out of CPU first.</p><div class="legend" id="lg-ramp"></div><div class="chart" id="ch-ramp"></div></div>
@@ -129,10 +128,6 @@ const html = `<!doctype html>
       <p class="note">A flood from one IP is turned away by the per-IP limit, which costs far less than serving it, so the visitor keeps getting pages. A flood spread over 1,000 IPs keeps each IP under the limit, so the single process fills up and the visitor's connections are reset. Stopping that needs a whole-site emergency mode and more processes.</p></div>
   </section>
 
-  <section>
-    <h2>Where Tvine's time goes</h2>
-    <div class="card"><h3>Share of busy CPU, one process reading one row under load</h3><p class="note">From a CPU profile. The rate limiter is busy even with the limit lifted, because every anonymous request gets a new throwaway session; SQL statements are compiled again on every query. Both are fixable. The HTTP middleware is a small share.</p><div class="chart" id="ch-prof"></div></div>
-  </section>
 
   <section>
     <h2>How it was measured</h2>
@@ -142,6 +137,7 @@ const html = `<!doctype html>
         <li>SQLite rather than Postgres; Redis on the same machine.</li>
         <li>Tvine ran as a full app with Next.js and security headers in the same process. Express, FastAPI and raw Node ran with no security middleware.</li>
         <li>The scale, eight-process, MCP and flood results are single runs.</li>
+        <li>Tvine and Express were measured with tvinejs 0.3.2; raw Node, FastAPI and Django numbers, and the Shield, MCP and flood runs, are from the earlier run on the same machine.</li>
         <li>The code and the raw results: <code>benchmarks/</code> in the Tvine repository. <code>./run.sh</code> reruns everything; <code>node report.mjs</code> rebuilds this page.</li>
       </ul>
     </div>
@@ -249,8 +245,6 @@ const html = `<!doctype html>
     lines('ch-ramp', D.ramp, { xk: 'target', yk: 'p99', log: true, minMax: 400, limit: 200, limitLabel: 'p99 limit 200 ms', xtick: (vv) => (vv >= 1000 ? vv / 1000 + 'k' : vv) + '/s', ytick: (t) => num(t) + ' ms', bad: (d) => !d.held, tip: (d) => ['reached ' + num(d.achieved) + '/s', 'p50 ' + ms(d.p50) + ' ms · p99 ' + ms(d.p99) + ' ms', 'errors ' + d.errPct + '% · ' + (d.held ? 'held' : 'failed')] })
     const fls = [...D.flood].sort((a, b) => a.connections - b.connections || a.attack.localeCompare(b.attack) || b.shield.localeCompare(a.shield)).map((r) => ({ ...r, g: r.connections + ' flood connections', label: r.attack + ', Shield ' + r.shield }))
     bars('ch-flood', fls, { gk: 'g', groups: ['500 flood connections', '1000 flood connections'], ik: 'label', items: ['One IP, Shield On', 'One IP, Shield Off', '1,000 IPs, Shield On'], vk: 'visitorOk', fmt: (vv) => vv + '%', color: (r) => (r.visitorOk < 50 ? 'var(--bad)' : r.shield === 'On' ? 'var(--ok)' : 'var(--c1)'), tip: (r) => ['visitor answered ' + r.visitorOk + '% of ' + r.visitorRequests, 'visitor p50 ' + ms(r.visitorP50) + ' ms', 'server answered ' + num(r.floodRps) + '/s, ' + r.turnedAway + '% turned away'] })
-    const top = [...D.profile].sort((a, b) => b.share - a.share).slice(0, 14).map((r) => ({ ...r, g: 'all' }))
-    bars('ch-prof', top, { gk: 'g', groups: ['all'], showGroup: false, ik: 'part', items: top.map((r) => r.part), vk: 'share', fmt: (vv) => vv + '%', color: (r) => (/^tvine /.test(r.part) ? 'var(--accent)' : 'var(--c1)'), tip: (r) => [r.share + '% of busy CPU', num(r.ms) + ' ms in the profile'] })
   }
   legend('lg-main', FW.filter((f) => D.main.some((r) => r.framework === f)))
   legend('lg-cores', FW.filter((f) => D.allcores.some((r) => r.framework === f)))
