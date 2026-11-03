@@ -40,6 +40,19 @@ Writing code for a Tvine project? See [For coding agents](#for-coding-agents).
 
 Admin screenshots are from an example store app; Shield screenshots use sample traffic.
 
+## Performance
+
+![Requests a second, one process each](docs/images/benchmark-one-process.svg)
+
+One row read by id, requests a second on one process (same data, same machine):
+
+| Tvine | Express | FastAPI | Django |
+|---|---|---|---|
+| 12,591 | 32,814 | 4,751 | 1,251 |
+
+Tvine does this with input validation, sessions, rate limits and MCP on every request. Full results, eight-process
+runs and Shield under floods: [benchmark.md](docs/benchmark.md) · [interactive page](https://htmlpreview.github.io/?https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.html).
+
 ## Why Tvine
 
 - **People and AI agents use the same app.** Every action you write is also an MCP tool. Every page has a Markdown and a JSON view for agents on the same URL.
