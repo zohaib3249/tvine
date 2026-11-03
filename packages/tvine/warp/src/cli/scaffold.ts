@@ -65,13 +65,26 @@ export function startProject(o: ProjectOpts): { dir: string; files: string[] } {
     }),
     'config/settings/base.ts': `// Shared settings. dev.ts and prod.ts build on it; pick one with
 // TVINE_SETTINGS=config/settings/prod or tvine --settings (default: prod when NODE_ENV=production, else dev).
-// Environment: DATABASE_URL, TVINE_SECRET, TVINE_ALLOWED_HOSTS, TVINE_DEBUG (.env in development).
-// More .env files (in order, later wins): import { loadEnv } from 'tvine'; loadEnv(['.env.shared'])
-// Your own settings: any other key, e.g. shop: { currency: 'EUR' }, read as ctx.settings.shop or settings().shop
-import type { SettingsInput } from 'tvine'
+//
+// Environment variables. In development .env, .env.local and .env.<mode> load by themselves; in production set real
+// environment variables (a real variable always wins over any file). The framework reads DATABASE_URL, TVINE_SECRET,
+// TVINE_ALLOWED_HOSTS and TVINE_DEBUG by itself. Read your own with env.get / getInt / getBool / getList / getJson:
+// a missing variable with no default stops the boot and names it.
+import { env, loadEnv, type SettingsInput } from 'tvine'
+
+// More .env files, loaded in this order: when two define the same key, the later file wins. Missing files are skipped.
+loadEnv(['.env.shared'])
 
 export const base = {
-  site: { name: '${title}', description: 'A Tvine project.' },
+  site: { name: env.get('SITE_NAME', '${title}'), description: env.get('SITE_DESCRIPTION', 'A Tvine project.') },
+  // Your own settings: any key you add here (or in dev.ts / local.ts) is kept. Read it as ctx.settings.app in an
+  // action, or import { settings } from 'tvine' and use settings().app anywhere after boot.
+  app: {
+    supportEmail: env.get('SUPPORT_EMAIL', 'support@example.com'),
+    pageSize: env.getInt('PAGE_SIZE', 20),
+    signupOpen: env.getBool('SIGNUP_OPEN', true),
+    features: env.getList('FEATURES', []),   // FEATURES=search,wishlist
+  },
   installedApps: ${JSON.stringify(installed).replace(/,/g, ', ').replace(/"/g, "'")},
 ${admin ? "  mcp: { exclude: ['admin.*'] },   // the admin UI's ~30 actions are for humans; keeps your apps' actions as MCP tools\n" : ''}  // HTTP middleware, outermost first. Comment a line out to turn it off; add yours as 'config.middleware.<file>'.
   middleware: [
@@ -170,6 +183,12 @@ export const beatSchedule = {
 TVINE_SECRET=change-me-to-64-hex-chars-openssl-rand-hex-32
 DATABASE_URL=${dbUrl}
 TVINE_ALLOWED_HOSTS=example.com,www.example.com
+# Your own settings (config/settings/base.ts reads them with env.get / getInt / getBool / getList)
+# SITE_NAME=My site
+# SUPPORT_EMAIL=help@example.com
+# PAGE_SIZE=20
+# SIGNUP_OPEN=true
+# FEATURES=search,wishlist
 # TVINE_DEV_ALLOWED_HOSTS=*.devtunnels.ms        # dev only: port forwarding / tunnel hosts, on top of settings
 # TVINE_DEBUG=1
 `,

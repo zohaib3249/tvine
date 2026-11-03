@@ -274,7 +274,9 @@ export function customKeyWarnings(s: object): string[] {
   const out: string[] = []
   for (const k of Object.keys(s)) {
     if (KNOWN.includes(k)) continue
-    const near = KNOWN.find((n) => editDistance(k.toLowerCase(), n.toLowerCase()) <= 2)
+    // the allowance grows with the name: short keys ('app', 'shop') are always 2 letters from something
+    const max = k.length <= 4 ? 0 : k.length <= 8 ? 1 : 2
+    const near = KNOWN.find((n) => editDistance(k.toLowerCase(), n.toLowerCase()) <= max)
     if (near) out.push(`settings: unknown key '${k}' — did you mean '${near}'? (kept as a custom setting)`)
   }
   return out
