@@ -149,7 +149,7 @@ framework key (any case) warns at boot and in `tvine check` ("did you mean 'allo
 | `db.pool.max` / `acquireMs` / `idleMs` | `number` | `10` / `5000` / `30000` | Pool. |
 | `db.atomicRequests` | `boolean` | `true` | Each non-`readOnly` action is one transaction (opt out per action: `rules.atomic: false`). |
 | `db.slowQueryMs` | `number` | `500` | Slower statements logged on `tvine.db`; `0` = off. |
-| `data.defaultPageSize` / `maxPageSize` | `number` | `25` / `100` | Accepted; not read in this release (views use their own `pageSize` / `maxPageSize`). |
+| `data.defaultPageSize` / `maxPageSize` | `number` | `25` / `100` | QuerySet `page()` default/cap and GenericView when `pageSize` / `maxPageSize` are unset. |
 
 ### Sessions, channels, Redis
 
@@ -206,7 +206,7 @@ A `'redis'` backend whose alias is not configured fails at boot, naming the key.
 | `cors.routes` | `({ path } & Partial<policy>)[]` | `[]` | Per-path overrides. |
 | `compression.enabled` / `threshold` / `brotli` / `gzipLevel` / `brotliQuality` | | `true` / `1024` / `true` / `6` / `4` | |
 | `audit.enabled` / `actions` / `retentionDays` / `redact` | | `false` / `'writes'` / `90` / `[]` | Needs `'tvine.audit'` installed. |
-| `metrics.enabled` / `path` / `token` / `allowIps` | | `false` / `'/tvine/metrics'` / unset / `[]` | Neither token nor IPs = loopback only. |
+| `metrics.enabled` / `path` / `token` / `allowIps` | | `false` / `'/tvine/metrics'` / unset / `[]` | `allowIps`: addresses/CIDRs via `blockList`/`ipIn` (same as admin). Neither token nor IPs = loopback only. |
 | `shield.*` | object | `mode: 'log'`, `prefix: '/tvine/shield'`, `clearance.ttl: '30m'`, … | Bot protection; needs `'tvine.shield'` and the `Shield` middleware. Full list in the Shield docs. |
 
 ### Admin, logging, auth

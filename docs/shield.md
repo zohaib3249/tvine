@@ -48,6 +48,8 @@ The built-in rules (editable in /shield → Rules; **Reset to defaults** restore
   checks only judge what claims to be a browser (or an unrecognised user agent): bots cannot run the in-page check,
   so they are decided by their category. Change a category in /shield → Bots & AI (allow / challenge / block); the
   AI ones start from `shield.aiDefaults` (`agents`, `crawlers`, `search`, all `'allow'`).
+- **BotGuard vs Shield:** middleware `BotGuard` and Shield's `scanner` category both refuse known scanner user agents
+  (sqlmap, nikto, …). Pick one. Enabling both is redundant, not complementary — the catalogs are not shared.
 - Agent paths (`/mcp`, `/tvine/*`, `/.well-known/*`, `/llms.txt`) never get an HTML page: a JSON 403 / 429.
 - The `/shield` panel, the admin and sign-in are never challenged. Signed-in staff are never rate-limited there.
 - Static files and Next.js internals (`/_next/*`) skip Shield entirely.
@@ -64,7 +66,7 @@ A challenge is shown **in place, on the visitor's own URL** (no redirect). It pi
 
 Every level also needs the background puzzle, and every answer is single-use. Passing sets the cookie
 `__Host-tvine_shield` (dev: `tvine_shield`), tied to the visitor's IP range and browser, valid for
-`shield.clearance.ttl` (30 minutes). Choose which levels may be used in /shield → Settings.
+`shield.clearance.ttl` (30 minutes). The clearance payload's `f` (fingerprint hash) is stored for audit only — mismatch checks use IP net + UA, not `f`. Choose which levels may be used in /shield → Settings.
 
 ## The panel
 

@@ -16,10 +16,10 @@ export type RateItem = { keys: RateKeys; rules?: ActionRules['rate'] }
 // THE per-request contract (both stores): dispatch makes ONE checkAll per command (core/dispatch.ts step 3), with
 //   [{ keys: { ip, sid? } }]                                  the ip bucket + the session's default bucket (3a)
 //   + { keys: { sid, action }, rules }                        an action's own rate (3b), when it has one
-//   + { keys: { ip } }                                        a cookie-less api call's first contact (transport/api.ts)
 // The buckets are the union of bucketsFor() over the items (a bucket listed twice is charged twice); all-or-nothing:
 // any bucket short → nothing is charged, retryAfterMs = the longest wait. check(k, r) === checkAll([{ keys: k, rules: r }]).
 // A session that is not stored (ephemeral / deferred: an anonymous call) has no sid bucket: dispatch keys it by ip.
+// Form first-submit pre-rates the ip then marks rateChecked so 3a is skipped (one charge total).
 export interface Limiter {
   check(keys: RateKeys, rules?: ActionRules['rate']): RateResult | Promise<RateResult>
   checkAll?(items: RateItem[]): RateResult | Promise<RateResult>
@@ -123,19 +123,22 @@ export function bucketsFor(keys: RateKeys, rules: ActionRules['rate'] | undefine
 // bucket; unmap it too if a deployment sits behind NAT64.
 export function ipKey(ip: string): string {
   if (!isIPv6(ip)) return ip
-  const g = groups(ip.toLowerCase())
+  const g = ipv6Groups(ip.toLowerCase())
   if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return [g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255].join('.')
   return `${g.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`
 }
 
+// /24 (v4) or /64 (v6): auth known-device + shield signals share this
+export const ipNetOf = (ip: string) => ipKey(ip).replace(/\.\d+$/, '.0/24')
+
 // the 8 16-bit groups of a valid IPv6 address (a dotted IPv4 tail is two groups)
-function groups(ip: string): number[] {
+export function ipv6Groups(ip: string): number[] {
   const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
   const v6 = dotted ? ip.slice(0, dotted.index) + [(+dotted[1]! << 8) | +dotted[2]!, (+dotted[3]! << 8) | +dotted[4]!].map((x) => x.toString(16)).join(':') : ip
   const [head, tail] = v6.split('::')
   const h = head ? head.split(':') : [], t = tail ? tail.split(':') : []
   const all = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
-  return all.map((x) => parseInt(x, 16))
+  return all.map((x) => parseInt(x || '0', 16))
 }
 
 // Boot-time validation (manifest rules and settings defaults): a 0 limit or window would deny forever / divide by 0.

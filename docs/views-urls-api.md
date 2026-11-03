@@ -92,7 +92,7 @@ export class ProductDetail extends DetailView<Product> { // → catalog.get
 | `filters` | the model's enum and indexed fields (hidden / writeOnly left out) | field lookups allowed as params: `'category'`, `'price__lte'`, `'name__contains'` |
 | `searchFields` | `[]` | fields searched by `q` |
 | `ordering` | `[]` | allowed `sort` values (`-price` = descending) |
-| `pageSize` / `maxPageSize` | 25 / 100 | page size |
+| `pageSize` / `maxPageSize` | `settings.data.*` when unset | page size (subclass values win) |
 | `pagination` | `'cursor'` | `'page'` switches to page numbers (`{ items, total, page, numPages }`) |
 | `lookupField` / `lookupParam` | `'id'` | DRF `lookup_field` / `lookup_url_kwarg` |
 | `serializer` | all non-hidden fields | `defineSerializer({ input?, output })` |

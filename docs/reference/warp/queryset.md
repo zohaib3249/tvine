@@ -46,7 +46,7 @@ Once a slice is taken, `filter`, `exclude`, `order`, `update`, `delete`, `aggreg
 | `last()` | `T \| undefined` | Last row (order reversed, pk tie-break included). |
 | `count()` | `number` | `COUNT(*)` of the filter (respects a slice). |
 | `exists()` | `boolean` | Whether any row matches. |
-| `page({ cursor?, size? }, count = true)` | `Paginated<T>` | One cursor page: `{ items, total?, pageSize, nextCursor? }`. `size` default 25, clamped to 1..100. Pass `nextCursor` back as `cursor`. Not for `values()` or sliced querysets. |
+| `page({ cursor?, size? }, count = true)` | `Paginated<T>` | One cursor page: `{ items, total?, pageSize, nextCursor? }`. `size` defaults to `settings.data.defaultPageSize`, clamped to 1..`settings.data.maxPageSize`. Pass `nextCursor` back as `cursor`. Not for `values()` or sliced querysets. |
 | `aggregate({ name: Aggregate })` | `{ [name]: value }` | One row of aggregates over the filter. |
 | `inBulk(ids, { field? })` | `Record<string, T>` | Rows keyed by id (or by `field`), IN batched by 1000. |
 | `update(patch)` | `number` | `UPDATE` matching rows; returns rows changed. Values validated per field; also takes `inc(n)`, `dec(n)` and expressions. Does NOT touch `autoNow` fields. |

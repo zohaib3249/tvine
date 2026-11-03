@@ -17,13 +17,14 @@ import { devReload } from './devReload.js'
 // auto-registration of plain HTML inside is skipped (jsx-runtime.md §Performance). W4: WebMCP tools are registered
 // by default, in production too (`inTab="off"` is the app's opt-out); `presence={false}` hides outline/cursor/label,
 // never the Stop pill. W7: the tab socket (remote control after one Allow) is on by default too. W8: the root lives in the root layout, so the registry, tab socket and nav watcher survive client navigations.
-export function WeftRoot({ hooks, auto, children, inTab = 'on', presence }: { hooks?: WidgetHooks; auto?: boolean; children?: ReactNode; inTab?: 'on' | 'off'; presence?: false | PresenceOptions }) {
+export function WeftRoot({ hooks, auto, children, inTab = 'on', presence, header }: { hooks?: WidgetHooks; auto?: boolean; children?: ReactNode; inTab?: 'on' | 'off'; presence?: false | PresenceOptions; header?: string }) {
   const holder = useRef<{ hooks?: WidgetHooks }>({})
   useLayoutEffect(() => { holder.current.hooks = hooks })
   useLayoutEffect(() => getRegistry().addRoot(holder.current), [])
   useEffect(() => { const o = getOverlay(); o.enabled = presence !== false; o.options = presence || {} }, [presence])
   useEffect(() => watchNav(), [])
-  useEffect(() => (inTab === 'off' ? undefined : registerWebMcp()), [inTab])
+  // header: settings.header (scaffold sets data-tvine-header + TVINE_HEADER; prop wins)
+  useEffect(() => (inTab === 'off' ? undefined : registerWebMcp({ header })), [inTab, header])
   // W7: the tab socket — a remote agent may control this tab after the human clicks Allow (production too)
   useEffect(() => (inTab === 'off' ? undefined : connectTab()), [inTab])
   // W10: dev tools (Alt+Shift+W gallery + the inspector's Widgets feed). The NODE_ENV test is inlined by every

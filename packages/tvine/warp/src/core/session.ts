@@ -3,6 +3,7 @@ import type { ChannelLayer, Event, Rev, Session, Settings, Sid, Snapshot } from 
 import { MemoryChannelLayer } from './channels.js'
 import { ev } from './events.js'
 import { dataVersion } from '../data/engine.js'
+import { setCookieHeader } from '../security/cookie.js'
 
 export const SNAP_CAP = 5000, SNAP_PER_SID = 8
 // A session nobody came back for yet (an API client that drops cookies mints one per mutation): these sit in an LRU of
@@ -26,8 +27,7 @@ export type SessionKey = { sid?: Sid; cookie?: string }
 export const cookieOpts = (s: Settings) =>
   ({ httpOnly: true as const, sameSite: s.session.sameSite, secure: s.session.secure, path: '/', maxAge: Math.floor(s.session.ttlMs / 1000) })
 export function cookieHeader(s: Settings, value: string): string {
-  const o = cookieOpts(s)
-  return `${s.session.cookieName}=${value}; Path=/; Max-Age=${o.maxAge}; HttpOnly; SameSite=${o.sameSite[0]!.toUpperCase()}${o.sameSite.slice(1)}${o.secure ? '; Secure' : ''}`
+  return setCookieHeader(s.session.cookieName, value, cookieOpts(s))
 }
 
 export class SessionStore {

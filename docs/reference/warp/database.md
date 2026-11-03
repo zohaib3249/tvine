@@ -63,7 +63,7 @@ db: {
 | `atomicRequests` | `boolean` | `true` | Every action that is not `readOnly` (and not `rules.atomic: false`) runs in one lazy transaction. |
 | `slowQueryMs` | `number` | `500` | A statement slower than this logs a `warn` on logger `tvine.db` with its SQL (never its params). `0` turns it off. |
 
-Related settings: `settings.data.defaultPageSize` / `maxPageSize` (page sizes for generic views; the QuerySet's own `page()` uses 25 / 100), `settings.encryption` (keys for encrypted fields), `settings.auth.userModel`. See [settings.md](settings.md).
+Related settings: `settings.data.defaultPageSize` / `maxPageSize` (QuerySet `page()` and GenericView defaults), `settings.encryption` (keys for encrypted fields), `settings.auth.userModel`. See [settings.md](settings.md).
 
 ## Environment
 

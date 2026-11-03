@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ChannelLayer, Event, Session, Settings } from '../core/types.js'
 import type { SessionStore } from '../core/session.js'
-import { clientIp, isLocalRequest } from '../core/request.js'
+import { clientIp, isLocalRequest, sameOrigin } from '../core/request.js'
 import { ev } from '../core/events.js'
 import { RING } from '../core/channels.js'
 import { render } from '../serialize/envelope.js'
+import { cookieValue } from '../security/cookie.js'
 import { ipKey } from '../security/ratelimit.js'
 import { metrics } from '../core/metrics.js'
 import type { Frame, TabHub } from './tab.js'
@@ -34,14 +35,6 @@ const ADMIN_RECHECK_MS = 10_000
 // proxy makes every client look like 127.0.0.1), and a loopback Host. `listen(port)` binds every interface.
 // The same rule as metrics / health details: core/request.ts isLocalRequest (any x-forwarded-* also counts as proxied).
 export const localOnly = (req: IncomingMessage): boolean => isLocalRequest(req, { trustProxy: 0 })
-
-function cookieValue(header: string | undefined, name: string): string | undefined {
-  for (const part of (header ?? '').split(';')) {
-    const i = part.indexOf('=')
-    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim()
-  }
-  return undefined
-}
 
 export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { sessions, channels, settings, isDev } = deps
@@ -76,6 +69,10 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     // A tab = a browser page's stream: cookie-authenticated only (an agent's sid stream is never a tab).
     const asTab = !inspector && !!deps.tabs?.on && url.searchParams.has('tab') && cookieSession
     if (!inspector && !session) return json(401, ev.err('expired_sid', 'no live session'))
+    // Origin gate (same intent as tab): sid streams refuse a foreign Origin (missing OK for non-browser agents);
+    // cookie browser streams require same-origin when Origin is present (EventSource from the site sends it).
+    const origin = hdr('origin')
+    if (!inspector && origin !== undefined && !sameOrigin(req, settings)) return json(403, ev.err('domain', 'forbidden'))
     const wanted = url.searchParams.get('group')
     const adminGroup = wanted !== null && ADMIN_GROUPS.has(wanted) ? wanted : undefined
     // an admin group: cookie sessions only (the panel), and only for a user the gate lets in

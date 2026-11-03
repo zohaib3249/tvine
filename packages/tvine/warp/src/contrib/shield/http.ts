@@ -13,9 +13,12 @@ import {
 } from './engine.js'
 import { record } from './events.js'
 import { scoreSensor } from './sensor-score.js'
+import { cookieValue } from '../../security/cookie.js'
 import { collectSignals, ipNetOf, type SignalInput } from './signals.js'
 import { maybeReload } from './store.js'
 import { dumps, loads } from '../../security/signing.js'
+import { readBody, tooDeep } from '../../transport/body.js'
+import { agentHint, DISCOVERY_PATH, LLMS_PATH, MCP_PATH } from '../../transport/agent-copy.js'
 import type { ChallengeLevel, Decision, SensorReport, Signals } from './types.js'
 import { verifyWebBotAuth } from './webbotauth.js'
 import { claims } from './claims.js'
@@ -29,10 +32,10 @@ const files = new Map<string, Buffer>()
 const file = (n: string) => files.get(n) ?? (files.set(n, readFileSync(new URL(n, STATIC_DIR))), files.get(n)!)
 const ASSET = /\.(js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|txt|xml|webmanifest)$/i
 const NEXT_INTERNAL = /^\/(_next\/|__nextjs)/
-const AGENT_HINT = 'agents: use the MCP endpoint /mcp (no browser checks), an API token (Authorization: Bearer …), or send your agent identity (User-Agent like Claude-User, or Web Bot Auth); people: open the page in a browser'
+const AGENT_HINT = agentHint()
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const hdr = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
-const cookieOf = (req: IncomingMessage, name: string) => String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${name}=`))?.slice(name.length + 1)
+const cookieOf = (req: IncomingMessage, name: string) => cookieValue(req.headers.cookie, name)
 
 // the signed return: { p: path+query, l: the level the rule asked for } (so /start can't be talked down a level)
 const RETURN_SALT = 'tvine.shield.return'
@@ -52,18 +55,21 @@ function send(res: ServerResponse, status: number, body: string, type: string, h
 const json = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => send(res, status, JSON.stringify(body), 'application/json; charset=utf-8', headers)
 
 async function readJson(req: IncomingMessage, cap = 32_768): Promise<Record<string, unknown> | undefined> {
-  const chunks: Buffer[] = []
-  let n = 0
-  for await (const c of req) { n += (c as Buffer).length; if (n > cap) return undefined; chunks.push(c as Buffer) }
-  try { const v = JSON.parse(Buffer.concat(chunks).toString('utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : undefined } catch { return undefined }
+  const raw = await readBody(req, cap)
+  if (!raw) return undefined
+  try {
+    const v: unknown = JSON.parse(raw.toString('utf8'))
+    return v && typeof v === 'object' && !Array.isArray(v) && !tooDeep(v) ? v as Record<string, unknown> : undefined
+  } catch { return undefined }
 }
 
-// the challenge page: static/challenge.html with {{nonce}} {{prefix}} {{level}} {{return}}. ONE CSP (review C1): when the
-// Security middleware already ran (Shield listed after it) its nonce is used and its CSP is the only one sent;
-// otherwise (Shield before Security, or no Security) the page sends its own strict CSP.
-export function challengePage(prefix: string, level: ChallengeLevel, ret: string, reqNonce?: string, frameAncestors = "'none'"): { html: string; csp?: string } {
+// the challenge page: static/challenge.html with {{nonce}} {{prefix}} {{level}} {{return}} {{header}} {{mcp}} {{llms}} {{discovery}}.
+// ONE CSP (review C1): when the Security middleware already ran (Shield listed after it) its nonce is used and its CSP
+// is the only one sent; otherwise (Shield before Security, or no Security) the page sends its own strict CSP.
+export function challengePage(prefix: string, level: ChallengeLevel, ret: string, reqNonce?: string, frameAncestors = "'none'", header = 'x-tvine'): { html: string; csp?: string } {
   const nonce = reqNonce ?? randomBytes(16).toString('base64')
-  const html = file('challenge.html').toString('utf8').replace(/\{\{(nonce|prefix|level|return)\}\}/g, (_, k: string) => esc(k === 'nonce' ? nonce : k === 'prefix' ? prefix : k === 'level' ? level : ret))
+  const vals: Record<string, string> = { nonce, prefix, level, return: ret, header, mcp: MCP_PATH, llms: LLMS_PATH, discovery: DISCOVERY_PATH }
+  const html = file('challenge.html').toString('utf8').replace(/\{\{(nonce|prefix|level|return|header|mcp|llms|discovery)\}\}/g, (_, k: string) => esc(vals[k]!))
   if (reqNonce) return { html }
   const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors ${frameAncestors}`
   return { html, csp }
@@ -127,7 +133,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       const u = new URL(req.url ?? '/', 'http://x')
       const r = u.searchParams.get('r') ?? ''
       const { l } = readReturn(r)
-      const page = challengePage(prefix, l, r, nonceOf(req), frame.ancestors)
+      const page = challengePage(prefix, l, r, nonceOf(req), frame.ancestors, s.header)
       send(res, 200, page.html, 'text/html; charset=utf-8', { ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'referrer-policy': 'same-origin', 'x-robots-tag': 'noindex' })
       return
     }
@@ -186,7 +192,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
     const ttl = dur(runtimeOf(s).clearanceTtl)
     const cookie = issueClearance({ n: sig0.ipNet, u: uaHash(sig0.ua), f: fpHash(sensor), s: combined, l: p.l, e: Date.now() + ttl })
     record(s, sig0, verdict('allow', `challenge passed (${p.l})`, sig0, req), req, { passed: true, level: p.l, solveMs, sensorFlags: sensed.reasons, fpHash: fpHash(sensor) })
-    return json(res, 200, { ok: true, return: p.r ?? ret.p }, { 'set-cookie': clearanceCookie(cookie, req.tvine.https, ttl) })
+    return json(res, 200, { ok: true, return: p.r ?? ret.p }, { 'set-cookie': clearanceCookie(cookie, req.tvine.https, ttl, s.session.sameSite) })
   }
 
   return {
@@ -235,7 +241,7 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
       if (agentSurface || agentView) return json(res, 403, { error: 'challenge_required', reason: decision.reason, level: decision.level, ray, hint: AGENT_HINT }, out)
       // shown in place on the visitor's own URL (no redirect); after /verify the page reloads that URL with the clearance
       const r = signReturn(req.url && req.url.startsWith('/') ? req.url : path, decision.level ?? 'pow')
-      const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors)
+      const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors, s.header)
       return send(res, 403, page.html, 'text/html; charset=utf-8', { ...out, ...cspHeader(page), ...(frame.xfo && { 'x-frame-options': frame.xfo }), 'cache-control': 'no-store', 'x-robots-tag': 'noindex', link: AGENT_LINKS })
     },
   }

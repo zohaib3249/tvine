@@ -25,6 +25,7 @@ async function askPassword(prompt: Prompt, io: Out, s: Settings, user: Record<st
 const envName = (f: string) => `TVINE_SUPERUSER_${f.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`
 const label = (f: string) => { const s = f.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase(); return s[0]!.toUpperCase() + s.slice(1) }
 export async function createsuperuser(o: { username?: string; email?: string; noinput: boolean; settings: Settings; prompt?: Prompt; env?: NodeJS.ProcessEnv }, io: Out): Promise<number> {
+  // intentional CLI exception to the env.ts allowlist: --noinput reads TVINE_SUPERUSER_* from the process env (or o.env in tests)
   const env = o.env ?? process.env, User = getUserModel(), { usernameField: uf, requiredFields } = userMeta()
   const taken = async (v: string) => !!(await User.objects.filter({ [uf]: v }).first())
   const given = (f: string): string | undefined =>

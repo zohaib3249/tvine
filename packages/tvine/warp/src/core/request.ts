@@ -72,6 +72,19 @@ export function forwardedHost(get: (n: string) => string | null | undefined, tru
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
 export const forwardedHostOf = (req: IncomingMessage, trustProxy: number) => forwardedHost((n) => first(req.headers[n]), trustProxy)
 
+// Origin URL host equals the request Host (case-insensitive). Shared by sameOrigin and dispatch crossOrigin.
+export function originMatchesHost(origin: string, host: string | undefined): boolean {
+  if (!host) return false
+  try { return new URL(origin).host.toLowerCase() === host.toLowerCase() } catch { return false }
+}
+
+// Origin present and equal to the request Host (X-Forwarded-Host when trustProxy > 0). Tab POSTs and inspector widgets share this.
+export function sameOrigin(req: IncomingMessage, settings: Pick<Settings, 'trustProxy'>): boolean {
+  const o = first(req.headers.origin), h = forwardedHostOf(req, settings.trustProxy)
+  if (!o || !h) return false
+  return originMatchesHost(o, h)
+}
+
 // The path every path rule matches (middleware lists, guards): percent-decoded, `\` as `/`, dot segments collapsed,
 // duplicate slashes merged — what Next routes. Repeated until stable (a decoded %2F can create new segments).
 const PLAIN_PATH = /^\/[\w\-.~!$&'()*+,;=:@/]*$/   // + no `//` and no dot segment: already normal (no %, `\`, space…)
@@ -110,8 +123,9 @@ type VerifiedAgent = { directory: string; keyid: string }
 // request.agent.verified: only what tvine.middleware.Shield's Web Bot Auth check put on the raw request (never a header)
 const verifiedOf = (v: VerifiedAgent | undefined) => (v ? { verified: { directory: v.directory, keyid: v.keyid } } : {})
 
-// raw HTTP requests a rate rule already counted upstream (tvine.shield, enforce mode): with limits.rate.by = 'shield'
-// dispatch skips the general bucket for them. Never set from anything the client sends.
+// Requests (or raw HTTP msgs) whose caller already charged the general rate bucket: Form first-submit pre-check,
+// and tvine.shield in enforce mode (with limits.rate.by = 'shield'). Dispatch skips the general bucket for them.
+// Never set from anything the client sends.
 export const rateChecked = new WeakSet<object>()
 
 export async function buildRequest(src: HttpSource | McpSource, settings: Settings): Promise<Request> {

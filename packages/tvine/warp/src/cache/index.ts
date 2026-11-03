@@ -12,6 +12,9 @@ import type { ActionCtx, ActionDef, CacheSettings, Settings } from '../core/type
 import { getRedis, redisKey } from '../redis/index.js'
 import { CACHE_DEFAULTS } from '../settings.js'
 import { metrics, statTap, stats } from '../core/metrics.js'
+import { getLogger } from '../log.js'
+
+const cacheLog = getLogger('tvine.cache')
 
 type Timeout = number | null | undefined
 
@@ -348,7 +351,7 @@ export async function cachedRun(def: ActionDef, params: unknown, ctx: ActionCtx,
     return `h:${v.toLowerCase()}=${r.headers.get(v) ?? ''}`
   })
   const key = Cache.keyFor('view', def.id, params ?? null, vary)
-  const warn = (step: string, e: unknown) => console.error(JSON.stringify({ level: 'error', msg: `view cache ${step} failed; handler result used`, action: def.id, cache: c.alias, error: (e as Error).message }))
+  const warn = (step: string, e: unknown) => cacheLog.error(`view cache ${step} failed; handler result used`, { action: def.id, cache: c.alias, error: (e as Error).message })
   let hit: { hit: boolean; v?: unknown } = { hit: false }
   try { hit = await c.lookup(key) } catch (e) { warn('read', e) }
   if (hit.hit) return hit.v

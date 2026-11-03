@@ -104,9 +104,11 @@ tasks: {
   broker: 'file',          // 'file' (./tasks.db) | 'memory' (dev/tests) | 'redis' (several machines) | 'db'
   file: './tasks.db', redis: 'default',
   leaseMs: 30_000, graceMs: 30_000, resultTtlMs: 86_400_000, relayMs: 250, pollMs: 500, claimBatch: 10,
-  durable: false,          // true: fsync every commit of tasks.db
+  durable: false,          // true: write tasks_outbox in the app db, then relay into the broker
 }
 ```
+
+Three stores: the **app database**, **`tasks.file`** (file broker), and **Redis**. `tvine migrate` creates `tasks_*` (Job ORM for `broker: 'db'`; `tasks_outbox` when durable on any broker).
 
 ### Gotchas
 
@@ -114,6 +116,7 @@ tasks: {
 - Cron is UTC only.
 - `tasks.db` must be on a local disk (not NFS/SMB). Workers on other machines need `broker: 'redis'`.
 - Without `durable: true`, a crash between commit and the push loses that job.
+- `caches.*.timeout` is in **seconds** (unlike most other `*Ms` settings).
 
 ## Cache
 

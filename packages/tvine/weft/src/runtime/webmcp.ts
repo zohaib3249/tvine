@@ -80,7 +80,7 @@ export const DESCRIPTIONS = {
   read_page: 'Read the current page. view=md first: the page as compact Markdown with control ids inline ({id controls}), then ui to act. auto|L0|L1|full: JSON widgets with ids, state and controls. Read again after acting.' + UNTRUSTED_TOOL,
   expand: 'Show one node of the page in full (all fields, children, controls). Use the id from read_page. Lists page with offset/limit.' + UNTRUSTED_TOOL,
   ui: 'Operate a widget on the page the way a person would: target = widget id from read_page, control = one of its listed controls (e.g. select, input, open, submit), args as listed. Several steps run in order and stop at the first error. Send a new cmdId per change.',
-  do: 'Advanced: run a server action directly. Prefer ui on the page\'s widgets. Page-level agent vetoes do not apply here; server permissions do. Call read_page first for actions and params. Retries with the same cmdId are safe.',
+  do: 'Advanced: prefer ui on the page\'s widgets. Run a backend action listed on a page from read_page. Pass action (its id), params, and copy bind from the action ref when it has one. Send a new cmdId with every change so a retry never runs it twice.',
 } as const
 
 // The in-tab snapshot: the registry's widgets through the same shaper Warp uses (tvine/shape).
@@ -150,7 +150,16 @@ const pageUrl = () => { const l = (globalThis as any).location; return l.pathnam
 
 // A server action FOR an agent: same-origin POST with the httpOnly cookie, the agent header, and the
 // downgrade-only `agentCmd` marker (control-protocol.md): dispatch sets agent.is=true, via webmcp|channel.
-export async function agentPost(body: object, header = 'x-tvine'): Promise<string> {
+// settings.header (or scaffold data-tvine-header / WeftRoot header prop); default matches settings DEFAULTS
+export function agentHeader(): string {
+  try {
+    const h = (globalThis as { document?: Document }).document?.documentElement?.getAttribute('data-tvine-header')
+    if (h) return h
+  } catch { /* no DOM */ }
+  return 'x-tvine'
+}
+
+export async function agentPost(body: object, header = agentHeader()): Promise<string> {
   try {
     const res = await fetch(pageUrl(), {
       method: 'POST', credentials: 'same-origin',
@@ -216,7 +225,7 @@ export function pageTools(via: 'webmcp' | 'tab' | 'inspector', header?: string, 
 }
 
 export function registerWebMcp(opts: { header?: string; agent?: string } = {}): () => void {
-  const header = opts.header ?? 'x-tvine'
+  const header = opts.header ?? agentHeader()
   const tools = pageTools('webmcp', header)
 
   // The pill: "Agent connected · Stop" from the first tool call; Stop ↔ Resume. Name is never verified.
@@ -261,11 +270,16 @@ export function registerWebMcp(opts: { header?: string; agent?: string } = {}): 
       name: 'do', description: DESCRIPTIONS.do,
       inputSchema: {
         type: 'object',
-        properties: { action: { type: 'string' }, params: { type: 'object' }, cmdId: { type: 'string', description: 'optional idempotency key' } },
+        properties: {
+          action: { type: 'string' },
+          params: { type: 'object' },
+          bind: { type: 'string', description: 'signed bind from the action ref on read_page when the action has one' },
+          cmdId: { type: 'string', description: 'optional idempotency key; a retry with the same cmdId returns the same result' },
+        },
         required: ['action'],
       },
       annotations: { destructiveHint: true },
-      execute: guard(({ action, params, cmdId }: { action: string; params?: object; cmdId?: string }) => tools.do({ action, params, cmdId })),
+      execute: guard(({ action, params, bind, cmdId }: { action: string; params?: object; bind?: string; cmdId?: string }) => tools.do({ action, params, bind, cmdId })),
     },
   ])
   return () => { off(); overlay.setPill(null) }

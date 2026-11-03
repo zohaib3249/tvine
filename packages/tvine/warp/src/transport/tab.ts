@@ -13,10 +13,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { sidHash } from '../core/audit.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
-import { clientIp, forwardedHostOf } from '../core/request.js'
+import { clientIp, forwardedHostOf, sameOrigin as originMatches } from '../core/request.js'
+import { readBody, tooDeep } from './body.js'
 import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
-import { ipKey, RateLimiter, type Limiter } from '../security/ratelimit.js'
+import { cookieValue } from '../security/cookie.js'
+import { ipKey, type Limiter } from '../security/ratelimit.js'
 import { limiterFor } from '../backends/index.js'
 import { metrics } from '../core/metrics.js'
 
@@ -78,8 +80,8 @@ export class TabHub {
   // settings.limits.backend: shared across servers on 'redis' (each limiter in its own key space)
   protected askRate: TabLimiter     // request_control per agent sid / per ip
   protected codeRate: TabLimiter    // pairing tries per tab / per ip
-  private cmdRate = new RateLimiter({ limit: 10, windowMs: 3_334 })     // forwarded commands per tab: 10 burst, 3/s
-  private readRate = new RateLimiter({ limit: 30, windowMs: 1_000 })    // read_page/expand per tab: their own, generous 30/s
+  private cmdRate: TabLimiter       // forwarded commands per tab: 10 burst, 3/s
+  private readRate: TabLimiter      // read_page/expand per tab: their own, generous 30/s
   readonly helloRate: TabLimiter  // hello (mints sessions) per ip
   readonly tabRate: TabLimiter    // request/approve/result per tab (release is exempt)
   private timer: ReturnType<typeof setInterval>
@@ -89,6 +91,8 @@ export class TabHub {
   constructor(protected server: ServerCtx) {
     this.askRate = tabLimiter(server, 'ask', { limit: 5, windowMs: 60_000 })
     this.codeRate = tabLimiter(server, 'code', { limit: 5, windowMs: 60_000 })
+    this.cmdRate = tabLimiter(server, 'cmd', { limit: 10, windowMs: 3_334 })
+    this.readRate = tabLimiter(server, 'read', { limit: 30, windowMs: 1_000 })
     this.helloRate = tabLimiter(server, 'hello', { limit: 30, windowMs: 10_000 })
     this.tabRate = tabLimiter(server, 'tab', { limit: 30, windowMs: 10_000 })
     this.unwatch = server.sessions.watch((sid, kind) => { if (kind === 'expired') this.expired(sid) })
@@ -205,7 +209,7 @@ export class TabHub {
     if (!h || !tab) return fail('domain', 'not_connected', 'no tab under your control: call request_control')
     if (!tab.send) return fail('expired_sid', 'tab_closed', 'the tab is disconnected; retry shortly or call request_control again')
     // reads (read_page/expand) have their own generous bucket; ui/do spend the command bucket
-    const rl = (op === 'read' || op === 'expand' ? this.readRate : this.cmdRate).check({ sid: `tab:${tab.id}` })
+    const rl = await (op === 'read' || op === 'expand' ? this.readRate : this.cmdRate).check({ sid: `tab:${tab.id}` })
     if (!rl.ok) return { ok: false, code: 'rate_limited', message: `rate limited: retry after ${rl.retryAfterMs}ms` }
     h.used = Date.now()
     const cmdId = token(), sid = tab.sid
@@ -426,30 +430,19 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
     res.end(JSON.stringify(body))
   }
   const hdr = hdrOf
-  const cookieOf = (req: IncomingMessage) => {
-    for (const part of (req.headers.cookie ?? '').split(';')) {
-      const i = part.indexOf('=')
-      if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim()
-    }
-    return undefined
-  }
+  const cookieOf = (req: IncomingMessage) => cookieValue(req.headers.cookie, name)
   // Origin MUST be present and equal the host: a browser always sends it on a POST fetch.
-  const sameOrigin = (req: IncomingMessage) => {
-    const o = hdr(req, 'origin'), h = hostOf(req, settings)
-    if (!o || !h) return false
-    try { return new URL(o).host === h } catch { return false }
-  }
+  const sameOrigin = (req: IncomingMessage) => originMatches(req, settings)
   const ipOf = (req: IncomingMessage) => clientIp(hdr(req, 'x-forwarded-for') ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
   const tooMany = (res: ServerResponse) => { metrics.inc('tvine_ratelimit_hits_total', { scope: 'tab' }); send(res, 429, { error: 'rate limited' }) }
 
   async function body(req: IncomingMessage, cap: number): Promise<Record<string, unknown> | undefined> {
     if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return undefined
-    const chunks: Buffer[] = []
-    let n = 0
-    for await (const c of req as AsyncIterable<Buffer>) { if ((n += c.length) > cap) return undefined; chunks.push(c) }
+    const raw = await readBody(req, cap)
+    if (!raw) return undefined
     try {
-      const v: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-      return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined
+      const v: unknown = JSON.parse(raw.toString('utf8') || '{}')
+      return typeof v === 'object' && v !== null && !Array.isArray(v) && !tooDeep(v) ? v as Record<string, unknown> : undefined
     } catch { return undefined }
   }
 

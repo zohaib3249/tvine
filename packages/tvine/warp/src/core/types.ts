@@ -268,7 +268,7 @@ export interface Settings {
   debug: boolean                    // debug mode: dev CSP, inspector feed, ServerTiming. TVINE_DEBUG; on under tvine dev
   guards: { path: string; permissions: Permission[] }[]
   media: { dir: string; route: string; auditAccess?: boolean }   // auditAccess: an audit row per private-file read
-  snapshotCache: { ttlMs: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
+  snapshotCache: { ttlMs: number; maxEntries: number; backend: Backend; redis: string }   // shared snapshots of non-personal, non-live pages; 0 = off. Any committed write also clears it
   data: { defaultPageSize: number; maxPageSize: number }
   db: {
     url: string
@@ -387,4 +387,5 @@ export interface ShieldSettings {
   webBotAuth: { directories: string[] }
   // code rules (contrib/shield/code.ts): enabled false = code rules are skipped and can't be saved; timeoutMs per call (1..50)
   code: { enabled: boolean; timeoutMs: number }
+  hitsFlushMs: number   // how often in-memory rule hit counts flush to the DB
 }

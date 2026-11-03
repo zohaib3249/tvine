@@ -201,6 +201,8 @@ Every flag with its default: [cli.md](../../../cli.md#jobs) (or `tvine worker --
 
 ## Brokers
 
+Three stores: the **app database** (ORM + `tasks_*` from migrate), **`settings.tasks.file`** (file broker SQLite), and **Redis**. Job ORM tables back `broker: 'db'`; `tasks_outbox` is used when `durable: true` on any broker (a worker drains it into the broker — web processes only run the outbox relay when `broker: 'memory'`).
+
 | `settings.tasks.broker` | Store | Use |
 |---|---|---|
 | `'file'` (default) | its own SQLite WAL file, `settings.tasks.file` | one host, any number of processes (start them from the same folder: the path is relative) |

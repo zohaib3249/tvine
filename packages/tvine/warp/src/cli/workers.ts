@@ -48,15 +48,21 @@ export function sharedStateProblem(settings: Settings, n: number, settingsFile =
 }
 
 // one PING per redis alias the backends use; an error string naming it, or undefined
-export async function pingRedis(settings: Settings): Promise<string | undefined> {
-  configureRedis(settings)
+// hold: redis is already configured (tvine check / routes via createAgentServer) — do not close it
+export async function pingRedis(
+  settings: Settings,
+  opts: { cmd?: string; hold?: boolean; onOk?: (alias: string, ms: number) => void } = {},
+): Promise<string | undefined> {
+  const cmd = opts.cmd ?? 'start'
+  if (!opts.hold) configureRedis(settings)
   try {
     for (const alias of new Set(redisUsers(settings).map((u) => u.alias))) {
       const r = await redis.ping(alias)
-      if (!r.ok) return `tvine start: cannot reach Redis settings.redis.${alias} (${safeUrl(settings.redis[alias]!.url)}): ${r.error}`
+      if (!r.ok) return `tvine ${cmd}: cannot reach Redis settings.redis.${alias} (${safeUrl(settings.redis[alias]!.url)}): ${r.error}`
+      opts.onOk?.(alias, r.ms)
     }
     return undefined
-  } finally { await closeRedis() }
+  } finally { if (!opts.hold) await closeRedis() }
 }
 
 const WINDOW_MS = 60_000, MAX_RESTARTS = 5, STOP_MS = 10_000

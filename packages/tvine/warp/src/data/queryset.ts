@@ -1,6 +1,7 @@
 // QuerySet: internal chain API over a DataSource. Devs reach it only as Model.objects.
 // Spec: docs/design/conventions/orm-queryset.md
 import { DomainError } from '../core/errors.js'
+import { settings } from '../settings.js'
 import { Expression, OrderBy, PrefetchNode, QNode, toQ, type Lookups } from './expressions.js'
 import type { ForUpdate } from './sql/ast.js'
 import type { ModelDef } from './fields/index.js'
@@ -48,8 +49,17 @@ export interface Paginated<T> {
   page?: number; numPages?: number                  // page-number mode (Paginator / pagination: 'page')
 }
 
+// fallbacks when settings() is unloaded (unit tests that never boot); live defaults are settings.data.*
 const DEFAULT_PAGE = 25
 const MAX_PAGE = 100
+
+function pageCaps(): { defaultPageSize: number; maxPageSize: number } {
+  try {
+    const d = settings().data
+    if (d && typeof d.defaultPageSize === 'number' && typeof d.maxPageSize === 'number') return d
+  } catch { /* settings unloaded */ }
+  return { defaultPageSize: DEFAULT_PAGE, maxPageSize: MAX_PAGE }
+}
 
 // JSON turns Date into a string and throws on bigint, so both are tagged on the wire.
 function toWire(v: unknown): unknown {
@@ -128,8 +138,9 @@ function split(obj: Lookups, def?: ModelDef): { where: Where[]; q?: QNode } {
 }
 
 function clampSize(size: number | undefined): number {
-  if (size === undefined || !Number.isFinite(size)) return DEFAULT_PAGE
-  return Math.min(Math.max(Math.floor(size), 1), MAX_PAGE)
+  const { defaultPageSize, maxPageSize } = pageCaps()
+  if (size === undefined || !Number.isFinite(size)) return defaultPageSize
+  return Math.min(Math.max(Math.floor(size), 1), maxPageSize)
 }
 
 const parseOrder = (f: string | OrderBy): Order => {
@@ -298,8 +309,9 @@ export class QuerySet<T extends object> {
     }
     const out: T[] = []
     let cursor: string | undefined
+    const size = pageCaps().maxPageSize
     do {
-      const p = await this.page({ cursor, size: MAX_PAGE }, false)
+      const p = await this.page({ cursor, size }, false)
       out.push(...p.items)
       cursor = p.nextCursor
     } while (cursor && out.length < limit)

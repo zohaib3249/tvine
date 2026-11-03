@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
 import { isProduction } from '../env.js'
+import { getLogger } from '../log.js'
 import type { ErrCode, Sid, Snapshot } from './types.js'
 import type { SessionStore } from './session.js'
 import { DomainError, Goto } from './errors.js'
 import { siteRedirect } from './redirect.js'
 import { entityType, type WidgetFrag } from '../shape/disclose.js'
 import { htmlToMd } from '../shape/markdown.js'
+
+const log = getLogger('tvine.pages')
 
 // Thrown on extraction/render failures; dispatch/transport convert to `err` Events.
 export class RegistryError extends Error {
@@ -56,7 +59,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
     if (f.live !== undefined && f.live !== false) live = true   // changes without a write we see (time, other systems)
     if (f.k === 'page') {
       if (!isStr(f.page) || !isStr(f.title)) throw bad()
-      if (pg && dev()) console.warn(`tvine: second page fragment on ${route} ("${f.page}"); a route has exactly one <Page> — first wins`)
+      if (pg && dev()) log.warn(`second page fragment on ${route} ("${f.page}"); a route has exactly one <Page> — first wins`)
       pg ??= { page: f.page, title: f.title }
     } else if (f.k === 'node') {
       if (!isObj(f.node) || !isStr(f.node.id) || !isStr(f.node.type)) throw bad()
@@ -64,7 +67,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
       lastEntity = /^(section|list|form|input)$/.test(f.node.type) ? undefined : { id: f.node.id, name: f.node.data?.name ?? f.node.data?.title }
       if (!prev) nodes.set(f.node.id, f.node)
       else if (dev() && canon(prev) !== canon(f.node)) {
-        console.warn(`tvine: node id "${f.node.id}" repeated on ${route} with different content — first wins; give each an explicit id`)
+        log.warn(`node id "${f.node.id}" repeated on ${route} with different content — first wins; give each an explicit id`)
       }
     } else if (f.k === 'link') {
       if (!isObj(f.link) || !isStr(f.link.id) || !isStr(f.link.href)) throw bad()
@@ -77,7 +80,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
       lastEntity = undefined
       if (!isObj(w) || !isStr(w.id) || !isStr(w.kind) || (w.p !== undefined && !isStr(w.p)) || (w.e !== undefined && !isStr(w.e))) throw bad()
       const ent = entityType(w.e as string | undefined) !== undefined
-      if (w.e !== undefined && !ent && dev()) console.error(`tvine: widget "${w.id}" has e="${w.e}" — an entity id is <type>:<key> (e.g. product:12); treated as no entity`)
+      if (w.e !== undefined && !ent && dev()) log.error(`widget "${w.id}" has e="${w.e}" — an entity id is <type>:<key> (e.g. product:12); treated as no entity`)
       const key = ent ? `e:${w.e}` : `w:${w.id}`
       const prev = widgets.get(key)
       if (!prev) widgets.set(key, ent ? { ...w, at: w.p === undefined ? [] : [w.p] } as WidgetFrag : w as unknown as WidgetFrag)
@@ -85,7 +88,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
         if (isStr(w.p) && !prev.at!.includes(w.p)) prev.at!.push(w.p)
         if (isObj(w.data)) prev.data = { ...w.data, ...prev.data }
       } else if (dev() && canon(prev) !== canon(w)) {
-        console.warn(`tvine: widget id "${w.id}" repeated on ${route} with different content — first wins`)
+        log.warn(`widget id "${w.id}" repeated on ${route} with different content — first wins`)
       }
     } // unknown k: ignored (forward compatible)
   }
@@ -93,7 +96,7 @@ export function extract(html: string, route = '?'): Body & { personal: boolean; 
   // document <title> (auto-HTML already registered its controls); <Page name title> overrides both
   pg ??= { page: route === '/' || route === '?' ? 'home' : route.replace(/^\//, ''), title: htmlTitle(html) ?? (route === '/' ? 'Home' : route) }
   if (dev()) for (const w of widgets.values()) {
-    if (nodes.has(w.id)) console.error(`tvine: widget id "${w.id}" collides with a v1 node on ${route} — the widget is dropped; give one an explicit id`)
+    if (nodes.has(w.id)) log.error(`widget id "${w.id}" collides with a v1 node on ${route} — the widget is dropped; give one an explicit id`)
   }
   const out = { ...pg, personal, live, nodes: [...nodes.values()], links: [...links.values()], md: htmlToMd(html, widgets.values()) }
   return { ...out, ...(widgets.size && { widgets: [...widgets.values()] }), ...(Object.keys(folds).length && { folds }) }

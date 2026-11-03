@@ -13,6 +13,9 @@ import { onCommit } from '../data/engine.js'
 import { DEFAULTS, emailBackendDefault } from '../settings.js'
 import { smtpSend } from './smtp.js'
 import { metrics, statTap, stats } from '../core/metrics.js'
+import { getLogger } from '../log.js'
+
+const mailLog = getLogger('tvine.mail')
 
 export class BadHeaderError extends Error {
   constructor(msg: string) { super(msg); this.name = 'BadHeaderError' }
@@ -274,7 +277,7 @@ const TASKS = Symbol.for('tvine.tasks.registry')
 async function background(m: EmailMessage): Promise<MailPending> {
   const task = (globalThis as { [TASKS]?: Map<string, { delay(a: unknown): Promise<{ jobId: string }> }> })[TASKS]?.get('tasks.sendMail')
   if (task) return { pending: true, jobId: (await task.delay(m.toJSON())).jobId }
-  onCommit(() => { setImmediate(() => { m.send().catch((e: unknown) => console.error(JSON.stringify({ level: 'error', msg: 'mail: background send failed', error: (e as Error).message }))) }) })
+  onCommit(() => { setImmediate(() => { m.send().catch((e: unknown) => mailLog.error('background send failed', { error: (e as Error).message })) }) })
   return { pending: true }
 }
 

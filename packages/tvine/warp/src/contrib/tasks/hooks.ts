@@ -1,6 +1,7 @@
 // tvine.tasks app lifecycle: AppConfig.ready() — discover tasks so actions can enqueue them, start the progress
-// relay and (only when a task is durable) the outbox relay, add the /tvine/health section. Stopped with the server.
-// broker 'memory' lives in this process only, so the web server runs its jobs itself (an embedded worker).
+// relay and (when broker is memory, or a task is durable on a worker) the outbox relay, add the /tvine/health section.
+// broker 'memory' lives in this process only, so the web server runs its jobs itself (an embedded worker + outbox).
+// Other brokers: OutboxRelay runs in `tvine worker` / `--with-worker` only (not every web process).
 import type { ServerCtx } from '../../core/dispatch.js'
 import { brokerKind, closeBroker } from './broker.js'
 import { metrics } from '../../core/metrics.js'
@@ -15,10 +16,10 @@ export async function ready(server: ServerCtx): Promise<void> {
   const progress = new ProgressRelay(server, t.relayMs, relayClaim(server.settings))
   progress.start()
   const outbox = new OutboxRelay(server.log)
-  outbox.start()
   let worker: Worker | undefined
   if (t.broker === 'memory') {
     server.log('warn', "tasks: broker 'memory' keeps jobs in this process only — they run here (embedded worker) and are lost on restart; a separate `tvine worker` cannot see them. Use 'file' (default) or 'redis' beyond dev / tests.")
+    outbox.start()
     worker = new Worker({ log: server.log })
     await worker.start()
   }

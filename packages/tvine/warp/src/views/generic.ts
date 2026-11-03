@@ -13,6 +13,7 @@ import { decodeCursor, MAX_IN, type Op, type Paginated, type QuerySet, type Wher
 import { hasDefault, isAuto, pkField, type Field, type Kind } from '../data/fields.js'
 import type { Model } from '../data/model.js'
 import { refuseHumanOnly } from '../data/fields/inputs.js'
+import { settings } from '../settings.js'
 
 type AnyField = Field<any, boolean, Kind, boolean>
 
@@ -150,8 +151,8 @@ export abstract class GenericView<T extends object = any> extends View {
   lookupParam = 'id'                                // DRF lookup_url_kwarg
   serializer?: Serializer<T>
   permissions: Permission[] = []                    // runtime checks (getPermissions); static ones go in rules
-  pageSize = 25
-  maxPageSize = 100
+  pageSize?: number                                 // undefined → settings.data.defaultPageSize
+  maxPageSize?: number                              // undefined → settings.data.maxPageSize
   // 'cursor' (keyset, default: stable under inserts, no OFFSET scan) | 'page' (page numbers: ?page=N,
   // the result carries page / numPages / total)
   pagination: 'cursor' | 'page' = 'cursor'
@@ -177,13 +178,15 @@ export abstract class GenericView<T extends object = any> extends View {
   }
 
   async paginateQueryset(qs: QuerySet<T>, ctx: ViewCtx): Promise<Paginated<T>> {
-    const size = Math.min(this.pageSize, this.maxPageSize)
+    const data = (() => { try { return settings().data } catch { return { defaultPageSize: 25, maxPageSize: 100 } } })()
+    const max = this.maxPageSize ?? data.maxPageSize
+    const size = Math.min(this.pageSize ?? data.defaultPageSize, max)
     if (this.pagination === 'page') {
       const p = await new Paginator(qs, size).page(ctx.params.page ?? 1)
       return { items: p.items, total: p.count, pageSize: size, page: p.number, numPages: p.numPages }
     }
     const cursor = typeof ctx.params.cursor === 'string' ? ctx.params.cursor : undefined
-    return qs.page({ cursor, size: Math.min(this.pageSize, this.maxPageSize) })
+    return qs.page({ cursor, size })
   }
 
   async getObject(ctx: ViewCtx): Promise<T> {

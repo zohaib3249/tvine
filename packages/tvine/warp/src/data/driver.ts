@@ -22,10 +22,11 @@ export interface Driver {
 const STMT_CAP = 500
 
 // better-sqlite3 is synchronous; the engine's serial queue keeps ops (and transactions) in order.
-export function sqliteDriver(path: string): Driver & { db: Database.Database } {
+// busy_timeout ← settings.db.pool.acquireMs (sqlite has no connection pool; this is the wait-on-lock analogue).
+export function sqliteDriver(path: string, opts: Pick<PoolOpts, 'acquireMs'> = { acquireMs: 5_000 }): Driver & { db: Database.Database } {
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
-  db.pragma('busy_timeout = 5000')
+  db.pragma(`busy_timeout = ${Math.max(0, Math.floor(opts.acquireMs))}`)
   db.pragma('foreign_keys = ON')
   // sqlite lower() is ASCII-only; contains/search need full Unicode case folding
   db.function('tv_lower', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toLowerCase()))

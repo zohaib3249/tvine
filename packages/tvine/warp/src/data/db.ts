@@ -37,7 +37,7 @@ export function sqlitePath(raw: string): string {
 export function openConn(url: string, alias = 'default', pool: PoolOpts = DEFAULT_POOL, slowMs = 0): Connection {
   if (server(url, ['postgres', 'postgresql'])) return { alias, dialect: pgDialect, driver: timed(pgDriver(url.trim(), pool), alias, slowMs) }
   if (server(url, ['mysql', 'mariadb'])) return { alias, dialect: mysqlDialect, driver: timed(mysqlDriver(url.trim(), pool), alias, slowMs) }
-  const driver = timed(sqliteDriver(sqlitePath(url)), alias, slowMs)
+  const driver = timed(sqliteDriver(sqlitePath(url), { acquireMs: pool.acquireMs }), alias, slowMs)
   return { alias, dialect: sqliteDialect, driver, sqlite: driver.db }
 }
 

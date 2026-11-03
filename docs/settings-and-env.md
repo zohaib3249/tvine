@@ -116,7 +116,7 @@ the order it will use.
 | `AccessLog` | off | one log line per request (never the query string) | — |
 | `Locale` | off | `Accept-Language` → `request.locale` | `languages`, `default` |
 | `ServerTiming` | off | `Server-Timing` header, debug only | — |
-| `BotGuard` | off | known scanner user agents → 403 (agent paths never) | `block` (RegExp) |
+| `BotGuard` | off | known scanner user agents → 403 (agent paths never). Pick **either** BotGuard **or** Shield's `scanner` category — they overlap; do not enable both unless you want double coverage | `block` (RegExp) |
 
 Your own middleware:
 
@@ -355,7 +355,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `guards` | `[]` | `[{ path: '/admin/**', permissions: [...] }]`: permission checks on page paths for HTTP, MCP and forms |
 | `robots.allow` / `disallow` / `extra` / `sitemap` | `[]` / `[]` / `[]` / unset | the generated `/robots.txt` (only when the app ships none) |
 | `socket` | `true` | accepted; not read by the current release |
-| `data.defaultPageSize` / `maxPageSize` | `25` / `100` | accepted; generic views use their own `pageSize` / `maxPageSize` (25 / 100) |
+| `data.defaultPageSize` / `maxPageSize` | `25` / `100` | QuerySet `page()` defaults/caps and GenericView when `pageSize` / `maxPageSize` are unset; a view that sets them still wins |
 
 ### Requests and limits
 
@@ -410,7 +410,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `cors.routes` | `[]` | per-path overrides: `[{ path: '/api/', origins: [...] }]` |
 | `compression.enabled` / `threshold` / `brotli` / `gzipLevel` / `brotliQuality` | `true` / `1024` / `true` / `6` / `4` | response compression |
 | `audit.enabled` / `actions` / `retentionDays` / `redact` | `false` / `'writes'` / `90` / `[]` | needs `'tvine.audit'` installed ([auth-and-security.md](auth-and-security.md)) |
-| `metrics.enabled` / `path` / `token` / `allowIps` | `false` / `'/tvine/metrics'` / unset / `[]` | Prometheus text; neither token nor IPs = loopback only |
+| `metrics.enabled` / `path` / `token` / `allowIps` | `false` / `'/tvine/metrics'` / unset / `[]` | Prometheus text; `allowIps` are addresses/CIDRs (same as admin); neither token nor IPs = loopback only |
 | `shield.*` | `mode: 'log'` | bot protection (needs `'tvine.shield'` installed and `tvine.middleware.Shield` listed); every key in [shield.md](shield.md#settings-reference). Also `shield.prefix` (`'/tvine/shield'`, challenge routes), `shield.ipdb.source` / `update` (`'dbip-lite'` / `'monthly'`), `shield.sensor` (`'challenge'`, or `'all-pages'`), `shield.events.maxPerMinute` (600) / `hardCapPerMinute` (20000) |
 
 ### Auth (`tvine.auth`)

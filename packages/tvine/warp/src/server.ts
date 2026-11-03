@@ -15,23 +15,25 @@ import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
-import { buildRequest, clientIp, forwardedHostOf, isLocalRequest, normalizePath } from './core/request.js'
+import { buildRequest, clientIp, forwardedHostOf, isLocalRequest, normalizePath, rateChecked } from './core/request.js'
 import { cookieOpts } from './core/session.js'
 import { metrics, since, statTap, stats } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
 import { connections } from './data/db.js'
 import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
+import { cookieValue } from './security/cookie.js'
 import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
 import { checkBackends, checkHosts, customKeyWarnings, defineSettings, merge, rateOverlap, type SettingsInput } from './settings.js'
 import { configureLogging, getLogger, loggingConfig } from './log.js'
-import { env, isProduction, loadDotenv } from './env.js'
-import { buildMiddleware, devHosts, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
+import { defaultEnv, env, isProduction, loadDotenv } from './env.js'
+import { blockList, buildMiddleware, devHosts, ipIn, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
 import { closeRedis, configureRedis } from './redis/index.js'
 import { configureCaches } from './cache/index.js'
 import { configureMail } from './mail/index.js'
 import { configureSigning } from './security/signing.js'
+import { DISCOVERY_PATH, LLMS_PATH, MCP_PATH } from './transport/agent-copy.js'
 import { channelTransport } from './transport/channel.js'
 import { hookResponse, weakIfNoneMatch } from './transport/compress.js'
 import { corsLayer } from './transport/cors.js'
@@ -177,6 +179,9 @@ export async function loadSettings(over: AgentServerOptions['settings'] = {}): P
   configureCaches(settings)   // `cache` / `caches.<alias>` (web server, worker, CLI)
   configureMail(settings)
   configureSigning(settings)   // signing.dumps / encrypted fields / signed media urls
+  // Weft / Next read TVINE_HEADER for WebMCP + forwardTransport (scaffold data-tvine-header)
+  defaultEnv('TVINE_HEADER', settings.header)
+  defaultEnv('TVINE_COOKIE_NAME', settings.session.cookieName)
   return settings
 }
 
@@ -317,7 +322,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const cors = corsLayer(settings)
   // settings.middleware: only the listed ones run, around every request, outermost first
   const userOf = async (req: IncomingMessage) => {
-    const cookie = String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
+    const cookie = cookieValue(req.headers.cookie, settings.session.cookieName)
     const session = cookie === undefined ? undefined : await ctx.sessions.peek({ cookie })
     if (!session) return undefined
     const request = await buildRequest({ req, route: pathOf(req), isAgent: false }, settings)
@@ -343,11 +348,11 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
       res.on('close', () => sse.delete(res))
       channel(req, res, next)
     },
-    (req, res, next) => (pathOf(req) === '/mcp' ? void mcp(req, res).catch(fail(res)) : next()),
+    (req, res, next) => (pathOf(req) === MCP_PATH ? void mcp(req, res).catch(fail(res)) : next()),
     // Browsers ask for /favicon.ico when the page links no icon: answer 204 (no console 404) unless the project has one.
     ...(fe ? [((req, res, next) => pathOf(req) === '/favicon.ico' && !['public', 'app', 'src/app'].some((d) => existsSync(join(dirname(resolve(fe.nextDir)), d, 'favicon.ico')))
       ? void res.writeHead(204, { 'cache-control': 'public, max-age=3600' }).end() : next()) as Handler] : []),
-    ...(feed ? [widgetsTransport(feed)] : []),   // W10 inspector Widgets tab; dev only, like the feed
+    ...(feed ? [widgetsTransport(feed, settings)] : []),   // W10 inspector Widgets tab; dev only, like the feed
     ...(devReload ? [devReloadTransport(randomBytes(8).toString('hex'), sse)] : []),   // tvine dev only: tabs reload after a restart
     tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
@@ -373,13 +378,13 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // the paths this server itself answers (embedded mode hands everything else to the host app)
   const mediaRoot = settings.media.route.replace(/\/$/, '')
-  const ownPath = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p === '/.well-known/tvine.json' || p === '/llms.txt' ||
+  const ownPath = (p: string) => p === MCP_PATH || p.startsWith('/tvine/') || p === DISCOVERY_PATH || p === LLMS_PATH ||
     p === mediaRoot || p.startsWith(`${mediaRoot}/`) || !!(urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })()) || route(p.replace(/\/agent\.(json|txt)$/, '') || '/') !== undefined
   // metrics label: which transport answered (a fixed set, never the raw path)
-  const transportOf = (p: string) => p === '/mcp' ? 'mcp' : p === '/tvine/channel' ? 'channel'
+  const transportOf = (p: string) => p === MCP_PATH ? 'mcp' : p === '/tvine/channel' ? 'channel'
     : p.startsWith('/tvine/tab/') || p.startsWith('/tvine/agent/') ? 'tab' : p.startsWith('/tvine/api/') ? 'api'
     : urls && (() => { try { return urls.match(decodeURIComponent(p)).length > 0 } catch { return false } })() ? 'urls'
-    : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === '/llms.txt' || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
+    : p.startsWith('/tvine/') || p === mediaRoot || p.startsWith(`${mediaRoot}/`) || p === LLMS_PATH || p === '/robots.txt' || p.startsWith('/.well-known/') ? 'other' : 'page'
   // dashboard rollups: a route PATTERN or a registered action id, never the raw path (cardinality, personal data)
   const routeLabel = (p: string, transport: string): string => {
     if (transport === 'api') { const id = decodeURIComponent(p.slice('/tvine/api/'.length).split('/')[0] ?? ''); return actions.get(id) ? id : '(unknown action)' }
@@ -453,7 +458,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
             const ref = String(req.headers.referer ?? ''), host = String(req.headers.host ?? '')
             let entry = true
             try { entry = !ref || new URL(ref).host !== host } catch { /* a bad referer: an entry */ }
-            const sid = String(req.headers.cookie ?? '').split(';').map((x) => x.trim()).find((x) => x.startsWith(`${settings.session.cookieName}=`))?.slice(settings.session.cookieName.length + 1)
+            const sid = cookieValue(req.headers.cookie, settings.session.cookieName)
             statTap({ k: 'page', path: String(req.headers[URL_STAMP] ?? p), agent: false, sid, entry })
           }
         })
@@ -543,10 +548,10 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 // (app/admin/[[...path]]/page.tsx) wins: the request passes on to Next.
 async function adminMount(settings: Settings, route: (p: string) => string | undefined, devReload: boolean): Promise<Handler> {
   const base = settings.admin.path.replace(/\/$/, '') || '/admin'
-  let mod: { adminHandler(o: { path: string; title?: string; devReload?: boolean }): Handler }
+  let mod: { adminHandler(o: { path: string; title?: string; devReload?: boolean; header?: string }): Handler }
   try { mod = await import(new URL('../../admin/dist/serve.js', import.meta.url).href) }
   catch (e) { throw new Error(`tvine.admin is installed but tvine/admin cannot be loaded from ${process.cwd()}: pnpm add tvine/admin (${(e as Error).message})`, { cause: e }) }
-  const serve = mod.adminHandler({ path: base, title: settings.admin.title, devReload })
+  const serve = mod.adminHandler({ path: base, title: settings.admin.title, devReload, header: settings.header })
   return (req, res, next) => {
     const p = pathOf(req)
     if (p !== base && !p.startsWith(`${base}/`)) return next()
@@ -563,7 +568,7 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
 async function shieldMount(settings: Settings, devReload: boolean): Promise<Handler> {
   const base = settings.shield.panel.path.replace(/\/$/, '')
   let serve: Handler | undefined
-  try { serve = ((await import(new URL('../../admin/dist/serve.js', import.meta.url).href)) as { shieldHandler?(o: { path: string; title?: string; devReload?: boolean }): Handler }).shieldHandler?.({ path: base, title: 'Shield', devReload }) } catch { serve = undefined }
+  try { serve = ((await import(new URL('../../admin/dist/serve.js', import.meta.url).href)) as { shieldHandler?(o: { path: string; title?: string; devReload?: boolean; header?: string }): Handler }).shieldHandler?.({ path: base, title: 'Shield', devReload, header: settings.header }) } catch { serve = undefined }
   return (req, res, next) => {
     const p = pathOf(req)
     if (p !== base && !p.startsWith(`${base}/`)) return next()
@@ -573,8 +578,9 @@ async function shieldMount(settings: Settings, devReload: boolean): Promise<Hand
   }
 }
 
-// BACKLOG #9: GET settings.metrics.path → Prometheus text. Allowed: the bearer token, or the client ip in allowIps;
-// neither configured = loopback only. Anything else gets a plain 404 (the endpoint's existence is not disclosed).
+// BACKLOG #9: GET settings.metrics.path → Prometheus text. Allowed: the bearer token, or the client ip in allowIps
+// (CIDR via blockList/ipIn, same as admin); neither configured = loopback only. Else plain 404 (endpoint not disclosed).
+const metricsIpLists = new WeakMap<string[], ReturnType<typeof blockList>>()
 function metricsHandler(settings: Settings): Handler {
   const { path, token, allowIps } = settings.metrics
   // production: a same-host proxy (or a proxy that strips X-Forwarded-For) makes every request look local, so
@@ -583,7 +589,11 @@ function metricsHandler(settings: Settings): Handler {
   const allowed = (req: IncomingMessage) => {
     const given = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1]
     if (token && given) { const a = Buffer.from(given), b = Buffer.from(token); if (a.length === b.length && timingSafeEqual(a, b)) return true }
-    if (allowIps.length) return allowIps.includes(clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
+    if (allowIps.length) {
+      let list = metricsIpLists.get(allowIps)
+      if (!list) { list = blockList(allowIps, 'metrics.allowIps'); metricsIpLists.set(allowIps, list) }
+      return ipIn(list, clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy))
+    }
     return !token && isLocalRequest(req, settings)
   }
   return (req, res, next) => {
@@ -662,11 +672,12 @@ export function formDispatcher(server: ServerCtx, route: (path: string) => strin
     const request = await buildRequest({ url: path, route: pattern, headers: h, ip, via: 'human' }, settings)
     if (!(await guardCheck(settings)(decodeURIComponent(path), request, await sessions.peek({ cookie })))) return { ok: false, message: FORBIDDEN_ROUTE }
     if (!(await sessions.peek({ cookie }))) {
-      // a refused request creates no session and sets no cookie: dispatch's own origin + ip checks, run first.
-      // ponytail: dispatch charges the ip bucket again, so a session's first submit costs 2 tokens
+      // a refused request creates no session and sets no cookie: origin + ip checks run first.
+      // rateChecked: one ip charge here; dispatch skips the general bucket so first submit is not double-billed.
       if (crossOrigin(request, settings)) return formResult([ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })])
       const rl = await server.limiter.check({ ip: request.ip })
       if (!rl.ok) return formResult([rateLimited(rl.retryAfterMs)])
+      rateChecked.add(request)
       cookie = await sessions.cookieFor((await sessions.create()).sid)
       // the same attributes as transport/http.ts sets on its session cookie
       jar.set(name, cookie, cookieOpts(settings))

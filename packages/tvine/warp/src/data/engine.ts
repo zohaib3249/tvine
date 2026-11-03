@@ -83,7 +83,8 @@ function exec<R>(fn: (c: Connection) => R | Promise<R>): Promise<R> {
 }
 
 // A hook that throws AFTER the commit must not turn a committed atomic() into an error: it is reported here.
-let onCommitError: (e: unknown) => void = e => console.error('onCommit hook failed:', e)
+const commitLog = getLogger('tvine.db')
+let onCommitError: (e: unknown) => void = e => commitLog.error('onCommit hook failed', { error: String(e) })
 export function setOnCommitErrorHandler(fn: (e: unknown) => void): void { onCommitError = fn }
 
 export function atomic<R>(body: () => Promise<R>, opts: { signal?: AbortSignal; lazy?: boolean } = {}): Promise<R> {

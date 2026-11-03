@@ -66,7 +66,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   debug: false,
   guards: [],
   media: { dir: './media', route: '/media' },
-  snapshotCache: { ttlMs: 60_000, backend: 'memory', redis: 'default' },
+  snapshotCache: { ttlMs: 60_000, maxEntries: 1000, backend: 'memory', redis: 'default' },
   data: { defaultPageSize: 25, maxPageSize: 100 },
   // Relative to process.cwd() , not to the settings file. Real value is resolved in defineSettings.
   db: { url: DEFAULT_DB_URL, pool: { max: 10, acquireMs: 5_000, idleMs: 30_000 }, atomicRequests: true, slowQueryMs: 500 },
@@ -81,6 +81,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true, logAll: false, hardCapPerMinute: 20_000 },
     stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' }, webBotAuth: { directories: [] },
     code: { enabled: true, timeoutMs: 5 },
+    hitsFlushMs: 30_000,
   },
   security: {
     headers: {
@@ -161,7 +162,7 @@ const root = z.object({
   debug: z.boolean(),
   guards: z.array(z.object({ path: z.string(), permissions: z.array(fn<Permission>()) })),
   media: z.object({ dir: z.string(), route: z.string(), auditAccess: z.boolean().optional() }),
-  snapshotCache: z.object({ ttlMs: posInt, backend, redis: alias }),
+  snapshotCache: z.object({ ttlMs: posInt, maxEntries: posInt, backend, redis: alias }),
   data: z.object({ defaultPageSize: posInt, maxPageSize: posInt }),
   db: z.object({
     url: z.string().refine((u) => u.trim() !== '', 'database url is empty'),
@@ -197,6 +198,7 @@ const root = z.object({
     cleanup: z.object({ enabled: z.boolean(), schedule: z.string().regex(/^\S+( \S+){4}$/, 'a 5-field cron') }).strict(),
     webBotAuth: z.object({ directories: z.array(z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d+)?$/, 'an https origin, e.g. https://chatgpt.com')) }).strict(),
     code: z.object({ enabled: z.boolean(), timeoutMs: z.number().int().min(1).max(50) }).strict(),
+    hitsFlushMs: z.number().int().min(1000).max(3_600_000),
   }).strict(),
   security: z.object({
     headers: z.object({
@@ -238,7 +240,8 @@ const root = z.object({
     defaultFrom: z.string(), serverEmail: z.string(), admins: z.array(z.string()), subjectPrefix: z.string(), filePath: z.string().min(1),
   }).strict().refine((e) => !(e.useTls && e.useSsl), 'email.useTls and email.useSsl are mutually exclusive'),
   metrics: z.object({ enabled: z.boolean(), path: z.string().regex(/^\/[\w\-/.]*$/, 'a path starting with /'),
-    token: z.string().min(16, 'metrics.token: at least 16 chars').optional(), allowIps: z.array(z.string().min(1)) }).strict(),
+    token: z.string().min(16, 'metrics.token: at least 16 chars').optional(),
+    allowIps: z.array(z.string().refine(validCidr, 'an address or CIDR (e.g. 10.0.0.0/8)')) }).strict(),
   robots: z.object({ allow: z.array(z.string().regex(/^\/\S*$/, 'a path')), disallow: z.array(z.string().regex(/^\/\S*$/, 'a path')), extra: z.array(z.string().regex(/^[^\r\n]*$/, 'one line per entry')),
     sitemap: z.string().regex(/^https?:\/\/\S+$/, 'an absolute http(s) url').optional() }).strict(),
   installedApps: z.array(z.string().regex(/^(tvine\.)?[a-z][a-z0-9_]*$/, "a project app 'blog' (apps/blog/) or a built-in app 'tvine.<name>'")),
@@ -354,6 +357,16 @@ export function defineSettings(input: SettingsInput): Settings {
   const adminIps = (merged.admin as { allowIps?: string[]; path?: string } | undefined)
   if (adminIps?.allowIps?.length && Array.isArray(merged.middleware)) merged.middleware = [...merged.middleware as unknown[], ['tvine.middleware.IpFilter', { paths: [adminIps.path ?? '/admin'], allow: adminIps.allowIps }]]
   const settings = schema.parse(merged)
+  // cors.allowHeaders must carry settings.header (agents send it): replace the default `x-tvine` slot, else append
+  {
+    const h = settings.header, list = settings.cors.allowHeaders
+    const has = list.some((x) => x.toLowerCase() === h.toLowerCase())
+    if (!has) {
+      const i = list.findIndex((x) => x.toLowerCase() === 'x-tvine')
+      if (i >= 0) list[i] = h
+      else list.push(h)
+    }
+  }
   // secreview M2: a Secure cookie on Path=/ with no Domain is a __Host- cookie (a subdomain or http page cannot plant it)
   if (settings.session.secure && !settings.session.cookieName.startsWith('__')) settings.session.cookieName = `__Host-${settings.session.cookieName}`
   // A missing (or bad env) secret fails at boot (loadSettings) or at its first use, never at import: a page

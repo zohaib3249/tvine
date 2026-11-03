@@ -1,5 +1,5 @@
 // tvine.shield app lifecycle: ready() checks the panel access condition, loads the rules / lists / config snapshot
-// (seeding the default rule set into an empty table), the ipdb + ranges, and flushes rule hit counts every 30 s.
+// (seeding the default rule set into an empty table), the ipdb + ranges, and flushes rule hit counts (settings.shield.hitsFlushMs).
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ServerCtx } from '../../core/dispatch.js'
@@ -23,7 +23,7 @@ export async function ready(server: ServerCtx): Promise<void> {
   let ranges: RangesFile = rangesSeed()
   try { ranges = JSON.parse(await readFile(join(dir, 'ranges.json'), 'utf8')) as RangesFile } catch { /* the bundled seed */ }
   setRanges(ranges)
-  const t = setInterval(() => void flushHits().catch(() => undefined), 30_000)
+  const t = setInterval(() => void flushHits().catch(() => undefined), s.shield.hitsFlushMs)
   t.unref()
   server.onClose(async () => { clearInterval(t); await flushHits().catch(() => undefined); await flushEvents() })
 }

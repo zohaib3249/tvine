@@ -4,7 +4,9 @@
 // request, and never fails it.
 import type { Request, Settings } from '../../core/types.js'
 import { sendMail } from '../../mail/index.js'
+import { ipNetOf } from '../../security/ratelimit.js'
 import { mac } from './crypto.js'
+import { authLog } from './log.js'
 import { KnownDevice } from './models.js'
 import { uaSummary } from './sessions.js'
 
@@ -24,17 +26,11 @@ export function securityNotice(s: Settings, kind: NoticeKind, to: { username?: s
   const [subject, body] = TEXT[kind]
   const where = request ? `\n\nWhen: ${new Date().toUTCString()}\nDevice: ${uaSummary(request.headers.get('user-agent') ?? '')}\nIP address: ${request.ip}` : ''
   const message = `Hi ${to.username ?? to.email},\n\n${body}${extra ? `\n${extra}` : ''}${where}\n\nIf this was not you, change your password now and review your signed-in sessions.\n`
-  void sendMail({ subject, to: to.email, message }, { background: true }).catch(() => console.error('tvine.auth: a security notice failed to send'))
+  void sendMail({ subject, to: to.email, message }, { background: true }).catch(() => authLog.error('a security notice failed to send'))
 }
 
 // ip /24 (IPv4) or /64 (IPv6): a phone moving between cells of one network stays the same device
-export function netOf(ip: string): string {
-  if (!ip.includes(':')) return ip.split('.').slice(0, 3).join('.')
-  const [head, tail] = ip.split('::') as [string, string?]
-  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : []
-  const full = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
-  return full.slice(0, 4).map((x) => parseInt(x || '0', 16).toString(16)).join(':')
-}
+export const netOf = ipNetOf
 
 // at login: a device (browser + OS + network) this user never signed in from → newLogin notice. Stored only as an HMAC.
 // The very first sign-in of an account is not "new" (nothing to compare with).

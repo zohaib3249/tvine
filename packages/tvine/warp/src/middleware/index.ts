@@ -13,6 +13,8 @@ import { securityEvent } from '../core/audit.js'
 import type { CompressionSettings, Settings, TvineUser } from '../core/types.js'
 import type { Logger } from '../log.js'
 import { limiterFor } from '../backends/index.js'
+import { ipKey } from '../security/ratelimit.js'
+import { DISCOVERY_PATH, LLMS_PATH, MCP_PATH } from '../transport/agent-copy.js'
 import { addVary } from '../transport/compress.js'
 import type { securityHeaders } from '../security/headers.js'
 import type { corsLayer } from '../transport/cors.js'
@@ -66,9 +68,9 @@ type Opts = Record<string, unknown>
 type Factory = (o: Opts, b: BuildCtx) => HttpMiddleware
 
 const PREFIX = 'tvine.middleware.'
-// how an agent finds its way in from any page: what the site is (/llms.txt) and the MCP endpoint
-export const AGENT_LINKS = '</llms.txt>; rel="describedby"; type="text/markdown", </mcp>; rel="service"; title="MCP"'
-export const AGENT_SURFACE = (p: string) => p === '/mcp' || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === '/llms.txt' || /\/agent\.(json|txt)$/.test(p)
+// how an agent finds its way in from any page: what the site is (llms) and the MCP endpoint (agent-copy paths)
+export const AGENT_LINKS = `<${LLMS_PATH}>; rel="describedby"; type="text/markdown", <${MCP_PATH}>; rel="service"; title="MCP"`
+export const AGENT_SURFACE = (p: string) => p === MCP_PATH || p.startsWith('/tvine/') || p.startsWith('/.well-known/') || p === LLMS_PATH || p === DISCOVERY_PATH || /\/agent\.(json|txt)$/.test(p)
 const prefixed = (paths: unknown, p: string) => Array.isArray(paths) && paths.some((x) => typeof x === 'string' && (p === x || p.startsWith(x.endsWith('/') ? x : `${x}/`)))
 const send = (res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}) => {
   if (res.headersSent) { res.destroy(); return }
@@ -220,7 +222,7 @@ export const CATALOG: Record<string, Factory> = {
       name: 'RateLimit',
       async processRequest(req, res) {
         if (prefixed(o.exempt, req.tvine.path)) return
-        const r = await limiter.check({ sid: `mw-ip:${req.tvine.ip}` })
+        const r = await limiter.check({ sid: `mw-ip:${ipKey(req.tvine.ip)}` })
         if (r.ok) return
         securityEvent('rate_limited', { ip: req.tvine.ip, path: req.tvine.path, requestId: req.tvine.id, layer: 'http' }, { settings: b.settings, audit: false })
         send(res, 429, 'Too Many Requests', { 'retry-after': String(Math.ceil(r.retryAfterMs / 1000)) })
@@ -285,7 +287,7 @@ export const CATALOG: Record<string, Factory> = {
   // never cut. Streams (SSE, tab, MCP) and the media route are exempt; `exempt` adds to them.
   Timeout: (o, b) => {
     const ms = (o.ms as number | undefined) ?? b.settings.limits.handlerMs + 5_000
-    const exempt = ['/tvine/channel', '/tvine/tab', '/mcp', b.settings.media.route, ...((o.exempt as string[] | undefined) ?? [])]
+    const exempt = ['/tvine/channel', '/tvine/tab', MCP_PATH, b.settings.media.route, ...((o.exempt as string[] | undefined) ?? [])]
     return {
       name: 'Timeout',
       processRequest(req, res) {

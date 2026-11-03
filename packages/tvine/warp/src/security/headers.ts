@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import type { Log } from '../core/dispatch.js'
 import { clientIp } from '../core/request.js'
 import type { Settings } from '../core/types.js'
-import { RateLimiter } from './ratelimit.js'
+import { limiterFor } from '../backends/index.js'
+import { readBody, tooDeep } from '../transport/body.js'
 
 export const CSP_REPORT_PATH = '/tvine/csp-report'
 const NONCE = '{{nonce}}'
@@ -219,26 +220,25 @@ export function cspReports(body: unknown): Record<string, unknown>[] {
 
 export function cspReportHandler(settings: Settings, log: Log): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   // per IP, counted per REPORT: a burst of 100, refilling 100 per 5 min (RateLimiter's ip buckets span 5 windows)
-  const limiter = new RateLimiter({ limit: 100, windowMs: 60_000 })
+  // settings.limits.backend (memory or redis)
+  const limiter = limiterFor(settings, { limit: 100, windowMs: 60_000 })
   return (req, res, next) => {
     if ((req.url ?? '/').split('?')[0] !== CSP_REPORT_PATH) return next()
     const done = (status: number, extra: Record<string, string> = {}) => void res.writeHead(status, { 'cache-control': 'no-store', 'content-length': '0', ...extra }).end()
     if (req.method !== 'POST') return done(405, { allow: 'POST' })
     if (!REPORT_TYPES.test(String(req.headers['content-type'] ?? ''))) return done(415, { connection: 'close' })
     const ip = clientIp((req.headers['x-forwarded-for'] as string | undefined) ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
-    const chunks: Buffer[] = []
-    let n = 0, over = false
-    req.on('data', (c: Buffer) => { if (over) return; if ((n += c.length) > REPORT_BYTES) { over = true; done(413, { connection: 'close' }) } else chunks.push(c) })
-    req.on('error', () => res.destroy())
-    req.on('end', () => {
-      if (over) return
+    void (async () => {
+      const raw = await readBody(req, REPORT_BYTES)
+      if (!raw) return done(413, { connection: 'close' })
       let body: unknown
-      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return done(400) }
+      try { body = JSON.parse(raw.toString('utf8')) } catch { return done(400) }
+      if (tooDeep(body)) return done(400)
       for (const r of cspReports(body)) {
-        if (!limiter.check({ ip }).ok) return done(429, { 'retry-after': '60' })
+        if (!(await limiter.check({ ip })).ok) return done(429, { 'retry-after': '60' })
         log('warn', 'csp violation', r)
       }
       done(204)
-    })
+    })().catch(() => res.destroy())
   }
 }

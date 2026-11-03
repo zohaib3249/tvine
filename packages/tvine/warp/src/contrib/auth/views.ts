@@ -25,6 +25,7 @@ import { throttleOf } from './throttle.js'
 import type { Limiter } from '../../security/ratelimit.js'
 import { limiterFor } from '../../backends/index.js'
 import type { Settings } from '../../core/types.js'
+import { authLog } from './log.js'
 
 const resetRates = new WeakMap<Settings, Limiter>()
 const resetRate = (s: Settings) => { let r = resetRates.get(s); if (!r) resetRates.set(s, (r = limiterFor(s, { limit: 3, windowMs: 3_600_000 }))); return r }   // settings.limits.backend
@@ -139,7 +140,7 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
   // settings.auth.sendPasswordReset wins; otherwise the default mail through settings.email (sendMail)
   const sender = send ?? ((e: (typeof out)[number]) => sendResetMail(e, ctx.settings.auth?.resetUrl))
   onCommit(() => {
-    setImmediate(() => { for (const e of out) void Promise.resolve().then(() => sender(e)).catch(() => console.error('tvine.auth: sending the password reset failed')) })
+    setImmediate(() => { for (const e of out) void Promise.resolve().then(() => sender(e)).catch(() => authLog.error('sending the password reset failed')) })
   })
   return null
 }, { rate: { limit: 5, windowMs: 60_000 } })

@@ -5,7 +5,7 @@ import type { ActionManifest } from './actions.js'
 import { redactSecrets } from './redact.js'
 import { audited, auditRow, securityEvent, viaOf, writeAudit } from './audit.js'
 import { confirmGate } from './confirm.js'
-import { forwardedHost, rateChecked } from './request.js'
+import { forwardedHost, originMatchesHost, rateChecked } from './request.js'
 import { aliasRequest, authenticate, markRotated, rotatedSession, wantsCycle } from './auth.js'
 import { corsAllows } from './cors-match.js'
 import { DomainError } from './errors.js'
@@ -19,6 +19,7 @@ import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { withPending } from '../data/pending.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
+import { cookieValue } from '../security/cookie.js'
 import { checkAll, ipKey, type Limiter, type RateItem } from '../security/ratelimit.js'
 import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
@@ -127,9 +128,8 @@ const renderRead = new WeakSet<Request>()
 
 // render: a page render's read (api.* inside a server component) — it spends no rate bucket (W11-FIX #6: a
 // rate-limited render is a 500 page with no Tvine root, which kills tab control). Read-only actions only.
-// firstContact: a cookie-less api call (transport/api.ts) — its ip pays one token more, as the <Form> path's ip pre-check.
 // session: the caller already resolved the command's session (cmd.sid / the cookie): dispatch does not load it again
-export type DispatchOpts = { snapshot?: boolean; render?: boolean; firstContact?: boolean; session?: Session }
+export type DispatchOpts = { snapshot?: boolean; render?: boolean; session?: Session }
 export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: DispatchOpts = {}): AsyncIterable<Event> {
   if (opts.snapshot === false) quiet.add(request)
   if (opts.render && server.actions.get(cmd.action)?.rules?.readOnly) renderRead.add(request)
@@ -241,11 +241,7 @@ export function formResult(events: Event[]): FormResult {
 const pageOf = (r: Request) => { const q = r.query.toString(); return q ? `${r.path}?${q}` : r.path }
 
 export function cookieOf(r: Request, s: Settings): string | undefined {
-  for (const part of (r.headers.get('cookie') ?? '').split(';')) {
-    const i = part.indexOf('=')
-    if (i > 0 && part.slice(0, i).trim() === s.session.cookieName) return part.slice(i + 1).trim()
-  }
-  return undefined
+  return cookieValue(r.headers.get('cookie') ?? undefined, s.session.cookieName)
 }
 
 // Next's server-action check, kept for every path into dispatch: a browser Origin must match the host.
@@ -257,10 +253,8 @@ const hostOf = (r: Request, s: Settings) => forwardedHost((n) => r.headers.get(n
 export function crossOrigin(r: Request, s: Settings): boolean {
   const origin = r.headers.get('origin')
   if (origin === null) return false
-  const host = hostOf(r, s)
-  let same: boolean
-  try { same = new URL(origin).host === host } catch { return true }
-  return !same && !corsAllows(r, s, origin)
+  // missing Origin allowed; same host via shared helper; foreign Origin only if corsAllows
+  return !originMatchesHost(origin, hostOf(r, s)) && !corsAllows(r, s, origin)
 }
 
 // One command at a time per sid: rev bumps and session.data writes never interleave. The queue depth
@@ -307,9 +301,11 @@ function redirectUrl(e: unknown): string | undefined {
 // ---- pipeline ------------------------------------------------------------------------------
 type Ran = { sid: Sid | undefined; events: Event[] }   // sid: the session the command resolved to (for hooks)
 
-// limits.rate.by = 'shield': tvine.shield already rate-checked this HTTP request in enforce mode, so its rules are the
-// general limit (an action's own rate still holds). Anything Shield did not count (socket, log mode, no rate rule) stays.
-const shieldOwns = (settings: Settings, request: Request) => settings.limits.rate.by === 'shield' && !!request.raw && rateChecked.has(request.raw)
+// Skip the general bucket when the caller already charged it (Form first-submit pre-check; Shield enforce +
+// limits.rate.by 'shield'). An action's own rate still holds. Never set from anything the client sends.
+const generalOwned = (settings: Settings, request: Request) =>
+  rateChecked.has(request)
+  || (settings.limits.rate.by === 'shield' && !!request.raw && rateChecked.has(request.raw))
 
 // The rate buckets of one command (security/ratelimit.ts has the contract), checked in ONE limiter call before the
 // session is resolved, so abusive traffic never creates sessions or queues:
@@ -318,19 +314,21 @@ const shieldOwns = (settings: Settings, request: Request) => settings.limits.rat
 //     throwaway bucket per request otherwise).
 // 3b. an action's own rate: a bucket per key + action id. Keyed by ip on renders and for unstored sessions. The copy
 //     of the default every discovered action carries is skipped when 3a counted (the same rate on the same key
-//     over fewer requests never runs out first); renders and limits.rate.by 'shield' skip it too.
+//     over fewer requests never runs out first); renders and a pre-rated / shield-owned request skip it too.
+// Cookie-less api calls: rate via general ip (+ rateChecked when mint pre-charges); sessions.deferred()/ephemeral()
+// avoid per-request session spam (kept only when session data is written — transport/api.ts).
 // ponytail: an own rate equal to settings.limits.rate counts as the default.
 function rateItems(cmd: Command, server: ServerCtx, request: Request, forwarded: boolean, opts: DispatchOpts): RateItem[] {
   const { settings } = server
-  const render = renderRead.has(request), shield = shieldOwns(settings, request)
-  const general = !render && !forwarded && !shield
+  const render = renderRead.has(request), owned = generalOwned(settings, request)
+  const general = !render && !forwarded && !owned
   const key = cmd.sid ?? cookieOf(request, settings)
   const stored = key !== undefined && !server.sessions.transient(key)
-  const items: RateItem[] = opts.firstContact && !render ? [{ keys: { ip: request.ip } }] : []
+  const items: RateItem[] = []
   if (general) items.push({ keys: { ip: request.ip, ...(stored && { sid: key }) } })
   const def = server.actions.get(cmd.action), r = def?.rules?.rate, dflt = settings.limits.rate
   const own = !!r && (r.limit !== dflt.limit || r.windowMs !== dflt.windowMs)
-  if (r && (own || (!render && !shield && !general))) {
+  if (r && (own || (!render && !owned && !general))) {
     items.push({ keys: { sid: render || !stored ? `ip:${ipKey(request.ip)}` : key, action: def!.id }, rules: r })
   }
   return items
@@ -370,9 +368,16 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   // 4.1 humanOnly (widgets/human-only.md): THE security guard, before replay / in-flight dedupe, so an agent reusing a
   // human's cmdId gets human_only, never the stored result. Every agent-marked request (MCP tools, `do`, agent HTTP,
   // the tab agent mark/tail, WebMCP agentCmd) is refused; only a human's own request runs it. No rule or hook overrides it.
-  const ho = server.actions.get(cmd.action)?.rules?.humanOnly
+  const rules = server.actions.get(cmd.action)?.rules
+  const ho = rules?.humanOnly
   if (ho && request.agent.is) {
     return { sid, events: [ev.err('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : cmd.action}); ask the user to do it`, { reason: 'human_only' })] }
+  }
+  // mcp:false: refuse direct agent calls (do / api / typed MCP) as `unknown_action`, same as MCP.
+  // Bound calls stay allowed: headless `ui` session-map dispatches weft.uiState (mcp:false) with a signed bind
+  // (core/ui.ts). markCalls already hides unbound mcp:false controls from the agent snapshot.
+  if (rules?.mcp === false && request.agent.is && !cmd.bind) {
+    return { sid, events: [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`)] }
   }
   // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
   // a session nothing stores (one call's, ephemeral / deferred) lives in this process only: no cross-server lock

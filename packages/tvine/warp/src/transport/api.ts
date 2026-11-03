@@ -2,22 +2,23 @@
 // for client components and a Next server in two-server mode, plus `invoke`, which the in-process caller behind
 // tvine/api uses. Every call is one dispatch(): permissions, bind, limits, atomic, hooks, idempotency.
 import { parseMultipart, PARTS, type FilePart } from '../media/index.js'
-import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { collect, crossOrigin, dispatch, rateLimited, type ServerCtx } from '../core/dispatch.js'
 import { authenticate } from '../core/auth.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { rotatedSession } from '../core/auth.js'
-import { buildRequest, clientIp } from '../core/request.js'
+import { buildRequest, clientIp, rateChecked } from '../core/request.js'
 import { cookieHeader } from '../core/session.js'
 import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
+import { cookieValue } from '../security/cookie.js'
+import { signForwardPayload, unsignForwardBody } from '../security/forward-mac.js'
+import { readBodyUtf8, tooDeep } from './body.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { isAgent } from './http.js'
 
 export const API_PREFIX = '/tvine/api/'
 export const FORWARD = 'x-tvine-forward'        // `<b64url(json)>.<b64url(hmac)>`, from a Next server holding the secret
 export const MINTED = 'x-tvine-cookie'          // forwarded mutation that created a session: the cookie for Next to set
-const FORWARD_TTL_MS = 30_000
 
 export type ApiResult =
   | { ok: true; data: unknown; goto?: string }
@@ -26,29 +27,24 @@ export type ApiResult =
 // Identity a Next server forwards. `as` = the raw x-tvine-session value of an agent's snapshot render.
 export interface Forward { cookie?: string; as?: string; ip: string; agent: boolean; path: string; mode: 'render' | 'action'; exp: number }
 
-// Domain-separated from binds: a bind token can never pass as a forward header (and the reverse).
-const fmac = (body: string, key: string) => createHmac('sha256', key).update(`tvine-forward.${body}`).digest()
-
 export function signForward(p: Omit<Forward, 'exp'>, secret: string, now = Date.now()): string {
-  const body = Buffer.from(JSON.stringify({ ...p, exp: now + FORWARD_TTL_MS })).toString('base64url')
-  return `${body}.${fmac(body, secret).toString('base64url')}`
+  return signForwardPayload(p as Record<string, unknown>, secret, now)
 }
 
 // Any key (rotation), unexpired, well-formed; never throws.
 export function verifyForward(v: unknown, settings: Settings): Forward | undefined {
   try {
     if (typeof v !== 'string') return undefined
-    const [body, sig, extra] = v.split('.')
-    if (!body || !sig || extra !== undefined) return undefined
-    const got = Buffer.from(sig, 'base64url')
-    const ok = [settings.secret].flat().some((k) => { const want = fmac(body, k); return got.length === want.length && timingSafeEqual(got, want) })
-    if (!ok) return undefined
+    const body = unsignForwardBody(v, [settings.secret].flat())
+    if (body === undefined) return undefined
     const f = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Forward
     if (typeof f !== 'object' || f === null || typeof f.exp !== 'number' || Date.now() > f.exp) return undefined
     if (typeof f.path !== 'string' || !f.path.startsWith('/') || typeof f.ip !== 'string' || (f.mode !== 'render' && f.mode !== 'action')) return undefined
     if ((f.cookie !== undefined && typeof f.cookie !== 'string') || (f.as !== undefined && typeof f.as !== 'string')) return undefined
     return f
-  } catch { return undefined }
+  } catch {
+    return undefined
+  }
 }
 
 // The events of one dispatch → ApiResult. JSON round-trip: in-process and HTTP give byte-equal data.
@@ -105,7 +101,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   // a cookie: resolved once here and handed to dispatch (an agent render's sid is only peeked: its command holds it)
   let session = who.sid !== undefined ? await sessions.peek({ sid: who.sid }) : await sessions.resolve({ cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
-  let ephemeral = false, deferred = false, firstContact = false
+  let ephemeral = false, deferred = false
   if (session && who.sid !== undefined) {
     // An agent's snapshot render runs INSIDE that agent's command (dispatch step 10), which holds the sid's
     // queue: dispatching on the same sid would wait for itself. Reads run on an ephemeral copy instead.
@@ -114,18 +110,20 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   } else if (!session) {
     if (who.sid !== undefined) return fail('expired_sid', 'session expired')   // an agent render whose session is gone
     if (crossOrigin(who.request, settings)) return FORBIDDEN
-    // a page render's reads spend no rate bucket (dispatch opts.render). The ip pays one token here (before a session
-    // is stored) or, for a session nothing stores, inside the dispatch's own limiter call (firstContact).
-    if (read) { session = sessions.ephemeral(); ephemeral = true; firstContact = true }   // a read never creates a real session
+    // Anti-session-spam: ephemeral/deferred mint — a real session (and cookie) only if keep() runs below.
+    // Rate: cookie-less calls pay the general ip bucket in dispatch; cmdId mint charges here + rateChecked
+    // so dispatch does not double-bill. Page-render reads use opts.render (no general charge).
+    if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
     else if (!who.mint) return fail('expired_sid', 'this action needs a session')
     // a retry token (cmdId) is replayed per stored session: such a call keeps its session up front, as before
     else if (call.cmdId !== undefined) {
       const rl = await server.limiter.check({ ip: who.request.ip })
       if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
+      rateChecked.add(who.request)   // charged here so dispatch does not double-bill after mint
       session = await sessions.create(); await who.mint(session)
     }
     // lazy: stored (and its cookie minted) only if the call needs it, see after the dispatch
-    else { session = sessions.deferred(); deferred = true; firstContact = true }
+    else { session = sessions.deferred(); deferred = true }
   }
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
@@ -134,7 +132,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
-    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render', firstContact, session })), who.http)
+    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render', session })), who.http)
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
     if (rotated) await who.mint?.(rotated)
     // a cookie-less call keeps a session only when it wrote session data or its answer is bound to the sid (a
@@ -189,11 +187,7 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
   // secreview H1: the agent markers are read from the RAW headers (`shown` drops x-tvine-*): a declared agent stays one
   if (isAgent(req, settings)) request.agent = { ...request.agent, is: true, via: 'http' }
   request.raw = req   // the endpoint (/tvine/api/<id>, or a urls.ts path) + method for settings.cors (core/cors-match)
-  let cookie: string | undefined
-  for (const part of (req.headers.cookie ?? '').split(';')) {
-    const i = part.indexOf('=')
-    if (i > 0 && part.slice(0, i).trim() === name) { cookie = part.slice(i + 1).trim(); break }
-  }
+  const cookie = cookieValue(req.headers.cookie, name)
   return {
     request, cookie, mode: 'action', http: true,
     mint: async (s) => { res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(s.sid))) },
@@ -242,15 +236,25 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
         return send(res, fail('invalid_param', 'request body or a file part too large'), 413)
       }
       const parsed = parseMultipart(buf, mp[1] ?? mp[2]!)
-      if (!parsed || Object.keys(parsed.fields).some((k) => k !== 'params')) return send(res, fail('invalid_param', 'multipart: a `params` JSON part and file parts only'))
+      const okField = (k: string) => k === 'params' || k === 'bind' || k === 'cmdId' || k === 'agentCmd'
+      if (!parsed || Object.keys(parsed.fields).some((k) => !okField(k))) return send(res, fail('invalid_param', 'multipart: a `params` JSON part, optional bind/cmdId/agentCmd, and file parts only'))
       let params: unknown
       try { params = JSON.parse(parsed.fields.params ?? '{}') } catch { return send(res, fail('invalid_param', 'the params part is not valid JSON')) }
       if (typeof params !== 'object' || params === null || Array.isArray(params) || tooDeep(params)) return send(res, fail('invalid_param', 'params must be an object'))
+      const bind = parsed.fields.bind, cmdId = parsed.fields.cmdId
+      if ((bind !== undefined && typeof bind !== 'string') || (cmdId !== undefined && typeof cmdId !== 'string')) return send(res, fail('invalid_param', 'bind and cmdId must be strings'))
+      let agentCmd: { via?: string } | undefined
+      if (parsed.fields.agentCmd !== undefined) {
+        try {
+          const ac = JSON.parse(parsed.fields.agentCmd) as { via?: unknown } | null
+          agentCmd = { via: typeof ac?.via === 'string' ? ac.via : undefined }
+        } catch { return send(res, fail('invalid_param', 'the agentCmd part is not valid JSON')) }
+      }
       ;(who.request as unknown as { [PARTS]?: FilePart[] })[PARTS] = parsed.files
-      return send(res, await invoke(server, { id, params }, who))
+      return send(res, await invoke(server, { id, params, bind, cmdId, ...(agentCmd && { agentCmd }) }, who))
     }
     if (!/^application\/json\s*(;|$)/i.test(ct)) return send(res, fail('invalid_param', 'Content-Type must be application/json'))
-    const raw = await readBody(req, settings.limits.bodyBytes)
+    const raw = await readBodyUtf8(req, settings.limits.bodyBytes)
     if (raw === null) { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
     let body: unknown
     try { body = raw.length ? JSON.parse(raw) : {} } catch { return send(res, fail('invalid_param', 'body is not valid JSON')) }
@@ -296,30 +300,4 @@ function readMultipart(req: IncomingMessage, cap: number, partCap: number, bound
   })
 }
 
-// ponytail: same as transport/http.ts readBody/tooDeep (owned by another task); share when that file is free
-export function readBody(req: IncomingMessage, cap: number): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let n = 0
-    const onData = (c: Buffer) => {
-      n += c.length
-      if (n <= cap) return void chunks.push(c)
-      req.off('data', onData)
-      req.resume()
-      resolve(null)
-    }
-    req.on('data', onData)
-    req.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    req.once('error', reject)
-  })
-}
-export function tooDeep(v: unknown, max = 64): boolean {
-  const stack: [unknown, number][] = [[v, 0]]
-  while (stack.length) {
-    const [x, d] = stack.pop()!
-    if (typeof x !== 'object' || x === null) continue
-    if (d >= max) return true
-    for (const y of Object.values(x)) stack.push([y, d + 1])
-  }
-  return false
-}
+export { tooDeep, readBodyUtf8 as readBody } from './body.js'

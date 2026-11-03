@@ -4,13 +4,13 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Settings, ShieldStance } from '../../core/types.js'
 import { limiterFor } from '../../backends/index.js'
 import type { Limiter } from '../../security/ratelimit.js'
-import { BadSignature, SignatureExpired, dumps, loads } from '../../security/signing.js'
+import { BadSignature, SignatureExpired, dumps, loads, loadedSettings } from '../../security/signing.js'
 import { AGENT_SURFACE, blockList, ipIn } from '../../middleware/index.js'
 import { evaluate } from './conditions.js'
 import { decrypt, encrypt } from '../../security/encryption.js'
+import { setCookieHeader } from '../../security/cookie.js'
 import { claims } from './claims.js'
 import { securityEvent } from '../../core/audit.js'
-import { loadedSettings } from '../../security/signing.js'
 import { sha } from './signals.js'
 import { codeInput, pruneCode, runCodeRule, type CodeResult } from './code.js'
 import type { Action, BotCategory, ChallengeLevel, Condition, Decision, Rule, Signals } from './types.js'
@@ -219,8 +219,11 @@ export function checkClearance(token: string | undefined, ipNet: string, ua: str
   if (p.n !== ipNet || p.u !== uaHash(ua)) return { valid: false, level, score: p.s, reason: 'mismatch' }
   return { valid: true, level, score: Math.max(1, Math.min(99, Number(p.s) || 1)) }
 }
-export function clearanceCookie(value: string, secure: boolean, maxAgeMs: number): string {
-  return `${cookieName(secure)}=${value}; Path=/; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`
+// SameSite follows settings.session.sameSite (shared Set-Cookie formatter); clearance is not a login cookie but
+// still honors the site's cookie policy so agents/browsers see one consistent SameSite.
+export function clearanceCookie(value: string, secure: boolean, maxAgeMs: number, sameSite?: 'lax' | 'strict' | 'none'): string {
+  const ss = sameSite ?? loadedSettings()?.session?.sameSite ?? 'lax'
+  return setCookieHeader(cookieName(secure), value, { httpOnly: true, sameSite: ss, secure, path: '/', maxAge: Math.floor(maxAgeMs / 1000) })
 }
 
 // ---- challenge nonce + PoW --------------------------------------------------------------------------------------------

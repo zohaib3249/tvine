@@ -1,23 +1,22 @@
 // Staff hardening for every admin action (settings.admin): allowIps (also an IpFilter on the panel path, settings.ts),
 // require2fa (staff without a confirmed TOTP must set it up first) and idleMs (a shorter idle timeout for admin use).
-import { BlockList, isIP } from 'node:net'
 import { securityEvent } from '../../core/audit.js'
 import { DomainError } from '../../core/errors.js'
 import type { Permission, Settings } from '../../core/types.js'
+import { blockList, ipIn } from '../../middleware/index.js'
 import { isStaff } from '../../security/permissions.js'
 import { loadedSettings } from '../../security/signing.js'
 
 const ADMIN_SEEN = '_admin_seen'
-const lists = new WeakMap<string[], BlockList>()
+// same compiled list as IpFilter (middleware.blockList); WeakMap keyed by the settings array reference
+const lists = new WeakMap<string[], ReturnType<typeof blockList>>()
 export function ipAllowed(ip: string, list: string[]): boolean {
   let b = lists.get(list)
   if (!b) {
-    b = new BlockList()
-    for (const e of list) { const [a, p] = e.split('/'); const v = isIP(a!) === 6 ? 'ipv6' : 'ipv4'; if (p) b.addSubnet(a!, Number(p), v); else b.addAddress(a!, v) }
+    b = blockList(list, 'admin.allowIps')
     lists.set(list, b)
   }
-  const v = isIP(ip)
-  return !!v && b.check(ip, v === 6 ? 'ipv6' : 'ipv4')
+  return ipIn(b, ip)
 }
 
 export const staffGuard: Permission = async (ctx) => {

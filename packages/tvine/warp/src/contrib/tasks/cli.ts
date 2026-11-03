@@ -116,11 +116,14 @@ export async function embeddedWorker(apps: string, settings: Settings, o: { conc
   const w = settings.tasks.broker === 'memory' ? undefined
     : new Worker({ queues: tasksConfig.queues?.length ? tasksConfig.queues : '*', concurrency: o.concurrency, log })
   const beat = o.beat ? new Beat({ log }) : undefined
+  // broker ≠ memory: this process owns OutboxRelay (hooks.ts leaves it to workers / --with-worker)
+  const outbox = settings.tasks.broker === 'memory' ? undefined : new OutboxRelay(log)
   await w?.start()
   beat?.start()
+  outbox?.start()
   return {
     name: [w ? `job worker ${w.name} (concurrency ${w.concurrency})` : 'jobs run by the memory broker', beat && 'scheduler'].filter(Boolean).join(' + '),
-    async stop() { await beat?.stop(); await w?.stop() },
+    async stop() { await beat?.stop(); await outbox?.stop(); await w?.stop() },
   }
 }
 

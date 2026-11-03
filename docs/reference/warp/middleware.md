@@ -55,7 +55,7 @@ functions keeps the default HTTP list.
 | `Locale` | off | `Accept-Language` → `request.locale` (one of `languages`); `Content-Language` + `Vary: Accept-Language` out. |
 | `ServerTiming` | off | `Server-Timing: app;dur=<ms>`, only when `settings.debug`. |
 | `Shield` | off | `tvine.shield` bot protection (needs `'tvine.shield'` in `installedApps`). Options are Shield's; see its docs. |
-| `BotGuard` | off | Known scanner user agents → `403`. Never on the agent surface (`/mcp`, `/tvine/*`, `/.well-known/*`, `/llms.txt`, `*/agent.json|txt`). |
+| `BotGuard` | off | Known scanner user agents → `403`. Never on the agent surface (`/mcp`, `/tvine/*`, `/.well-known/*`, `/llms.txt`, `*/agent.json|txt`). Overlaps Shield's `scanner` bot category — pick one, or both will refuse the same UAs. |
 
 ### Options
 

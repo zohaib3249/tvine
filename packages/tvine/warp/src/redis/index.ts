@@ -29,6 +29,7 @@ export interface RedisClient {
 export const DEFAULT_PREFIX = 'tvine:'
 const DEFAULT_CONNECT_MS = 5_000
 type Log = (level: 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
+// bootstrap before getLogger / configureLogging exists (configureRedis may run very early)
 const consoleLog: Log = (level, msg, data) => console.error(JSON.stringify({ level, msg, ...data }))
 
 // redis://user:pass@host:6379/0 → redis://host:6379/0 (for messages; never the credentials)

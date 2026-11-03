@@ -7,6 +7,9 @@
 //    the client. Either answer passes; a scripted (OCR / vision) solve still also costs the PoW + attempt limits.
 // Answers are kept only as HMACs (key derived from settings.secret) in the shield claim store (claims.ts: no eviction;
 // redis across servers), read-and-deleted on the first check (single-use), 2-minute expiry.
+// [D] Not routed through Signer: wire stores raw hex of HMAC(id\\nanswer) with key = HMAC(secret, 'tvine.shield.captcha').
+// Signer's salt derivation is inverted (HMAC(salt+'signer', secret)) and emits value:sig tokens — changing would
+// invalidate in-flight captchas. Purpose string above already isolates the key from other MACs.
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { crc32, deflateSync } from 'node:zlib'
 import { claims } from './claims.js'

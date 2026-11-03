@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import type { PasswordHasher, PasswordValidator, Settings } from '../../core/types.js'
 import { same } from './crypto.js'
+import { authLog } from './log.js'
 
 export const UNUSABLE = '!'   // prefix of a password that can never match
 export const MAX_PASSWORD = 4096
@@ -136,7 +137,7 @@ export async function validateNewPassword(pw: string, s: Settings, user?: Record
   if (problems.length || !s.auth?.breachCheck) return problems
   try {
     if ((await pwnedCount(pw)) > 0) return ['This password has appeared in a data breach. Choose a different one.']
-  } catch (e) { console.error(JSON.stringify({ level: 'warn', msg: 'tvine.auth: breach check unavailable', error: (e as Error).message })) }
+  } catch (e) { authLog.warn('breach check unavailable', { error: (e as Error).message }) }
   return []
 }
 

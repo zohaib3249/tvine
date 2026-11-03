@@ -2,12 +2,12 @@
 // the Web Bot Auth key directory) are cached and time-capped.
 import { promises as dns } from 'node:dns'
 import { createHash } from 'node:crypto'
-import { ipKey } from '../../security/ratelimit.js'
+import { ipKey, ipNetOf } from '../../security/ratelimit.js'
 import { asnKind, botOf, hasRanges, inRanges, isLocal, isTor, lookupIp } from './data.js'
 import { scoreSensor } from './sensor-score.js'
 import type { BotCategory, SensorReport, Signals } from './types.js'
 
-export const ipNetOf = (ip: string) => ipKey(ip).replace(/\.\d+$/, '.0/24')   // /24 (v4) or /64 (v6)
+export { ipNetOf }   // /24 (v4) or /64 (v6); defined next to ipKey
 export const sha = (s: string, n = 16) => createHash('sha256').update(s).digest('hex').slice(0, n)
 
 // ---- L3: UA family + header consistency ----------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { BlockList, isIP, type LookupFunction } from 'node:net'
 import { secretName } from '../core/redact.js'
+import { ipv6Groups } from './ratelimit.js'
 
 export class SafeFetchError extends Error {
   constructor(readonly code: 'blocked_scheme' | 'blocked_host' | 'blocked_address' | 'too_many_redirects' | 'timeout' | 'too_large' | 'network', msg: string) {
@@ -21,20 +22,11 @@ for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127
 for (const [a, p] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64], ['2001::', 23], ['2001:db8::', 32],
   ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]] as const) BLOCKED.addSubnet(a, p, 'ipv6')
 
-// 8 hextets of an IPv6 address (handles :: and a dotted IPv4 tail)
-function groups(ip: string): number[] {
-  const m = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
-  const s = m ? ip.slice(0, m.index) + (((+m[1]! << 8) | +m[2]!).toString(16) + ':' + ((+m[3]! << 8) | +m[4]!).toString(16)) : ip
-  const [h, t] = s.split('::') as [string, string?]
-  const a = h ? h.split(':') : [], b = t ? t.split(':') : []
-  return (t === undefined ? a : [...a, ...Array(8 - a.length - b.length).fill('0'), ...b]).map((x) => parseInt(x || '0', 16))
-}
-
 // true for any address an outbound request must never reach (incl. 169.254.169.254 cloud metadata, fd00::/8)
 export function isPrivateAddress(ip: string): boolean {
   const v = isIP(ip)
   if (v === 6) {   // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) forms: judge the IPv4 inside
-    const g = groups(ip)
+    const g = ipv6Groups(ip)
     if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0 || g[5] === 0xffff) && (g[6] || g[7] || g[5])) return isPrivateAddress([g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255].join('.'))
   }
   return v === 0 || BLOCKED.check(ip, v === 4 ? 'ipv4' : 'ipv6')

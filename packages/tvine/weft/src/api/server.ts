@@ -2,12 +2,13 @@
 // in-process dispatch() Warp registers. Two servers: HTTP to TVINE_API_URL with the caller's identity in a
 // signed x-tvine-forward header (HMAC, TVINE_SECRET, 30 s). Same pipeline either way.
 import 'server-only'
-import { createHmac } from 'node:crypto'
 import { cache } from 'react'
+import { signForwardPayload as signForward } from '../../../warp/dist/security/forward-mac.js'
 import { currentUserVia, makeApi, network, type Api, type ApiOpts, type ApiResult, type Transport } from './core.js'
 
 export * from './core.js'
 export { UserProvider, useUser } from './user.js'
+export { signForward }
 
 const API = Symbol.for('tvine.api')
 type InProc = (call: { id: string; params: unknown; bind?: string; cmdId?: string }) => Promise<ApiResult>
@@ -20,12 +21,6 @@ const nextAccess = async (): Promise<NextAccess> => {
   // @ts-ignore next is the app's dependency, not weft's (no types here)
   const m = (await import('next/headers')) as NextAccess
   return m
-}
-
-// Same format and domain separation as Warp's verifyForward (transport/api.ts).
-export function signForward(p: Record<string, unknown>, secret: string, now = Date.now()): string {
-  const body = Buffer.from(JSON.stringify({ ...p, exp: now + 30_000 })).toString('base64url')
-  return `${body}.${createHmac('sha256', secret).update(`tvine-forward.${body}`).digest('base64url')}`
 }
 
 // The entry `hops` from the right, as Warp's clientIp walks X-Forwarded-For; never further left.

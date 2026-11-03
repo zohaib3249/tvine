@@ -12,7 +12,9 @@ import { getLogger } from '../log.js'
 const requestLog = getLogger('tvine.request')
 import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile } from '../core/types.js'
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
+import { cookieValue } from '../security/cookie.js'
 import { bodyCap } from '../security/ratelimit.js'
+import { readBody, tooDeep } from './body.js'
 import { render, snapshotOf, type Ctx, type ExpandOpt, type Format, type ViewOpt } from '../serialize/envelope.js'
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import type { RouteInfo } from './discovery.js'
@@ -70,18 +72,6 @@ const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
 export const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
 
-// JSON.parse accepts any depth; recursive consumers (hash, clone, zod) then blow the stack.
-function tooDeep(v: unknown, max = 64): boolean {
-  const stack: [unknown, number][] = [[v, 0]]
-  while (stack.length) {
-    const [x, d] = stack.pop()!
-    if (typeof x !== 'object' || x === null) continue
-    if (d >= max) return true
-    for (const y of Object.values(x)) stack.push([y, d + 1])
-  }
-  return false
-}
-
 export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings, sessions } = server
   const cookieName = settings.session.cookieName
@@ -97,13 +87,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     if (!(await allowed(decodeURIComponent(raw), request, session))) throw new Refuse(403, 'domain', FORBIDDEN_ROUTE)
   }
 
-  const cookieOf = (req: IncomingMessage) => {
-    for (const part of (req.headers.cookie ?? '').split(';')) {
-      const i = part.indexOf('=')
-      if (i > 0 && part.slice(0, i).trim() === cookieName) return part.slice(i + 1).trim()
-    }
-    return undefined
-  }
+  const cookieOf = (req: IncomingMessage) => cookieValue(req.headers.cookie, cookieName)
   // Only when the browser has no live cookie session: an explicit agent sid never steals a human's cookie.
   const setCookie = async (req: IncomingMessage, res: ServerResponse, sid: string) => {
     const c = cookieOf(req)
@@ -469,24 +453,6 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     }
     void handle(req, res, undefined)
   }
-}
-
-// Body up to `cap` bytes; null once it is exceeded (the rest is drained, never stored).
-function readBody(req: IncomingMessage, cap: number): Promise<Buffer | null> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let n = 0
-    const onData = (c: Buffer) => {
-      n += c.length
-      if (bodyCap(n, cap).ok) return void chunks.push(c)
-      req.off('data', onData)
-      req.resume()
-      resolve(null)
-    }
-    req.on('data', onData)
-    req.once('end', () => resolve(Buffer.concat(chunks)))
-    req.once('error', reject)
-  })
 }
 
 // Appends `Accept` to whatever Vary the page's renderer sets (Next sets its own just before writing).

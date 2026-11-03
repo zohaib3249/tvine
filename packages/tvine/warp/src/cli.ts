@@ -17,8 +17,8 @@ import { API_DTS, generateApiTypes } from './cli/generate.js'
 import { createAgentServer, loadSettings, settingsFiles, type AgentServerOptions } from './server.js'
 import type { Settings } from './core/types.js'
 import { backendTable } from './backends/index.js'
-import { customKeyWarnings, rateOverlap, redisUsers } from './settings.js'
-import { redis } from './redis/index.js'
+import { customKeyWarnings, rateOverlap } from './settings.js'
+import { pingRedis } from './cli/workers.js'
 import type { AddressInfo } from 'node:net'
 import { defaultEnv, defaultNodeEnv, env, envReport, isProduction, loadDotenv } from './env.js'
 import { describeMiddleware, lanIps } from './middleware/index.js'
@@ -420,11 +420,9 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         io.out(`env set: ${envReport().filter((e) => e.set).map((e) => e.name).join(', ') || '(none)'}`)
         for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
         io.out(metricsLine(srv.ctx.settings.metrics))
-        let down = false
-        for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
-          const p = await redis.ping(alias)
-          if (p.ok) io.out(`redis ${alias}: ok (${p.ms} ms)`); else { io.err(`tvine check: redis ${alias}: ${p.error}`); down = true }
-        }
+        const redisBad = await pingRedis(srv.ctx.settings, { cmd: 'check', hold: true, onOk: (alias, ms) => io.out(`redis ${alias}: ok (${ms} ms)`) })
+        const down = !!redisBad
+        if (redisBad) io.err(redisBad)
         if (!down && srv.ctx.settings.installedApps.includes('tvine.tasks')) await checkJobs(srv.ctx.settings, io)
         await srv.close()
         if (down) return 1
@@ -464,13 +462,9 @@ export async function main(argv: string[], io: Io = stdio): Promise<number | und
         const srv = await createAgentServer({ appsDir: apps, frontend: frontend() })
         // which backend each subsystem runs on (one settings file drives them all), and every redis alias in use answers
         for (const r of backendTable(srv.ctx.settings)) io.out(`backend ${r.key} = ${r.backend}${r.redis ? ` (settings.redis.${r.redis})` : ''}`)
-        let down = false
-        for (const alias of new Set(redisUsers(srv.ctx.settings).map((u) => u.alias))) {
-          const p = await redis.ping(alias)
-          if (p.ok) io.out(`redis ${alias}: ok (${p.ms} ms)`); else { io.err(`tvine check: redis ${alias}: ${p.error}`); down = true }
-        }
+        const redisBad = await pingRedis(srv.ctx.settings, { cmd: 'routes', hold: true, onOk: (alias, ms) => io.out(`redis ${alias}: ok (${ms} ms)`) })
+        if (redisBad) { io.err(redisBad); await srv.close(); return 1 }
         await srv.close()
-        if (down) return 1
         const { actions, settings } = srv.ctx
         const { mcpEnabled } = await import('./transport/mcp.js')
         io.out(table([['action', 'app', 'params', 'permissions', 'mcp'], ...actions.all().map((d) => [

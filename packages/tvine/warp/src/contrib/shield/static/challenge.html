@@ -63,13 +63,13 @@
     <summary>Are you an AI agent?</summary>
     <p>This check is for people in a browser. Agents do not need it: this site speaks to agents directly.</p>
     <ul>
-      <li>MCP: <code>/mcp</code> (tools read_page, ui, do, request_control).</li>
-      <li>Any page as Markdown: send <code>Accept: text/markdown</code>; as JSON: send <code>x-tvine: 1</code>.</li>
-      <li>Name yourself in the User-Agent (Claude-User, ChatGPT-User, Grok/1.0…). Details: <code>/llms.txt</code>.</li>
+      <li>MCP: <code>{{mcp}}</code> (tools read_page, ui, do, request_control).</li>
+      <li>Any page as Markdown: send <code>Accept: text/markdown</code>; as JSON: send <code>{{header}}: 1</code>.</li>
+      <li>Name yourself in the User-Agent (Claude-User, ChatGPT-User, Grok/1.0…). Details: <code>{{llms}}</code>.</li>
       <li>To act in the person's own browser, use request_control: they click Allow in their tab.</li>
     </ul>
   </details>
-  <script type="application/json" id="tvine-agent">{"for":"ai-agents","mcp":"/mcp","llms":"/llms.txt","discovery":"/.well-known/tvine.json","markdown":{"accept":"text/markdown"},"json":{"header":"x-tvine","value":"1"},"tabControl":"request_control"}</script>
+  <script type="application/json" id="tvine-agent">{"for":"ai-agents","mcp":"{{mcp}}","llms":"{{llms}}","discovery":"{{discovery}}","markdown":{"accept":"text/markdown"},"json":{"header":"{{header}}","value":"1"},"tabControl":"request_control"}</script>
 
   <footer><span>Protected by Tvine Shield</span><span id="ray"></span></footer>
 </main>

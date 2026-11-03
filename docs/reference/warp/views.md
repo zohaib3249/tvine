@@ -65,8 +65,8 @@ List result:
 | `lookupParam` | `string` | `'id'` | DRF `lookup_url_kwarg`: the param name carrying the lookup value. If the lookup field is writable in `update`, boot fails: set `lookupParam` to something else (e.g. `'key'`) or list it in `readOnlyFields`. |
 | `serializer` | `Serializer<T>` | model default | `defineSerializer({ input?, readOnlyFields?, output })`. See [serializers.md](./serializers.md). |
 | `permissions` | `Permission[]` | `[]` | Checked per call by `checkPermissions` (before params are validated). Ones that deny agents (`denyAgents`) are also copied into the action rules (MCP hiding), unless you override `getPermissions`. |
-| `pageSize` | `number` | `25` | Page size (capped by `maxPageSize`). |
-| `maxPageSize` | `number` | `100` | Upper cap. |
+| `pageSize` | `number` | `settings.data.defaultPageSize` | Page size when set; else settings. Capped by `maxPageSize`. |
+| `maxPageSize` | `number` | `settings.data.maxPageSize` | Upper cap when set; else settings. |
 | `pagination` | `'cursor' \| 'page'` | `'cursor'` | `'cursor'`: keyset, stable under inserts. `'page'`: page numbers, `?page=N`. |
 | `filters` | `string[]` | the model's enum fields and indexed fields (never hidden / writeOnly) | Field lookups allowed as params: `'status'`, `'price__lte'`, `'tags__in'`, `'name__contains'`. Suffixes: exact, `__lt`, `__lte`, `__gt`, `__gte`, `__in` (comma list or array), `__contains` (text/email/url/slug only, max 200 chars), `__ne`. Unknown field or suffix → boot error. |
 | `searchFields` | `string[]` | the model's `searchable` fields | Fields `?q=` searches (max 200 chars). A money field cannot be searched. |

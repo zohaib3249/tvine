@@ -8,7 +8,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type { ActionManifest } from '../core/actions.js'
-import { collect, dispatch, rateLimited, renderCtx, type Log, type ServerCtx } from '../core/dispatch.js'
+import { collect, dispatch, renderCtx, type Log, type ServerCtx } from '../core/dispatch.js'
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
 import { RegistryError } from '../core/registry.js'
@@ -19,6 +19,7 @@ import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/env
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { UNTRUSTED_TOOL } from '../shape/notation.js'
 import { hiddenFromAnon } from '../security/permissions.js'
+import { readBody, tooDeep } from './body.js'
 import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
 
 export interface McpOptions {
@@ -343,8 +344,7 @@ async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<type
   if (a.sid !== undefined && !known) {   // like dispatch: a dead sid never runs steps; a fresh sid + snapshot to restart
     return rendering(server, ctx, async () => reply(server, [ev.err('expired_sid', 'session expired or missing; a new sid is attached', { snapshot: await server.snapshot(ctx.page, session.sid) })], ctx))
   }
-  const rl = await server.limiter.check({ ip: request.ip, sid: session.sid })
-  if (!rl.ok) return reply(server, [rateLimited(rl.retryAfterMs)], ctx)
+  // one rate charge per ui step via dispatch (no pre-rate here — that double-billed with each step's general bucket)
   return rendering(server, ctx, async () => {
     const at = async (pg: string) => { const r = await requestFor(server, opts, src, pg, session.sid); return r && r !== FORBIDDEN ? r : undefined }
     const out = await runUi(server, steps, a, { session, page: ctx.page, request: at, filter: (s) => filterSnapshot(server, s) })
@@ -384,11 +384,9 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
 
 const TOO_BIG = new Error('body too large')
 async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
-  const chunks: Buffer[] = []
-  let n = 0
-  for await (const c of req as AsyncIterable<Buffer>) {
-    if ((n += c.length) > max) throw TOO_BIG
-    chunks.push(c)
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  const raw = await readBody(req, max)
+  if (!raw) throw TOO_BIG
+  const v: unknown = JSON.parse(raw.toString('utf8'))
+  if (tooDeep(v)) throw new Error('body nested too deeply')
+  return v
 }

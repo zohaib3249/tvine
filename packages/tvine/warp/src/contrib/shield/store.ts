@@ -81,7 +81,7 @@ export function ruleProblem(r: Partial<Rule>): string | undefined {
   }
 }
 
-// ---- rule hits: counted in memory, flushed every 30 s (one UPDATE per rule that fired) --------------------------------------
+// ---- rule hits: counted in memory, flushed on settings.shield.hitsFlushMs (one UPDATE per rule that fired) -------------------
 export const hits = new Map<string, number>()
 export const countHit = (rid: string | undefined) => { if (rid && !rid.startsWith('list:')) hits.set(rid, (hits.get(rid) ?? 0) + 1) }
 export async function flushHits(): Promise<void> {

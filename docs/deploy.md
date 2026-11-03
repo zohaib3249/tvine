@@ -63,6 +63,8 @@ busy site moves them to `tvine worker`. Stopping lets running jobs finish within
 
 Where queued jobs live (`settings.tasks.broker`, [reference](reference/warp/contrib/tasks.md#brokers)):
 
+Tvine keeps **three stores** for background work: the **app database** (ORM models), **`settings.tasks.file`** (the default file broker's SQLite), and **Redis** (when `broker: 'redis'`). `tvine migrate` creates the `tasks_*` tables in the app database: Job ORM tables used by `broker: 'db'`, and `tasks_outbox` used when `durable: true` on any broker (web/worker relay drains it into the broker).
+
 | Broker | Store | Web and job workers on | Notes |
 |---|---|---|---|
 | `file` (default) | its own SQLite file, `./tasks.db` (`settings.tasks.file`) | **one machine**: start every process from the same folder (the path is relative) | fastest; any number of processes |

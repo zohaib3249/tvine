@@ -217,11 +217,13 @@ import { WeftRoot } from 'tvine/weft'
 export const metadata = { title: '${title}' }
 
 // WeftRoot: the agent badge, WebMCP tools and tab control (after the user clicks Allow).
+// data-tvine-header / header prop: settings.header (tvine start sets TVINE_HEADER from it).
+const header = process.env.TVINE_HEADER ?? 'x-tvine'
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" data-tvine-header={header}>
       <body style={{ margin: 0 }}>
-        <WeftRoot>{children}</WeftRoot>
+        <WeftRoot header={header}>{children}</WeftRoot>
       </body>
     </html>
   )
