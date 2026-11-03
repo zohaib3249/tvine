@@ -24,7 +24,7 @@ import { dataVersion } from './data/engine.js'
 import { DiskStorage, mediaHandler } from './media/index.js'
 import { cspReportHandler, nextBuildWarnings, securityHeaders } from './security/headers.js'
 import { signBind } from './security/sign.js'
-import { checkBackends, checkHosts, defineSettings, merge, rateOverlap, type SettingsInput } from './settings.js'
+import { checkBackends, checkHosts, customKeyWarnings, defineSettings, merge, rateOverlap, type SettingsInput } from './settings.js'
 import { configureLogging, getLogger, loggingConfig } from './log.js'
 import { env, isProduction, loadDotenv } from './env.js'
 import { buildMiddleware, devHosts, runMiddleware, type HttpMiddleware, type MwRequest } from './middleware/index.js'
@@ -76,7 +76,7 @@ async function devOrigins(dir: string, hosts: string[]): Promise<void> {
 }
 
 export interface AgentServerOptions {
-  settings?: SettingsInput & { secret?: string | string[] }   // merged over ./settings.ts (cwd), then defaults
+  settings?: SettingsInput   // merged over ./settings.ts (cwd), then defaults
   appsDir?: string                                             // default './apps'
   // nextDir = the .next dir; origin = where pages render (embedded); next = the `next` factory (default: the app's)
   frontend?: { nextDir: string; origin?: string; next?: NextFactory }
@@ -192,6 +192,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     if (lc.handlers.length) console.error(lc.format === 'json' ? JSON.stringify({ level, msg }) : `tvine: ${msg}`)
   }
   say('settings ok')
+  for (const w of customKeyWarnings(settings)) say(`WARNING: ${w}`, 'warn')
   if (settings.debug && isProduction()) say('WARNING: settings.debug is on with NODE_ENV=production (dev CSP, inspector feed): set TVINE_DEBUG=0', 'warn')
   if (isProduction() && settings.email.defaultFrom === 'webmaster@localhost') say('WARNING: settings.email.defaultFrom is webmaster@localhost: mail will be sent from it (docs/design/conventions/email.md)', 'warn')
   const local = backendTable(settings).filter((r) => r.backend === 'memory').map((r) => r.key)
