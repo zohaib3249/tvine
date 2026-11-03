@@ -8,7 +8,7 @@
 // fingerprints (literals → ?, IN lists collapsed). Never a raw path, a sid (hashed), a param or a bound value.
 import { createHmac, randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { sidHash } from '../../core/audit.js'
+import { sidHashLog } from '../../security/sid-hash.js'
 import { stats, type Stat } from '../../core/metrics.js'
 import type { Settings } from '../../core/types.js'
 import { connections } from '../../data/db.js'
@@ -262,7 +262,7 @@ export class Collector {
     if (!agent) return
     const name = clean(s.agent ?? '') || '(unnamed)'
     this.inc('agent', { n: name, v: s.via })
-    const id = (sidHash(s.sid) ?? 'none').slice(0, 12)
+    const id = sidHashLog(s.sid ?? '') || 'none'
     const now = this.now()
     let x = this.sessions.get(id)
     if (!x) {
@@ -291,7 +291,7 @@ export class Collector {
   // an agent's page read (ServerCtx 'read' hook): where its session is now
   read(sid: string, page: string): void {
     this.record({ k: 'page', path: page, agent: true, sid, entry: false })
-    const x = this.sessions.get((sidHash(sid) ?? '').slice(0, 12))
+    const x = this.sessions.get(sidHashLog(sid))
     if (!x) return
     const path = page.split('?')[0]!
     let pattern: string | undefined

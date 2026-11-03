@@ -37,3 +37,37 @@ export function tooDeep(v: unknown, max = 64): boolean {
   }
   return false
 }
+
+const BOUNDARY = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i
+
+/** Multipart boundary from Content-Type, or undefined. Shared by api + http uploads. */
+export function multipartBoundary(contentType: string | undefined): string | undefined {
+  const m = BOUNDARY.exec(contentType ?? '')
+  return m ? (m[1] ?? m[2]) : undefined
+}
+
+export type JsonObjectResult =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; reason: 'too_large' | 'not_json' | 'not_object' | 'too_deep' }
+
+export type JsonValueResult =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: 'too_large' | 'not_json' | 'too_deep' }
+
+/** Read + parse any JSON value (MCP JSON-RPC may be a batch array). */
+export async function readJsonValue(req: IncomingMessage, cap: number, maxDepth = 64): Promise<JsonValueResult> {
+  const raw = await readBodyUtf8(req, cap)
+  if (raw === null) return { ok: false, reason: 'too_large' }
+  let body: unknown
+  try { body = raw.length ? JSON.parse(raw) : {} } catch { return { ok: false, reason: 'not_json' } }
+  if (tooDeep(body, maxDepth)) return { ok: false, reason: 'too_deep' }
+  return { ok: true, value: body }
+}
+
+/** Read + parse a JSON object body (shared untrusted-JSON gate for api/urls/shield/tab/…). */
+export async function readJsonObject(req: IncomingMessage, cap: number, maxDepth = 64): Promise<JsonObjectResult> {
+  const got = await readJsonValue(req, cap, maxDepth)
+  if (!got.ok) return got
+  if (typeof got.value !== 'object' || got.value === null || Array.isArray(got.value)) return { ok: false, reason: 'not_object' }
+  return { ok: true, value: got.value as Record<string, unknown> }
+}

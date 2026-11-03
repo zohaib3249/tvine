@@ -12,9 +12,10 @@ import { cookieHeader } from '../core/session.js'
 import type { ConfirmAsk, ErrCode, Event, FieldError, Request, Session, Settings } from '../core/types.js'
 import { cookieValue } from '../security/cookie.js'
 import { signForwardPayload, unsignForwardBody } from '../security/forward-mac.js'
-import { readBodyUtf8, tooDeep } from './body.js'
+import { multipartBoundary, readBodyUtf8, readJsonObject, tooDeep } from './body.js'
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { isAgent } from './http.js'
+import { httpStatusOf } from './http-status.js'
 
 export const API_PREFIX = '/tvine/api/'
 export const FORWARD = 'x-tvine-forward'        // `<b64url(json)>.<b64url(hmac)>`, from a Next server holding the secret
@@ -156,9 +157,7 @@ export interface ApiTransportOptions {
   tokens: { read(t: string): void }                                                 // C2: renders that read a session
 }
 
-const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, human_only: 403, unknown_action: 404 }
-const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
-const statusOf = (r: ApiResult) => r.ok ? 200 : r.code === 'domain' ? DOMAIN_STATUS[r.reason ?? ''] ?? 400 : STATUS[r.code] ?? 400
+const statusOf = (r: ApiResult) => r.ok ? 200 : httpStatusOf(r.code, r.reason)
 
 // The caller of one HTTP api call (this transport and transport/urls): a Next server's signed forward, or a
 // browser / HTTP client that sent x-tvine-api: 1 (forces a CORS preflight cross-site). undefined = 403.
@@ -215,9 +214,9 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
     const who = await callerOf(server, o, req, res)
     if (!who) return send(res, FORBIDDEN)
     const ct = String(req.headers['content-type'] ?? '')
-    const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(ct)
-    const mpDef = mp ? server.actions.get(id) : undefined
-    if (mp) {
+    const boundary = multipartBoundary(ct)
+    const mpDef = boundary ? server.actions.get(id) : undefined
+    if (boundary) {
       // only actions that declare `multipart` take files here; the body is buffered under bodyBytes + their cap
       if (!mpDef?.multipart) return send(res, fail('invalid_param', 'this action does not take multipart bodies'))
       // nothing is buffered for a caller that cannot run it: uploads need a signed-in user, same-origin, a rate token
@@ -230,12 +229,12 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       if (crossOrigin(who.request, settings)) return send(res, FORBIDDEN)
       const rl = await server.limiter.check({ ip: who.request.ip })
       if (!rl.ok) { res.setHeader('connection', 'close'); return send(res, toApiResult([rateLimited(rl.retryAfterMs)])) }
-      const buf = await readMultipart(req, settings.limits.bodyBytes + mpDef.multipart.maxBytes, mpDef.multipart.partBytes ?? mpDef.multipart.maxBytes, mp[1] ?? mp[2]!)
+      const buf = await readMultipart(req, settings.limits.bodyBytes + mpDef.multipart.maxBytes, mpDef.multipart.partBytes ?? mpDef.multipart.maxBytes, boundary)
       if (buf === null) {   // stop reading: the rest of an oversized upload is never received
         res.setHeader('connection', 'close'); res.once('finish', () => req.destroy())
         return send(res, fail('invalid_param', 'request body or a file part too large'), 413)
       }
-      const parsed = parseMultipart(buf, mp[1] ?? mp[2]!)
+      const parsed = parseMultipart(buf, boundary)
       const okField = (k: string) => k === 'params' || k === 'bind' || k === 'cmdId' || k === 'agentCmd'
       if (!parsed || Object.keys(parsed.fields).some((k) => !okField(k))) return send(res, fail('invalid_param', 'multipart: a `params` JSON part, optional bind/cmdId/agentCmd, and file parts only'))
       let params: unknown
@@ -254,12 +253,13 @@ export function apiTransport(server: ServerCtx, o: ApiTransportOptions): (req: I
       return send(res, await invoke(server, { id, params, bind, cmdId, ...(agentCmd && { agentCmd }) }, who))
     }
     if (!/^application\/json\s*(;|$)/i.test(ct)) return send(res, fail('invalid_param', 'Content-Type must be application/json'))
-    const raw = await readBodyUtf8(req, settings.limits.bodyBytes)
-    if (raw === null) { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
-    let body: unknown
-    try { body = raw.length ? JSON.parse(raw) : {} } catch { return send(res, fail('invalid_param', 'body is not valid JSON')) }
-    if (typeof body !== 'object' || body === null || Array.isArray(body) || tooDeep(body)) return send(res, fail('invalid_param', 'body must be a JSON object {params, bind?, cmdId?}'))
-    const { params, bind, cmdId, agentCmd } = body as Record<string, unknown>
+    const parsed = await readJsonObject(req, settings.limits.bodyBytes)
+    if (!parsed.ok) {
+      if (parsed.reason === 'too_large') { res.setHeader('connection', 'close'); return send(res, fail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
+      if (parsed.reason === 'not_json') return send(res, fail('invalid_param', 'body is not valid JSON'))
+      return send(res, fail('invalid_param', 'body must be a JSON object {params, bind?, cmdId?}'))
+    }
+    const { params, bind, cmdId, agentCmd } = parsed.value
     if ((bind !== undefined && typeof bind !== 'string') || (cmdId !== undefined && typeof cmdId !== 'string')) return send(res, fail('invalid_param', 'bind and cmdId must be strings'))
     // downgrade-only agent marker (a WebMCP step's own api.* calls): it can make a call agent, never human
     const via = agentCmd !== undefined ? { via: typeof (agentCmd as { via?: unknown } | null)?.via === 'string' ? (agentCmd as { via: string }).via : undefined } : undefined

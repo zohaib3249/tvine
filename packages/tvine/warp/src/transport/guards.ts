@@ -2,13 +2,10 @@
 // permissions. Any deny or throwing permission → forbidden.
 import type { Permission, Request, Session, Settings } from '../core/types.js'
 import { authenticate } from '../core/auth.js'
+import { pathGlob as globRe } from '../core/path-glob.js'
 import { runPermissions } from '../security/permissions.js'
 
 export const FORBIDDEN_ROUTE = 'forbidden: agents may not access this route'
-
-// Glob → RegExp: `**` any depth (also the base itself: '/admin/**' guards '/admin'), `*` one segment.
-const globRe = (g: string) => new RegExp('^' + g.split('/**').map((p) =>
-  p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('(?:/.*)?') + '$')
 
 type Check = (path: string, request: Request, session?: Session) => Promise<boolean>
 const built = new WeakMap<Settings, Check>()

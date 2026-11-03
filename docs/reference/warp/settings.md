@@ -101,7 +101,7 @@ framework key (any case) warns at boot and in `tvine check` ("did you mean 'allo
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `allowedHosts` | `string[]` | dev: `['localhost', '.localhost', '127.0.0.1', '[::1]']`; production: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`, `'*'`. Empty in production with `AllowedHosts` on → boot error. |
+| `allowedHosts` | `string[]` | dev: `['localhost', '.localhost', '127.0.0.1', '[::1]']`; production: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`. Empty or `'*'` in production with `AllowedHosts` on → boot error. |
 | `dev.allowedHosts` | `string[]` | `[]` | Debug only, on top: `'*.ngrok-free.app'`, `'*.devtunnels.ms'`. |
 | `trustProxy` | `number` | `0` | Trusted proxy hops for `X-Forwarded-For` / `-Host` / `-Proto` (drives `request.ip`, https, host). |
 | `middleware` | `unknown[]` | `RequestId, AllowedHosts, Security, Cors, GZip` | HTTP middleware; see [middleware.md](./middleware.md). |
@@ -130,7 +130,7 @@ framework key (any case) warns at boot and in `tvine check` ("did you mean 'allo
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `mcp.tools` | `'both' \| 'generic' \| 'typed'` | `'both'` | Generic tools (`read_page`, `expand`, `ui`, `do`, `request_control`, `release`) and/or one typed tool per action. |
-| `mcp.exclude` | `string[]` | `[]` | Action-id globs disabled over MCP (`'admin.**'`). A pattern matching nothing logs a warning. |
+| `mcp.exclude` | `string[]` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | Action-id globs off MCP tools/`do`/manifest/snapshots (`'admin.**'`). Does not block agent HTTP unless the action also has `mcp: false`. A pattern matching nothing logs a warning. |
 | `mcp.maxTools` | `number` | `40` | Typed tools above this are trimmed to `priority` actions (rest via `do`); not in `'typed'` mode. |
 | `agent.shape` | `'v1' \| 'v2'` | `'v2'` | Snapshot format. |
 | `agent.budget` | `number` | `1500` | Token budget for `view=auto`. |

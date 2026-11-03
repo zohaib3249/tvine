@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
+import { editDistance } from './core/edit-distance.js'
 import { env, fromDotenv, isProduction } from './env.js'
 import { LEVELS } from './log.js'
 import { loadedSettings } from './security/signing.js'
@@ -58,7 +59,8 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
     redis: 'default',
   },
   socket: true,
-  mcp: { tools: 'both', exclude: [], maxTools: 40 },
+  // Default exclude: admin UI + password auth (open /mcp must not guess passwords). Apps add more via settings.mcp.exclude.
+  mcp: { tools: 'both', exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 },
   middleware: DEFAULT_MIDDLEWARE,
   actionMiddleware: [],
   allowedHosts: [],
@@ -284,15 +286,6 @@ export function customKeyWarnings(s: object): string[] {
   }
   return out
 }
-function editDistance(a: string, b: string): number {
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
-  for (let i = 1; i <= a.length; i++) {
-    const cur = [i]
-    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
-    prev = cur
-  }
-  return prev[b.length]!
-}
 
 // The loaded settings, anywhere at runtime (set at boot by loadSettings, or configureSigning in scripts/tests)
 export function settings(): Settings {
@@ -397,6 +390,14 @@ export function redisUsers(s: Settings): { key: string; alias: string }[] {
 export function checkHosts(s: Settings): void {
   const on = s.middleware.some((m) => m === 'tvine.middleware.AllowedHosts' || (Array.isArray(m) && m[0] === 'tvine.middleware.AllowedHosts'))
   if (on && isProduction() && !s.allowedHosts.length) throw new Error("settings.allowedHosts is empty in production: list your domains (e.g. ['shop.example.com', '.example.com']) or set TVINE_ALLOWED_HOSTS=shop.example.com")
+  if (isProduction() && s.allowedHosts.includes('*')) throw new Error("settings.allowedHosts must not include '*' in production (Host header protection would be off)")
+  if (isProduction()) {
+    for (const m of s.middleware) {
+      if (!Array.isArray(m) || m[0] !== 'tvine.middleware.AllowedHosts') continue
+      const hosts = (m[1] as { hosts?: string[] } | undefined)?.hosts
+      if (hosts?.includes('*')) throw new Error("AllowedHosts middleware hosts must not include '*' in production (Host header protection would be off)")
+    }
+  }
 }
 
 export function checkBackends(s: Settings): void {

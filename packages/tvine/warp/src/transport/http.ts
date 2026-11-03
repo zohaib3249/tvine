@@ -6,7 +6,9 @@ import { Readable } from 'node:stream'
 import { collect, dispatch, rateLimited, renderCtx, type ServerCtx } from '../core/dispatch.js'
 import { DomainError, Goto } from '../core/errors.js'
 import { ev } from '../core/events.js'
-import { buildRequest, clientIp, requestId } from '../core/request.js'
+import { buildRequest, clientIp, rateChecked, requestId } from '../core/request.js'
+import { sidHashLog } from '../security/sid-hash.js'
+import { httpStatusOf } from './http-status.js'
 import { cookieHeader } from '../core/session.js'
 import { getLogger } from '../log.js'
 const requestLog = getLogger('tvine.request')
@@ -14,7 +16,8 @@ import type { Command, ErrCode, Event, Request, Session, Settings, UploadedFile 
 import { receiveUpload, storageOf, type UploadDef } from '../media/index.js'
 import { cookieValue } from '../security/cookie.js'
 import { bodyCap } from '../security/ratelimit.js'
-import { readBody, tooDeep } from './body.js'
+import { multipartBoundary, readBody, tooDeep } from './body.js'
+import { filterMcpSnapshot } from './mcp-filter.js'
 import { render, snapshotOf, type Ctx, type ExpandOpt, type Format, type ViewOpt } from '../serialize/envelope.js'
 import { hasNode, pageSnapshot, runUi, stepsOf, uiInput } from '../core/ui.js'
 import type { RouteInfo } from './discovery.js'
@@ -55,7 +58,6 @@ export function wantsMarkdown(accept: string | undefined): boolean {
   return md > 0 && md >= html
 }
 
-const STATUS: Partial<Record<ErrCode, number>> = { expired_sid: 401, rate_limited: 429, internal: 500, human_only: 403 }
 const TYPE: Record<Format, string> = { json: 'application/json; charset=utf-8', notation: 'text/plain; charset=utf-8', md: 'text/markdown; charset=utf-8' }
 const BASE = 'http://tvine.local'
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -68,9 +70,9 @@ class Refuse extends Error {
   constructor(public status: number, public code: ErrCode, message: string, public field?: string, public retryAfterMs?: number) { super(message) }
   get reason() { return this.status === 403 ? 'forbidden' : this.status === 413 ? 'too_large' : undefined }
 }
-const DOMAIN_STATUS: Record<string, number> = { forbidden: 403, not_found: 404 }
 const retryAfter = (ms: number) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) })
-export const sidHash = (sid: string) => sid && createHash('sha256').update(sid).digest('base64url').slice(0, 12)
+export const sidHash = sidHashLog
+const statusOfErr = (code: ErrCode, reason?: string) => httpStatusOf(code, reason)
 
 export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings, sessions } = server
@@ -140,9 +142,14 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
     let md: { offset?: number; limit?: number } = {}
     const reply = async (status: number, events: Event[], headers: Record<string, string> = {}) => {
       for (const e of events) if (e.kind === 'snapshot') sessions.remember(e.snapshot)   // expand serves from it
-      sid = events.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
+      // Same MCP visibility as /mcp: hide mcp:false / exclude actions from agent snapshots (B2).
+      const forAgent = request?.agent.is
+        ? events.map((e) => e.kind === 'snapshot' ? { ...e, snapshot: filterMcpSnapshot(server, e.snapshot) }
+          : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterMcpSnapshot(server, e.snapshot) } : e)
+        : events
+      sid = forAgent.map(snapshotOf).find(Boolean)?.sid ?? ctx.sid
       if (!named.has(sid)) await setCookie(req, res, sid).catch((e: unknown) => server.log('error', 'session cookie failed', { error: String(e) }))
-      const shown = reveal ? events : events.map(hideSid)
+      const shown = reveal ? forAgent : forAgent.map(hideSid)
       res.writeHead(status, { 'content-type': TYPE[format], 'cache-control': 'private, no-store', ...headers })
       res.end(render(shown, format, settings, { ctx: { ...ctx, sid: reveal ? sid : '' }, ...shape, md }))
       return status
@@ -190,7 +197,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
           const out = await headlessUi(got, request, raw, cookie)
           ctx = out.ctx
           const err = out.events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
-          const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
+          const code = !err ? 200 : statusOfErr(err.code, err.reason)
           status = await reply(code, out.events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
           return
         }
@@ -203,7 +210,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         await cleanup()
         ctx = await renderCtx(server, cmd, request)
         const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
-        const code = !err ? 200 : err.code === 'domain' ? DOMAIN_STATUS[err.reason ?? ''] ?? 400 : STATUS[err.code] ?? 400
+        const code = !err ? 200 : statusOfErr(err.code, err.reason)
         status = await reply(code, events, err?.retryAfterMs !== undefined ? retryAfter(err.retryAfterMs) : {})
       }
     } catch (e) {
@@ -214,7 +221,7 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
         const opts = { ...(e.field !== undefined && { field: e.field }), ...(e.retryAfterMs !== undefined && { retryAfterMs: e.retryAfterMs }), ...(e.reason && { reason: e.reason }) }
         status = await reply(e.status, [ev.err(e.code, e.message, opts)], e.retryAfterMs !== undefined ? retryAfter(e.retryAfterMs) : {})
       } else if (e instanceof DomainError) {   // e.g. not_found: the page Next rendered called notFound()
-        status = await reply(DOMAIN_STATUS[e.code] ?? 400, [ev.err('domain', e.message, { reason: e.code })])
+        status = await reply(statusOfErr('domain', e.code), [ev.err('domain', e.message, { reason: e.code })])
       } else {
         server.log('error', 'http transport failed', { id, error: e instanceof Error ? e.stack ?? e.message : String(e) })
         status = await reply(500, [ev.err('internal', 'internal error')])
@@ -316,12 +323,13 @@ export function httpTransport(server: ServerCtx, opts: HttpOptions): (req: Incom
   // JSON command, or multipart upload (file streamed through the media module, never buffered whole).
   async function readCommand(req: IncomingMessage, request: Request, headerSid: string | undefined, upload: Upload): Promise<Command | UiBody> {
     const ct = (req.headers['content-type'] ?? '').toLowerCase()
-    const mp = /^multipart\/form-data;.*\bboundary=(?:"([^"]{1,70})"|([^\s;]{1,70}))/i.exec(req.headers['content-type'] ?? '')
-    if (mp) {
-      // I2: the IP bucket is charged before a byte is stored (dispatch charges it again; fine)
+    const boundary = multipartBoundary(req.headers['content-type'] as string | undefined)
+    if (boundary) {
+      // Charge IP here before storing bytes; rateChecked so dispatch does not double-bill (same as Form/api mint).
       const rl = await server.limiter.check({ ip: request.ip })
       if (!rl.ok) throw new Refuse(429, 'rate_limited', `rate limited: retry after ${rl.retryAfterMs}ms`, undefined, rl.retryAfterMs)
-      const fields = await multipart(req, mp[1] ?? mp[2]!, upload)
+      rateChecked.add(request)
+      const fields = await multipart(req, boundary, upload)
       const { file, def } = upload as Required<Upload>
       request.files = [file]
       // M3: params carry content facts, not the generated key, so a cmdId retry hashes the same

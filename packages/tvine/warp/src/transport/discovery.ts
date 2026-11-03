@@ -8,6 +8,7 @@ import type { ActionRef, Settings } from '../core/types.js'
 import { connections } from '../data/db.js'
 import { isLocalRequest } from '../core/request.js'
 import { hiddenFromAnon } from '../security/permissions.js'
+import { mcpEnabled } from './mcp-filter.js'
 import { DISCOVERY_PATH, LLMS_PATH, MANIFEST_PATH, MCP_PATH } from './agent-copy.js'
 import { originOf } from './tab.js'
 
@@ -56,10 +57,10 @@ export function robotsTxt(settings: Settings, o: { sitemap?: string; admin?: str
   ].join('\n')
 }
 
-export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[]): SiteManifest {
+export function buildSiteManifest(manifest: ActionManifest, routes: RouteInfo[], settings: Settings): SiteManifest {
   const apps: SiteManifest['apps'] = {}
   for (const d of manifest.all()) {
-    if (hiddenFromAnon(d)) continue
+    if (hiddenFromAnon(d) || !mcpEnabled(d, settings)) continue
     const app = d.id.slice(0, d.id.indexOf('.'))
     ;(apps[app] ??= { actions: [] }).actions.push({ id: d.id, params: manifest.paramSpecs(d.id) })
   }
@@ -98,7 +99,7 @@ export function discoveryTransport(deps: DiscoveryDeps): (req: IncomingMessage, 
     tools: ['read_page', 'expand', 'ui', 'do', 'request_control', 'release', `<app>_<action> (one per action, see ${MANIFEST_PATH})`],
     docs: { llms: LLMS_PATH, discovery: DISCOVERY_PATH, manifest: MANIFEST_PATH },
   })
-  const site = JSON.stringify(buildSiteManifest(manifest, routes))
+  const site = JSON.stringify(buildSiteManifest(manifest, routes, settings))
   const hdr = settings.header
   const llms = [
     `# ${settings.site.name}`,

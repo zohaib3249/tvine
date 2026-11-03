@@ -2,14 +2,12 @@
 // Shared by transport/cors (response headers, preflight) and dispatch's crossOrigin (whether an opted-in
 // origin may act at all), so both always agree. Boot-checked: bad configuration throws with a fix line.
 import type { CorsOrigin, CorsPolicy, Request, Settings } from './types.js'
+import { pathGlob as globRe } from './path-glob.js'
+import { MCP_PATH } from '../transport/agent-copy.js'
 
 // Never CORS, whatever the settings say: tab control, dev/inspector feeds, cookie streams, the CSP sink.
 const HARD = [/^\/tvine\/tab(?:\/|$)/, /^\/tvine\/dev(?:\/|$)/, /^\/tvine\/channel$/, /^\/tvine\/csp-report$/]
 const API = /^\/tvine\/api(?:\/|$)/
-
-// the guards glob: `**` any depth (and the base itself), `*` one segment
-const globRe = (g: string) => new RegExp('^' + g.split('/**').map((p) =>
-  p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('(?:/.*)?') + '$')
 
 // a serialized http(s) origin, exactly as browsers send it
 export const isOrigin = (s: string) => {
@@ -107,7 +105,7 @@ export function corsMatch(settings: Settings): CorsMatch {
 export function corsAllows(r: Request, s: Settings, origin: string): boolean {
   const m = corsMatch(s)
   if (!m.on) return false
-  const endpoint = r.raw ? (r.raw.url ?? '/').split('?')[0]! : r.agent.via === 'mcp' ? '/mcp' : undefined
+  const endpoint = r.raw ? (r.raw.url ?? '/').split('?')[0]! : r.agent.via === 'mcp' ? MCP_PATH : undefined
   const method = (r.raw?.method ?? 'POST').toUpperCase()
   if (endpoint === undefined) return false
   const p = m.policyOf(endpoint)

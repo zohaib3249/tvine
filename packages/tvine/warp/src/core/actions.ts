@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { ActionCtx, ActionDef, ActionId, ActionRef, ActionRules } from './types.js'
 import { checkRate } from '../security/ratelimit.js'
 import { checkViewCache } from '../cache/index.js'
+import { deniesAgents } from '../security/permissions.js'
 
 export { DomainError } from './errors.js'
 
@@ -152,6 +153,10 @@ export class ActionManifest {
     if (perms.length) rules.permissions = perms
     checkRate(`action ${id}`, rules.rate)
     checkViewCache(id, rules)
+    // secretResult blanks hook payloads only — without denyAgents/humanOnly an agent could still see the live reply
+    if (rules.secretResult && !rules.humanOnly && !(rules.permissions ?? []).some(deniesAgents)) {
+      throw new Error(`action ${id}: rules.secretResult requires denyAgents or humanOnly (otherwise agents can read the one-time secret in the reply)`)
+    }
     const names = new Set(paramSpecs({ schema: def.schema }).map((p) => p.name))
     for (const k of rules.bind ?? []) if (!names.has(k)) throw new Error(`action ${id}: bind key "${k}" is not a param of its schema`)
     qualified.set(def, id)

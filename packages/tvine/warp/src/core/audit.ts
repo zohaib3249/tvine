@@ -1,6 +1,5 @@
 // core/audit — the audit trail's hook point (BACKLOG #1). Dispatch builds one row per audited command; tvine.audit
 // (contrib/audit) installs the sink that stores it. No sink (app not installed / audit off) = nothing is written.
-import { createHash } from 'node:crypto'
 import { redactSecrets } from './redact.js'
 import type { ActionDef, Request, Settings } from './types.js'
 import { getLogger } from '../log.js'
@@ -37,7 +36,8 @@ export function viaOf(r: Request): AuditVia {
   return r.agent.via === 'webmcp' ? 'webmcp' : r.agent.via === 'channel' ? 'tab' : 'agent'
 }
 
-export const sidHash = (sid: string | undefined) => (sid ? createHash('sha256').update(sid).digest('hex').slice(0, 32) : null)
+import { sidHashAudit as sidHash } from '../security/sid-hash.js'
+export { sidHash }
 
 export function redactParams(settings: Settings, params: unknown): unknown {
   return redactSecrets(params, 0, new Set(settings.audit.redact.map((k) => k.toLowerCase())))

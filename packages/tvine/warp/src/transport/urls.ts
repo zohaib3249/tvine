@@ -6,7 +6,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import type { UrlTable } from '../urls.js'
 import { coerceQuery, creates } from '../views/generic.js'
-import { API_FORBIDDEN, apiFail, callerOf, invoke, readBody, sendApi, tooDeep, type ApiTransportOptions } from './api.js'
+import { API_FORBIDDEN, apiFail, callerOf, invoke, sendApi, type ApiTransportOptions } from './api.js'
+import { readJsonObject } from './body.js'
 
 export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransportOptions): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
   const { settings } = server
@@ -21,16 +22,16 @@ export function urlsTransport(server: ServerCtx, urls: UrlTable, o: ApiTransport
       const q = new URL(req.url ?? '/', 'http://tvine.local').searchParams
       for (const k of new Set(q.keys())) { const all = q.getAll(k); given[k] = all.length > 1 ? all : all[0] }
       given = coerceQuery(def, given)
-    } else {
-      const raw = await readBody(req, settings.limits.bodyBytes)
-      if (raw === null) { res.setHeader('connection', 'close'); return sendApi(res, apiFail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
-      if (raw.length) {
-        if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return sendApi(res, apiFail('invalid_param', 'Content-Type must be application/json'))
-        let body: unknown
-        try { body = JSON.parse(raw) } catch { return sendApi(res, apiFail('invalid_param', 'body is not valid JSON')) }
-        if (typeof body !== 'object' || body === null || Array.isArray(body) || tooDeep(body)) return sendApi(res, apiFail('invalid_param', 'body must be a JSON object (the params)'))
-        given = body as Record<string, unknown>
+    } else if (req.method !== 'GET' && req.method !== 'HEAD') {
+      if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? '')) && (req.headers['content-length'] ?? '0') !== '0') {
+        return sendApi(res, apiFail('invalid_param', 'Content-Type must be application/json'))
       }
+      const parsed = await readJsonObject(req, settings.limits.bodyBytes)
+      if (!parsed.ok) {
+        if (parsed.reason === 'too_large') { res.setHeader('connection', 'close'); return sendApi(res, apiFail('invalid_param', `request body exceeds ${settings.limits.bodyBytes} bytes`), 413) }
+        if (parsed.reason === 'not_json') return sendApi(res, apiFail('invalid_param', 'body is not valid JSON'))
+        if (parsed.reason === 'not_object' || parsed.reason === 'too_deep') return sendApi(res, apiFail('invalid_param', 'body must be a JSON object (the params)'))
+      } else given = parsed.value
     }
     for (const [k, v] of Object.entries(hit.params)) {
       if (k in given && String(given[k]) !== String(v)) return sendApi(res, { ok: false, code: 'invalid_param', field: k, message: `${k}: the URL says ${String(v)}, the request says ${String(given[k])}` })

@@ -61,7 +61,7 @@ functions keeps the default HTTP list.
 
 | Middleware | Option | Type | Default | Meaning |
 |---|---|---|---|---|
-| `AllowedHosts` | `hosts` | `string[]` | `settings.allowedHosts` | Replaces the host list. `'*'`, `'.example.com'` (with subdomains), `'*.example.com'`, exact, `[ipv6]`. |
+| `AllowedHosts` | `hosts` | `string[]` | `settings.allowedHosts` | Replaces the host list. `'.example.com'` (with subdomains), `'*.example.com'`, exact, `[ipv6]`. `'*'` is refused in production (settings or middleware `hosts`). |
 | `SslRedirect` | `exempt` | `string[]` | — | Path prefixes not redirected. |
 | | `host` | `string` | the request host | Redirect target host. |
 | `RateLimit` | `limit` | `number` | `5 × settings.limits.rate.limit` (300) | Requests per window per IP. |

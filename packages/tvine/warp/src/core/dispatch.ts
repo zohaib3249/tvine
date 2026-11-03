@@ -21,7 +21,7 @@ import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
 import { cookieValue } from '../security/cookie.js'
 import { checkAll, ipKey, type Limiter, type RateItem } from '../security/ratelimit.js'
-import { AGENTS_DENIED } from '../security/permissions.js'
+import { AGENTS_DENIED, deniesAgents } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
 import { metrics, statTap, stats } from './metrics.js'
 import type { Ctx } from '../serialize/envelope.js'
@@ -341,8 +341,15 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   // 2'. a retry of a FINISHED command replays before any rate token is spent (peek: creates nothing)
   const hash = cmd.cmdId ? hashParams({ action: cmd.action, params: cmd.params, bind: cmd.bind }) : ''
   const known = cmd.cmdId ? opts.session ?? await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }) : undefined
-  // humanOnly actions never replay here: the agent mark (agentCmd, tab mark) is only known after the session (4.1 below)
-  if (known && !server.actions.get(cmd.action)?.rules?.humanOnly) {
+  // humanOnly / secretResult / denyAgents / mcp:false never early-replay: agent mark is only known after the
+  // session (4.1); an agent must not get a stored human result (tokens, TOTP secrets) or skip unknown_action.
+  // mcp.exclude is MCP listing/do only — not this gate (admin.* stays callable on agent HTTP for field checks).
+  const earlyDef = server.actions.get(cmd.action)
+  const earlySkip = !!earlyDef?.rules?.humanOnly
+    || !!earlyDef?.rules?.secretResult
+    || !!earlyDef?.rules?.permissions?.some(deniesAgents)
+    || earlyDef?.rules?.mcp === false
+  if (known && !earlySkip) {
     const r = await server.idempotency.replay(known.sid, cmd.cmdId!, hash)
     if (r.hit === true) return { sid: known.sid, events: r.events }
   }
@@ -373,10 +380,11 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   if (ho && request.agent.is) {
     return { sid, events: [ev.err('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : cmd.action}); ask the user to do it`, { reason: 'human_only' })] }
   }
-  // mcp:false: refuse direct agent calls (do / api / typed MCP) as `unknown_action`, same as MCP.
-  // Bound calls stay allowed: headless `ui` session-map dispatches weft.uiState (mcp:false) with a signed bind
-  // (core/ui.ts). markCalls already hides unbound mcp:false controls from the agent snapshot.
-  if (rules?.mcp === false && request.agent.is && !cmd.bind) {
+  // mcp:false: refuse unbound agent calls as `unknown_action` on every transport (password auth, etc.).
+  // settings.mcp.exclude is MCP tools/`do`/manifest/snapshots only — not this gate (admin.* stays on agent HTTP).
+  // Bound calls stay allowed: headless `ui` → weft.uiState with a signed bind (core/ui.ts).
+  const def = server.actions.get(cmd.action)
+  if (def?.rules?.mcp === false && request.agent.is && !cmd.bind) {
     return { sid, events: [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`)] }
   }
   // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
@@ -386,14 +394,23 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
     throw e
   }))
   if (!cmd.cmdId) return { sid, events: await locked(() => pipeline(cmd, server, request, session, '', hold)) }
+  // Agents must not join a human's in-flight/claim wait for secretResult / denyAgents (same as finished replay).
+  // humanOnly / mcp:false already returned above.
+  const agentReplayBlock = request.agent.is
+    && (!!def?.rules?.secretResult || !!def?.rules?.permissions?.some(deniesAgents))
+    ? [ev.err('domain', 'forbidden', { reason: 'forbidden' })]
+    : undefined
   // 2a. in-flight dedupe (2b, the stored replay, runs inside the chain)
   const key = `${sid}:${cmd.cmdId}`
   const running = inFlight.get(key)
   if (running) {
     const r = await running
-    return { sid, events: r.hash === hash ? r.events : [conflict()] }
+    if (r.hash !== hash) return { sid, events: [conflict()] }
+    if (agentReplayBlock) return { sid, events: agentReplayBlock }
+    return { sid, events: r.events }
   }
-  const p = runOnce(server, sid, cmd.cmdId, hash, hold, () => locked(() => pipeline(cmd, server, request, session, hash, hold))).then((events) => ({ hash, events }))
+  const p = runOnce(server, sid, cmd.cmdId, hash, hold, () => locked(() => pipeline(cmd, server, request, session, hash, hold)), agentReplayBlock)
+    .then((events) => ({ hash, events }))
   inFlight.set(key, p)
   try { return { sid, events: (await p).events } } finally {
     // held until the handler itself settles (not the timeout): a retry never runs it a second time
@@ -404,7 +421,11 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
 // A shared idempotency store (limits.backend 'redis'): the sid:cmdId is claimed across servers while it runs. A
 // retry that reaches another server meanwhile waits for the stored result instead of running it a second time.
 // The claim is released when the handler itself settles (like inFlight), or by its TTL if this process dies.
-async function runOnce(server: ServerCtx, sid: Sid, cmdId: string, hash: string, hold: Hold, run: () => Promise<Event[]>): Promise<Event[]> {
+async function runOnce(
+  server: ServerCtx, sid: Sid, cmdId: string, hash: string, hold: Hold,
+  run: () => Promise<Event[]>,
+  agentReplayBlock?: Event[],
+): Promise<Event[]> {
   const idem = server.idempotency
   if (!idem.claim) return run()
   const ttl = 4 * server.settings.limits.handlerMs + 15_000
@@ -412,7 +433,7 @@ async function runOnce(server: ServerCtx, sid: Sid, cmdId: string, hash: string,
   while (!(await idem.claim(sid, cmdId, ttl))) {
     const r = await idem.replay(sid, cmdId, hash)
     if (r.hit === 'conflict') return [conflict()]
-    if (r.hit) return r.events
+    if (r.hit) return agentReplayBlock ?? r.events
     if (Date.now() > until) return [rateLimited(1000)]
     await new Promise((ok) => setTimeout(ok, 50))
   }
@@ -460,13 +481,18 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
   if (!(await server.sessions.isLive(session))) return [ev.err('expired_sid', 'session expired or replaced; re-read the page for a new sid')]
   let live = session   // the session after this command (a rotation replaces it)
   hold.live = live
-  // 2b. idempotency replay
-  if (cmd.cmdId) {
-    const r = await server.idempotency.replay(sid, cmd.cmdId, hash)
-    if (r.hit === 'conflict') return [conflict()]
-    if (r.hit) return r.events
-  }
   const def = server.actions.get(cmd.action)
+  // 2b. idempotency replay — never before permissions for agent-sensitive actions (secretResult / denyAgents /
+  // mcp:false): an agent must not receive a stored human result. humanOnly / mcp:false already returned above.
+  if (cmd.cmdId) {
+    const agentSkip = request.agent.is && (!!def?.rules?.secretResult || !!def?.rules?.permissions?.some(deniesAgents)
+      || def?.rules?.mcp === false || !!def?.rules?.humanOnly)
+    if (!agentSkip) {
+      const r = await server.idempotency.replay(sid, cmd.cmdId, hash)
+      if (r.hit === 'conflict') return [conflict()]
+      if (r.hit) return r.events
+    }
+  }
   // 4. resolve action
   if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid, session.rev) })]
 

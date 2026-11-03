@@ -11,10 +11,11 @@
 import { isProduction } from '../env.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { sidHash } from '../core/audit.js'
+import { httpsOf } from '../core/request.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ServerCtx } from '../core/dispatch.js'
 import { clientIp, forwardedHostOf, sameOrigin as originMatches } from '../core/request.js'
-import { readBody, tooDeep } from './body.js'
+import { readJsonObject } from './body.js'
 import { cookieHeader } from '../core/session.js'
 import type { ErrCode, Session, Settings, Sid } from '../core/types.js'
 import { cookieValue } from '../security/cookie.js'
@@ -408,8 +409,6 @@ const AGENT_PATH = /^\/tvine\/agent\/(control|release)$/
 
 const hdrOf = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
 const hostOf = (req: IncomingMessage, settings: Settings) => forwardedHostOf(req, settings.trustProxy)   // X-Forwarded-Host per trusted hops
-const httpsOf = (req: IncomingMessage, settings: Settings) => (req.socket as { encrypted?: boolean }).encrypted === true ||
-  (settings.trustProxy > 0 && String(req.headers['x-forwarded-proto'] ?? '').split(',').map((s) => s.trim()).at(-settings.trustProxy) === 'https')
 // The site's public origin as this request reached it (scheme by the same trusted hops as request.ip); '' if no Host.
 // The public origin for absolute links the server builds (approveUrl, sitemap): settings.siteUrl, else this request's
 // Host once the AllowedHosts middleware validated it (req.tvine.host). Unvalidated: dev keeps the Host; production
@@ -438,12 +437,8 @@ export function tabTransport(server: ServerCtx, hub: TabHub): (req: IncomingMess
 
   async function body(req: IncomingMessage, cap: number): Promise<Record<string, unknown> | undefined> {
     if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] ?? ''))) return undefined
-    const raw = await readBody(req, cap)
-    if (!raw) return undefined
-    try {
-      const v: unknown = JSON.parse(raw.toString('utf8') || '{}')
-      return typeof v === 'object' && v !== null && !Array.isArray(v) && !tooDeep(v) ? v as Record<string, unknown> : undefined
-    } catch { return undefined }
+    const got = await readJsonObject(req, cap)
+    return got.ok ? got.value : undefined
   }
 
   // x-tvine-tab: '1' on hello, else the tabId. Checked in this order, all BEFORE the body is read:

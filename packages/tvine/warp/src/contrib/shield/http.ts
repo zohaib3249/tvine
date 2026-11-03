@@ -17,7 +17,7 @@ import { cookieValue } from '../../security/cookie.js'
 import { collectSignals, ipNetOf, type SignalInput } from './signals.js'
 import { maybeReload } from './store.js'
 import { dumps, loads } from '../../security/signing.js'
-import { readBody, tooDeep } from '../../transport/body.js'
+import { readJsonObject } from '../../transport/body.js'
 import { agentHint, DISCOVERY_PATH, LLMS_PATH, MCP_PATH } from '../../transport/agent-copy.js'
 import type { ChallengeLevel, Decision, SensorReport, Signals } from './types.js'
 import { verifyWebBotAuth } from './webbotauth.js'
@@ -55,12 +55,8 @@ function send(res: ServerResponse, status: number, body: string, type: string, h
 const json = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => send(res, status, JSON.stringify(body), 'application/json; charset=utf-8', headers)
 
 async function readJson(req: IncomingMessage, cap = 32_768): Promise<Record<string, unknown> | undefined> {
-  const raw = await readBody(req, cap)
-  if (!raw) return undefined
-  try {
-    const v: unknown = JSON.parse(raw.toString('utf8'))
-    return v && typeof v === 'object' && !Array.isArray(v) && !tooDeep(v) ? v as Record<string, unknown> : undefined
-  } catch { return undefined }
+  const got = await readJsonObject(req, cap)
+  return got.ok ? got.value : undefined
 }
 
 // the challenge page: static/challenge.html with {{nonce}} {{prefix}} {{level}} {{return}} {{header}} {{mcp}} {{llms}} {{discovery}}.

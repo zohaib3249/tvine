@@ -17,7 +17,7 @@ packages/tvine/           the single npm package `tvinejs` (imported as `tvine`)
   AGENTS.md               the AI guide for app builders (shipped in the package, written into new projects)
 examples/notes/           the tutorial app (docs/getting-started.md), built against the workspace package
 docs/*.md                 public user guides; docs/design/ is internal and must not be linked from public docs
-llms.txt, llms-full.txt   LLM indexes of the docs (llms-full.txt is generated)
+llms.txt, llms-full.txt   LLM indexes at repo root (committed; generated). packages/tvine/llms* + docs/ are npm-only (--package), git-ignored
 scripts/                  check-doc-links.mjs, build-llms.mjs
 ```
 

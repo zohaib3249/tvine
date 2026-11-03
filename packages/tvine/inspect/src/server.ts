@@ -1,18 +1,16 @@
 // The inspector UI: one static page + three GET endpoints, on loopback only. It reaches the target only
 // through public surfaces (agent GETs, /tvine/channel?group=inspector, /tvine/manifest), so every
 // target guard still applies: the page sees exactly what any agent would.
-import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { sidHashLog as sidHash } from '../../warp/dist/security/sid-hash.js'
 
 export interface InspectorOptions { target: string; port?: number }
 export interface Inspector { url: string; address: string; port: number; close(): Promise<void> }
 
 const HOST = '127.0.0.1'   // ponytail: loopback only, no --host flag; the page proxies a dev server's agent view
 const PAGE = new URL('../static/index.html', import.meta.url)
-// same short hash warp puts in rows: lets the log hide the inspector's own page reads
-const sidHash = (sid: string) => createHash('sha256').update(sid).digest('base64url').slice(0, 12)
 
 export async function startInspector(o: InspectorOptions): Promise<Inspector> {
   if (process.env.NODE_ENV === 'production') throw new Error('tvine inspect is a dev tool and refuses to run with NODE_ENV=production')

@@ -39,9 +39,9 @@ and which backend each subsystem uses.
 |---|---|---|
 | `site` | `{ name, description }`: shown to agents (`/llms.txt`, MCP) and in the admin | — |
 | `installedApps` | built-in apps: `tvine.auth`, `tvine.tasks`, `tvine.admin`, `tvine.audit` | `[]` |
-| `secret` | HMAC key, 32+ chars; an array (or `TVINE_SECRET=new,old`) rotates keys | dev: random; prod: required |
+| `secret` | HMAC key, 32+ chars; an array (or `TVINE_SECRET=new,old`) rotates keys | `startproject` writes `secret: env.get('TVINE_SECRET', '<random>')` in `base.ts` (`.env` / env wins); prod still requires `TVINE_SECRET` |
 | `debug` | debug mode: dev CSP, inspector feed, helpful errors | on under `tvine dev` and `NODE_ENV=development` |
-| `allowedHosts` | allowed `Host` names (`*`, `.example.com`); others get a 400 | dev: localhost; prod: required |
+| `allowedHosts` | allowed `Host` names (`.example.com` = host + subdomains); others get a 400. `'*'` is **dev-only** (production boot refuses it) | dev: localhost; prod: required |
 | `dev.allowedHosts` | dev only, added on top: port forwarding / tunnel hosts (`'*.ngrok-free.app'`, `'*.devtunnels.ms'`); also `TVINE_DEV_ALLOWED_HOSTS`. In dev a refused host's 400 names the line to add | `[]` |
 | `db` | `{ url, pool: { max, acquireMs, idleMs }, atomicRequests, slowQueryMs }` | `file:./tvine.db`, one transaction per request |
 | `session` | `{ ttlMs, maxAgeMs, cookieName, secure, sameSite, max, backend }` | 24 h idle, 14 days max, `lax` |
@@ -325,12 +325,12 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 |---|---|---|
 | `site.name` / `site.description` | `'tvine app'` / `''` | shown to agents (`/llms.txt`, MCP) and in the admin |
 | `siteUrl` | unset (the request's Host) | public origin like `https://shop.example` for links the server builds (approve links, sitemap) |
-| `secret` | dev: random per boot; prod: `TVINE_SECRET`, required | HMAC key, 32+ chars; an array rotates (newest first) |
+| `secret` | `env.get('TVINE_SECRET', '<startproject random>')` in new projects; else framework: env → (dev) per-boot random; prod requires `TVINE_SECRET` | HMAC key, 32+ chars; an array rotates (newest first) |
 | `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | dev CSP, inspector feed, `ServerTiming` |
 | `installedApps` | `[]` | project apps by folder (`'blog'`) and built-ins `'tvine.auth'`, `'tvine.tasks'`, `'tvine.admin'`, `'tvine.audit'`, `'tvine.shield'` |
 | `rootUrlconf` | `config/urls`, else `urls` | the root URL table, a path from the project root without extension |
 | `tasksModule` | `config/tasks` | where `tvine worker` finds queues and `beatSchedule` |
-| `allowedHosts` | dev: localhost, LAN IPs, hostname; prod: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`, `'*'` |
+| `allowedHosts` | dev: localhost, LAN IPs, hostname; prod: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`. `'*'` refused in production |
 | `dev.allowedHosts` | `[]` | dev only, extra hosts such as `'*.ngrok-free.app'` |
 | `trustProxy` | `0` | `X-Forwarded-For` hops to trust (drives `request.ip`, https detection) |
 | `health.token` | unset | 16+ chars: `/tvine/health` gives details to `Authorization: Bearer <token>`; others get `{ ok }` ([deploy.md](deploy.md)) |
@@ -345,7 +345,7 @@ Every key `defineSettings` accepts, with its default. Unknown keys inside strict
 | `formats.default` | `'json'` | what an agent request gets with no `Accept` choice: `'json'` or `'notation'` |
 | `formats.notationPath` | `true` | serve `<page>/agent.txt` (the page in line notation); `<page>/agent.json` is always served |
 | `mcp.tools` | `'both'` | `'both'` (six generic + typed), `'generic'`, `'typed'` ([agents-and-mcp.md](agents-and-mcp.md#which-tools-are-exposed)) |
-| `mcp.exclude` | `[]` | globs on action ids kept out of typed tools (`'admin.**'`) |
+| `mcp.exclude` | `['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword']` | globs off MCP tools/`do`/manifest/snapshots. Password auth also has `mcp: false` so unbound agents are refused on every transport |
 | `mcp.maxTools` | `40` | typed tools above this are trimmed (still reachable through `do`) |
 | `agent.shape` | `'v2'` | snapshot format; `'v1'` is the old one, kept for one release |
 | `agent.budget` | `1500` | token budget for `view=auto` |

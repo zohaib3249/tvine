@@ -230,7 +230,7 @@ packages/tvine/     the one npm package `tvinejs` (imported as `tvine`)
 examples/
   notes/     the getting-started app
 docs/        user guides (index: docs/README.md)
-scripts/     build-llms.mjs: builds llms.txt, llms-full.txt and the package's docs/
+scripts/     build-llms.mjs: root llms.txt / llms-full.txt; `--package` fills packages/tvine for npm (git-ignored)
 ```
 
 ## Requirements

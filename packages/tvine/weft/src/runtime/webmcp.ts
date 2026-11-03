@@ -10,7 +10,7 @@ import { currentPage, markSeen, navNotice, pendingRegions, settle } from './nav.
 
 // WebMCP adapter (transports.md §WebMCP): read_page, expand, ui, do for an in-browser agent in the
 // user's own tab. read_page/expand/ui run locally on the registry; do POSTs. Registered by <WeftRoot>
-// by default, in production too (security.md). Stop blocks every tool until the human clicks Resume.
+// when inTab is on (dev default; production needs inTab="on"). Stop blocks every tool until Resume.
 // The httpOnly session cookie is the agent's session: never read or sent from JS.
 
 type McTool = {

@@ -308,7 +308,7 @@ export const wipe = defineAction('wipe', z.object({}), async () => ({ n: await P
 - `humanOnly`: every agent path gets a 403 `human_only`. In the UI, wrap the button with
   `<HumanOnly reason="...">` from `tvine/weft`. The flag on the action is the real guard.
 - Also available: `staffMemberRequired`, `userPassesTest(fn)`, `isAuthenticated`, `hasPerm`, `rate: { limit, windowMs }`
-  and `mcp: false` (hidden from MCP).
+  and `mcp: false` (refused for unbound agents on every transport; no MCP tool).
   On a class view, use `permissions = [...]`. On `@action`, use `{ permissions }`.
 
 ### 9. Extend the user model (do it before the first migrate)
@@ -361,7 +361,7 @@ export default defineSettings({
 ```
 
 - Shared keys go in `base.ts`. Machine-only overrides go in `config/settings/local.ts`, which is a plain object.
-- Secrets come from the environment (`.env` in dev): `TVINE_SECRET`, `DATABASE_URL`, `TVINE_ALLOWED_HOSTS`.
+- Secrets: `startproject` bakes `secret: env.get('TVINE_SECRET', '<random>')` into `config/settings/base.ts` (and the same value in `.env`). Env / `.env` wins when set; prod still requires `TVINE_SECRET`. Also `DATABASE_URL`, `TVINE_ALLOWED_HOSTS`.
 - Read env values with `env.str / int / bool / url / json`.
 - Every key is listed in the settings guide below.
 

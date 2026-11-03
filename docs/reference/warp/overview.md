@@ -73,8 +73,8 @@ ORM writes the handler did not `await` still finish (in call order) before the r
 - Boot calls `discover(appsDir)`: every installed app's `views.ts` exports are scanned. `defineAction(name, schema, fn, rules)` values and View classes (their generated actions plus `@action` methods) are registered with id `<app>.<name>`.
 - `mcpTools()` (`transport/mcp.ts`) builds the MCP tool list: generic tools `read_page`, `expand`, `ui`, `do`, `request_control`, `release`, then one typed tool per action named with dots turned into underscores (`shop.placeOrder` → `shop_placeOrder`). Its input schema is the action's zod schema as JSON Schema.
 - `settings.mcp.tools`: `'both'` (generic + typed), `'generic'`, or `'typed'`.
-- An action gets no typed tool (but is still reachable via `do`) when: `rules.mcp === false`, its id matches a glob in `settings.mcp.exclude` (`*` = one dotted segment, `**` = any depth), it is human-only / staff-only / denies agents, its params schema is not an object, or the name collides.
-- Over `settings.mcp.maxTools`, typed tools are trimmed to actions with `rules.priority`.
+- An action gets no typed tool when: `rules.mcp === false`, its id matches `settings.mcp.exclude` (`*` = one dotted segment, `**` = any depth), it is human-only / staff-only / denies agents, its params schema is not an object, or the name collides. `mcp:false` and exclude are also refused by MCP `do`. Unbound agents on **every** transport get `unknown_action` for `mcp:false`; `mcp.exclude` alone still allows agent HTTP (see [agents-and-mcp.md](../../../agents-and-mcp.md)).
+- Over `settings.mcp.maxTools`, typed tools are trimmed to actions with `rules.priority` (trimmed actions remain reachable via MCP `do` unless also `mcp:false` / exclude).
 - `readOnlyHint` / `destructiveHint` annotations come from `rules.readOnly` / `rules.destructive`.
 
 ## A minimal app (shop)

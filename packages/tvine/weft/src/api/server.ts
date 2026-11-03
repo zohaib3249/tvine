@@ -33,9 +33,10 @@ function trusted(v: string | null): string | undefined {
 
 // header: the API server's settings.header (TVINE_HEADER; default 'x-tvine') — weft has no settings in split mode
 export function forwardTransport(o: { url: string; secret: string; cookieName?: string; header?: string; next?: () => Promise<NextAccess> }): Transport {
-  // the API server's settings.session (secreview M2): secure in production → the __Host- name; env overrides both
+  // Split mode has no Warp settings module: mirror settings.session via env (must match the API process).
+  // TVINE_COOKIE_NAME | TVINE_SESSION_SECURE | TVINE_SESSION_SAMESITE | TVINE_SESSION_TTL_S | TVINE_TRUST_PROXY | TVINE_HEADER
   const secure = process.env.TVINE_SESSION_SECURE !== undefined ? process.env.TVINE_SESSION_SECURE === '1' : process.env.NODE_ENV === 'production'
-  const name = o.cookieName ?? (secure ? '__Host-tvine_s' : 'tvine_s')
+  const name = o.cookieName ?? process.env.TVINE_COOKIE_NAME ?? (secure ? '__Host-tvine_s' : 'tvine_s')
   const sameSite = (process.env.TVINE_SESSION_SAMESITE ?? 'lax') as 'lax' | 'strict' | 'none'
   return async (id, params, opts?: ApiOpts) => {
     const n = await (o.next ?? nextAccess)()

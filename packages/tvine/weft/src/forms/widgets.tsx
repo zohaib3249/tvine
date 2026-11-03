@@ -1,7 +1,7 @@
 'use client'
 // One built-in widget per FieldKind, on native elements. Each gets FieldWidgetProps (form-shape value).
 // Classes are `tf-*` (forms.css); every part also carries data-attributes for Tailwind (`data-[invalid]:…`).
-import { useState, type ChangeEvent, type ReactElement, type ReactNode } from 'react'
+import { useState, type ReactElement, type ReactNode } from 'react'
 import type { FieldKind, FieldWidget, FieldWidgetProps, SearchResult } from './types.js'
 import { countryName, sanitizeHtml } from './rich.js'
 import { RichEditor } from './rich-editor.js'
@@ -10,12 +10,7 @@ import { markdownToHtml } from './richdoc.js'
 import { fromApi, validateField } from './values.js'
 import { Dropdown, FileDrop, MultiSelect, type Opt } from './select.js'
 import * as I from './inputs.js'
-
-const common = (p: FieldWidgetProps) => ({
-  id: p.id, name: p.name, disabled: p.readOnly, required: p.meta.required,
-  'aria-invalid': p.invalid || undefined, 'aria-describedby': p.describedBy,
-})
-const ev = (f: (v: string) => void) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => f(e.target.value)
+const { common, ev } = I
 
 const INPUT_TYPE: Partial<Record<FieldKind, string>> = { text: 'text', email: 'email', url: 'url', slug: 'text', uuid: 'text', date: 'date', datetime: 'datetime-local', time: 'time' }
 

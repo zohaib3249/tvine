@@ -72,6 +72,19 @@ export function forwardedHost(get: (n: string) => string | null | undefined, tru
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
 export const forwardedHostOf = (req: IncomingMessage, trustProxy: number) => forwardedHost((n) => first(req.headers[n]), trustProxy)
 
+/** X-Forwarded-Proto through the same trusted hops as clientIp (rightmost `trustProxy`). */
+export function xfpHttps(xfp: string | undefined, hops: number): boolean {
+  if (hops <= 0) return false
+  const parts = String(xfp ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  return parts[parts.length - hops] === 'https'
+}
+
+/** Socket TLS, or trusted X-Forwarded-Proto. Shared by server stamp + tab originOf. */
+export function httpsOf(req: IncomingMessage, settings: Pick<Settings, 'trustProxy'>): boolean {
+  if ((req.socket as { encrypted?: boolean }).encrypted) return true
+  return xfpHttps(first(req.headers['x-forwarded-proto']) ?? undefined, settings.trustProxy)
+}
+
 // Origin URL host equals the request Host (case-insensitive). Shared by sameOrigin and dispatch crossOrigin.
 export function originMatchesHost(origin: string, host: string | undefined): boolean {
   if (!host) return false

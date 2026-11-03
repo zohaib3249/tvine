@@ -1,13 +1,15 @@
 // Builds the agent-readable docs from packages/tvine/AGENTS.md + docs/*.md, so they never drift:
-//   llms.txt, llms-full.txt                          (repo root, committed; links point at GitHub)
-//   packages/tvine/{llms.txt, llms-full.txt, docs/}  (shipped in the npm package; git-ignored)
+//   llms.txt, llms-full.txt                          (repo root, committed; GitHub links)
+//   packages/tvine/{llms.txt, llms-full.txt, docs/}  (npm only: git-ignored; written with --package)
 // Guide list + one-line descriptions come from the table in docs/README.md. docs/design is internal and left out.
-// Run: node scripts/build-llms.mjs (also runs from the packages/tvine build and prepack).
+// Run: node scripts/build-llms.mjs           → root only (keeps the working tree clean)
+//      node scripts/build-llms.mjs --package → root + packages/tvine (prepack / package build)
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const root = resolve(dirname(new URL(import.meta.url).pathname), '..')
 const pkg = join(root, 'packages/tvine')
+const forPackage = process.argv.includes('--package')
 const GH = 'https://github.com/zohaib3249/tvine/blob/main'
 const RAW = 'https://raw.githubusercontent.com/zohaib3249/tvine/main'
 const read = (p) => readFileSync(join(root, p), 'utf8').trim()
@@ -80,14 +82,23 @@ const llms = (link, inPackage) => [
   `- [Releasing](${GH}/docs/releasing.md): publishing a new version (maintainers)`,
   ''].join('\n')
 
+// Always: committed repo copies (one source of truth for GitHub / agents browsing this clone).
 writeFileSync(join(root, 'llms-full.txt'), full)
 writeFileSync(join(root, 'llms.txt'), llms((f) => `${GH}/docs/${f}`, false))
-writeFileSync(join(pkg, 'llms-full.txt'), full)
-writeFileSync(join(pkg, 'llms.txt'), llms((f) => `docs/${f}`, true))
-rmSync(join(pkg, 'docs'), { recursive: true, force: true })
-mkdirSync(join(pkg, 'docs'))
-const shipped = ['README.md', ...guides]
-for (const f of shipped) writeFileSync(join(pkg, 'docs', f), fix(read(`docs/${f}`), shipped) + '\n')
-// the reference ships as-is (its links are relative inside docs/, which ships whole)
-for (const f of refs) { mkdirSync(join(pkg, 'docs/reference', dirname(f)), { recursive: true }); writeFileSync(join(pkg, 'docs/reference', f), read(`docs/reference/${f}`)) }
-console.error(`llms-full.txt: ${guides.length + 1 + refs.length} files, ${full.length} chars; packages/tvine/docs: ${guides.length + 1} guides + ${refs.length} reference files`)
+
+if (forPackage) {
+  writeFileSync(join(pkg, 'llms-full.txt'), full)
+  writeFileSync(join(pkg, 'llms.txt'), llms((f) => `docs/${f}`, true))
+  rmSync(join(pkg, 'docs'), { recursive: true, force: true })
+  mkdirSync(join(pkg, 'docs'))
+  const shipped = ['README.md', ...guides]
+  for (const f of shipped) writeFileSync(join(pkg, 'docs', f), fix(read(`docs/${f}`), shipped) + '\n')
+  for (const f of refs) { mkdirSync(join(pkg, 'docs/reference', dirname(f)), { recursive: true }); writeFileSync(join(pkg, 'docs/reference', f), read(`docs/reference/${f}`)) }
+  console.error(`llms-full.txt: ${guides.length + 1 + refs.length} files, ${full.length} chars; packages/tvine/docs: ${guides.length + 1} guides + ${refs.length} reference files`)
+} else {
+  // Keep the working tree clean: package copies are git-ignored build artifacts for npm only.
+  rmSync(join(pkg, 'llms-full.txt'), { force: true })
+  rmSync(join(pkg, 'llms.txt'), { force: true })
+  rmSync(join(pkg, 'docs'), { recursive: true, force: true })
+  console.error(`llms-full.txt: ${guides.length + 1 + refs.length} files, ${full.length} chars (repo root only; pass --package to fill packages/tvine for npm)`)
+}

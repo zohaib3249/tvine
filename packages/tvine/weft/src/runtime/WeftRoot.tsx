@@ -15,9 +15,9 @@ import { devReload } from './devReload.js'
 // every mounted root's hooks run, innermost first. Each root's hooks apply PAGE-WIDE (to every
 // registered widget), not just to the widgets rendered inside it. `auto={false}`: the JSX runtime stays,
 // auto-registration of plain HTML inside is skipped (jsx-runtime.md §Performance). W4: WebMCP tools are registered
-// by default, in production too (`inTab="off"` is the app's opt-out); `presence={false}` hides outline/cursor/label,
-// never the Stop pill. W7: the tab socket (remote control after one Allow) is on by default too. W8: the root lives in the root layout, so the registry, tab socket and nav watcher survive client navigations.
-export function WeftRoot({ hooks, auto, children, inTab = 'on', presence, header }: { hooks?: WidgetHooks; auto?: boolean; children?: ReactNode; inTab?: 'on' | 'off'; presence?: false | PresenceOptions; header?: string }) {
+// by default in development; production defaults to off (set inTab="on" to enable WebMCP + tab control).
+// `presence={false}` hides outline/cursor/label, never the Stop pill. W8: root layout so registry/tab/nav survive navigations.
+export function WeftRoot({ hooks, auto, children, inTab = process.env.NODE_ENV === 'production' ? 'off' : 'on', presence, header }: { hooks?: WidgetHooks; auto?: boolean; children?: ReactNode; inTab?: 'on' | 'off'; presence?: false | PresenceOptions; header?: string }) {
   const holder = useRef<{ hooks?: WidgetHooks }>({})
   useLayoutEffect(() => { holder.current.hooks = hooks })
   useLayoutEffect(() => getRegistry().addRoot(holder.current), [])

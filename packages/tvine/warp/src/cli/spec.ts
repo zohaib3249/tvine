@@ -1,6 +1,8 @@
 // tvine's command spec (docs/cli.md is generated from it: cli-docs.test.ts)
 // ---- the command spec: ONE source for parsing, `tvine help`, `--help`, the usage list and docs/cli.md ----------------
 // Each command: its group, positionals (usage text + min/max), flags (type, placeholder, default, meaning), examples.
+import { editDistance } from '../core/edit-distance.js'
+
 export interface Flag { type: 'string' | 'boolean'; arg?: string; default?: string; desc: string; short?: string }
 export interface Command { group: string; usage?: string; args: [min: number, max: number]; desc: string; flags: Record<string, Flag>; examples: string[]; passthrough?: boolean }
 const s = (arg: string, desc: string, dflt?: string): Flag => ({ type: 'string', arg, desc, ...(dflt !== undefined && { default: dflt }) })
@@ -131,16 +133,7 @@ export function cliReference(): string {
 }
 // the closest name within a small edit distance (a typo), or undefined
 export function closest(word: string, names: readonly string[]): string | undefined {
-  const d = (a: string, b: string) => {
-    let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
-    for (let i = 1; i <= a.length; i++) {
-      const cur = [i]
-      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
-      prev = cur
-    }
-    return prev[b.length]!
-  }
   let best: string | undefined, bestD = Infinity
-  for (const n of names) { const x = d(word, n); if (x < bestD) { best = n; bestD = x } }
+  for (const n of names) { const x = editDistance(word, n); if (x < bestD) { best = n; bestD = x } }
   return bestD <= Math.max(1, Math.min(3, Math.floor(word.length / 3))) ? best : undefined
 }

@@ -60,9 +60,9 @@ export function channelTransport(deps: ChannelDeps): (req: IncomingMessage, res:
     // Inspector feed: dev only, AND loopback only (localOnly).
     if (inspector && (!isDev || !localOnly(req))) return json(403, ev.err('domain', 'forbidden'))
 
-    // cookie (tabs) -> x-tvine-sid (agents) -> ?sid= (discouraged: lands in logs)
+    // cookie (tabs) -> x-tvine-sid (agents); ?sid= only in debug (lands in access logs / Referer)
     const cookie = cookieValue(hdr('cookie'), settings.session.cookieName)
-    const sidKey = hdr('x-tvine-sid') ?? url.searchParams.get('sid') ?? undefined
+    const sidKey = hdr('x-tvine-sid') ?? (settings.debug ? url.searchParams.get('sid') : null) ?? undefined
     const lookup = async (f: SessionStore['resolve']) => (cookie !== undefined && await f.call(sessions, { cookie })) || (sidKey ? f.call(sessions, { sid: sidKey }) : undefined)
     const session = inspector ? undefined : await lookup(sessions.resolve)
     const cookieSession = session !== undefined && cookie !== undefined && await sessions.peek({ cookie }) === session

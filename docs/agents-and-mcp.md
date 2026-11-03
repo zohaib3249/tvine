@@ -38,8 +38,7 @@ Or from the shell: `claude mcp add --transport http tvine-shop http://localhost:
 { "mcpServers": { "tvine-shop": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:3000/mcp"] } } }
 ```
 
-**Other clients:** add a remote MCP server (streamable HTTP) pointing at `https://<your-site>/mcp`. `/mcp` needs no auth: agents act as an anonymous visitor until they log in
-(`auth_login`) or a user lets them drive their tab.
+**Other clients:** add a remote MCP server (streamable HTTP) pointing at `https://<your-site>/mcp`. `/mcp` has **no transport auth in v1** — put it behind a network ACL or gateway in production ([deploy.md](deploy.md)). Agents act as an anonymous visitor; password login/reset are off MCP by default (`mcp: false` / `mcp.exclude`). A human can still sign in in the browser, or let an agent drive their tab after Allow.
 
 ## Check it without an agent
 
@@ -82,7 +81,7 @@ Six generic tools, always in this order, then one typed tool per action:
 | `do` | `url`, `action`, `params`, `sid?`, `cmdId?`, `bind?` | call a backend action listed on the page |
 | `request_control` | `name?`, `reason?`, `sid?` | ask to drive the user's open tab |
 | `release` | `sid` | hand the tab back |
-| `<app>_<name>` | the action's params + `sid?`, `cmdId?` | e.g. `catalog_list`, `catalog_addToCart`, `cart_setQty`, `auth_login` |
+| `<app>_<name>` | the action's params + `sid?`, `cmdId?` | e.g. `catalog_list`, `catalog_addToCart`, `cart_setQty` (password auth is excluded by default) |
 
 Typed tools carry MCP hints: `readOnlyHint` for reads, `destructiveHint` for `destructive` actions. Actions with
 `humanOnly` are never listed. Send a new `cmdId` with every change, so a retried call never runs twice.
@@ -91,15 +90,16 @@ Typed tools carry MCP hints: `readOnlyHint` for reads, `destructiveHint` for `de
 
 ```ts
 // settings.ts
-mcp: { tools: 'both', exclude: [], maxTools: 40 }   // defaults
+mcp: { tools: 'both', exclude: ['admin.*', 'auth.login', 'auth.logout', 'auth.requestPasswordReset', 'auth.resetPassword'], maxTools: 40 }   // defaults
 ```
 
 | Setting | Meaning |
 |---|---|
 | `mcp.tools` | `'both'` (generic + typed), `'generic'` (only the six), `'typed'` |
 | `mcp.exclude` | glob on action ids: `['admin.**', 'cart.setQty']` |
-| `mcp.maxTools` | above this, typed tools are trimmed (still reachable through `do`) |
-| `rules: { mcp: false }` on an action | not callable over MCP at all |
+| `mcp.maxTools` | above this, typed tools are trimmed (still reachable through MCP `do`; `mcp:false` / `mcp.exclude` are not) |
+| `rules: { mcp: false }` on an action | not callable by agents at all (MCP, `do`, agent HTTP) unless a signed bind is present |
+| `mcp.exclude` | hides from MCP tools / MCP `do` / manifest / agent snapshots; other agent transports still see the action unless `mcp: false` |
 | `export const mcp = false` in `apps/<app>/rules.ts` | the whole app off MCP |
 
 ## What the agent sees

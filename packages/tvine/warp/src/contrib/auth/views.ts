@@ -69,9 +69,8 @@ async function locked(ctx: ActionCtx, username: string): Promise<void> {
 const loginFailed = (ctx: ActionCtx, username: string, why: string) =>
   securityEvent('login_failed', { username: username.slice(0, 150), why }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
 
-// secreview L1: an agent acting in the human's tab (the tab channel, WebMCP, the inspector) never signs that browser in
-// or out. An agent on its own sid (HTTP/MCP) still may: that session is its own. The refusal is human_only with a
-// message both the agent and the human (the form's message) can act on.
+// secreview L1: in-tab agents (channel / WebMCP / inspector) never sign the browser in or out (`notInTab` → human_only).
+// Unbound agents on any transport also cannot: login/logout carry `mcp: false` → dispatch `unknown_action`.
 const notInTab = (message: string): Permission => (ctx) => {
   if (ctx.agent?.is && ['channel', 'webmcp', 'inspector'].includes(String(ctx.agent.via))) throw new DomainError('human_only', message)
   return true
@@ -95,9 +94,10 @@ async ({ otp, ...credentials }, ctx): Promise<SafeUser> => {
   securityEvent('login_ok', { userId: row.id }, { settings: ctx.settings, request: ctx.request, sid: ctx.sid })
   await checkNewDevice(ctx.settings, { id: row.id, username: String((row as Record<string, unknown>)[userMeta().usernameField]), email: emailOf(row) }, ctx.request)
   return safeUser(await login(ctx, row))
-}, { rate: { limit: 10, windowMs: 60_000 }, permissions: [notInTab('only you can sign in in this tab: the agent filled the form, please press Sign in yourself')] })
+  // mcp:false — open /mcp must not run password guessing; humans use the form (notInTab still blocks in-tab agents)
+}, { rate: { limit: 10, windowMs: 60_000 }, mcp: false, permissions: [notInTab('only you can sign in in this tab: the agent filled the form, please press Sign in yourself')] })
 
-export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { permissions: [notInTab('only you can sign out in this tab: please press Sign out yourself')] })
+export const logoutAction = defineAction('logout', z.object({}), async (_p, ctx) => { await forgetSession(ctx.session); logout(ctx); return null }, { mcp: false, permissions: [notInTab('only you can sign out in this tab: please press Sign out yourself')] })
 
 export const meAction = defineAction('me', z.object({}), async (_p, ctx): Promise<SafeUser | null> => {
   const u: TvineUser = ctx.request.user
@@ -143,7 +143,7 @@ export const requestPasswordReset = defineAction('requestPasswordReset', z.objec
     setImmediate(() => { for (const e of out) void Promise.resolve().then(() => sender(e)).catch(() => authLog.error('sending the password reset failed')) })
   })
   return null
-}, { rate: { limit: 5, windowMs: 60_000 } })
+}, { rate: { limit: 5, windowMs: 60_000 }, mcp: false })
 
 export const resetPassword = defineAction('resetPassword', z.object({ uid: z.string().max(40), token: z.string().max(200), newPassword: pw() }), async ({ uid, token, newPassword }, ctx) => {
   const bad = () => new DomainError('invalid_token', 'the reset link is invalid or has expired')
@@ -158,12 +158,12 @@ export const resetPassword = defineAction('resetPassword', z.object({ uid: z.str
   await dropOtherSessions(row.id)
   securityNotice(ctx.settings, 'passwordChanged', row, ctx.request)
   return null
-}, { rate: { limit: 10, windowMs: 60_000 } })
+}, { rate: { limit: 10, windowMs: 60_000 }, mcp: false })
 
 // ---- sessions (signed-in browsers / clients) ------------------------------------------------------------
 // the id is an opaque hash, never the sid; revoking signs that session out on its next request
 export const sessionsAction = defineAction('sessions', z.object({}), async (_p, ctx) => listSessions(Number(sessionOnly(ctx).id), ctx.session),
-  { permissions: [isAuthenticated], readOnly: true })
+  { permissions: [isAuthenticated, notInTab('only you can review signed-in devices in this tab: please open Sessions yourself')], readOnly: true })
 
 export const revokeSession = defineAction('revokeSession', z.object({ id: z.string().regex(/^[0-9a-f]{64}$/) }), async ({ id }, ctx) => {
   const u = sessionOnly(ctx)

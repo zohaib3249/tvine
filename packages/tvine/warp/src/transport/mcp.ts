@@ -19,8 +19,10 @@ import { render, type Ctx, type ExpandOpt, type ViewOpt } from '../serialize/env
 import { FORBIDDEN_ROUTE, guardCheck } from './guards.js'
 import { UNTRUSTED_TOOL } from '../shape/notation.js'
 import { hiddenFromAnon } from '../security/permissions.js'
-import { readBody, tooDeep } from './body.js'
+import { readJsonValue } from './body.js'
 import { CONTROL_HINT, originOf, type TabHub, type TabOp } from './tab.js'
+import { filterMcpSnapshot, mcpEnabled, mcpExcludeGlob as glob } from './mcp-filter.js'
+export { filterMcpSnapshot, mcpEnabled } from './mcp-filter.js'
 
 export interface McpOptions {
   // Next route pattern for a site path ('/product/42' → '/product/[id]'); undefined = not a page.
@@ -59,15 +61,8 @@ function jsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   return js
 }
 
-// Disable levels, first match wins: action rules.mcp > app rules.ts mcp (both already merged into
-// def.rules by ActionManifest.register) > settings.mcp.exclude. A disabled action is not callable over
-// MCP at all (no typed tool, refused by `do`, hidden from snapshots). Global = settings.mcp.tools.
-export function mcpEnabled(def: ActionDef, settings: Settings): boolean {
-  const own = def.rules?.mcp
-  return own !== undefined ? own : !settings.mcp.exclude.some((p) => glob(p).test(def.id))
-}
-
 // Boot-time tool list. maxTools only HIDES typed tools (still callable via `do`).
+// mcpEnabled / filterMcpSnapshot: transport/mcp-filter.ts (shared with HTTP agent snapshots).
 export function mcpTools(actions: ActionManifest, settings: Settings, log: Log): McpTool[] {
   const { tools: mode, exclude, maxTools } = settings.mcp
   for (const p of exclude) {
@@ -126,18 +121,6 @@ export function mcpTools(actions: ActionManifest, settings: Settings, log: Log):
     typed = kept
   }
   return [...generic, ...typed.map(({ def: _, ...t }) => t)]
-}
-
-// settings.mcp.exclude globs on action ids: `*` = one dotted segment, `**` = any depth.
-const globs = new Map<string, RegExp>()   // ponytail: keyed by pattern text; patterns come from settings, so bounded
-function glob(p: string): RegExp {
-  let re = globs.get(p)
-  if (!re) globs.set(p, (re = toRegExp(p)))
-  return re
-}
-function toRegExp(p: string): RegExp {
-  const esc = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^${p.split('**').map((s) => s.split('*').map(esc).join('[^.]*')).join('.*')}$`)
 }
 
 // One MCP server per connection (or per stateless HTTP request); `caller` is where the calls come from.
@@ -218,14 +201,16 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       // A remote controller's `do` runs IN the tab, like ui: the tab POSTs it with its own cookie (its user, its
       // auth) + agentCmd{via:'channel'}; the agent's own identity (headers, clientInfo) is never used for it.
       // Presence, Stop and idle tracking apply. MCP-disabled actions stay uncallable over MCP.
-      if (!def || !mcpEnabled(def, server.settings)) return json({ kind: 'err', code: 'unknown_action', message: `unknown action ${String(cmd.action).slice(0, 100)}` })
+      // mcpEnabled (= mcp:false OR mcp.exclude): MCP tools/do only. Dispatch also refuses mcp:false on every agent transport.
+      // A signed bind (e.g. ui → weft.uiState) still runs.
+      if (!def || (!mcpEnabled(def, server.settings) && !bind)) return json({ kind: 'err', code: 'unknown_action', message: `unknown action ${String(cmd.action).slice(0, 100)}` })
       const a = await tabs!.forward(sid!, 'do', { action: cmd.action, params: cmd.params, ...(bind !== undefined && { bind }), ...(cmdId !== undefined && { cmdId }) })
       return json(a.ok ? { ...(a.data as object), sid, via: 'tab' } : { kind: 'err', code: a.code, reason: a.reason, message: a.message })
     }
     const request = await requestFor(server, opts, src, url, sid)
     if (!request) return notPage(server, url)
     if (request === FORBIDDEN) return forbidden(server)
-    if (!def || !mcpEnabled(def, server.settings)) return reply(server, [await unknownAction(server, cmd, request)], await renderCtx(server, cmd, request))
+    if (!def || (!mcpEnabled(def, server.settings) && !cmd.bind)) return reply(server, [await unknownAction(server, cmd, request)], await renderCtx(server, cmd, request))
     const known = resolved.get(request)
     return reply(server, await collect(dispatch(cmd, server, request, known ? { session: known } : {})), await renderCtx(server, cmd, request))
   }
@@ -245,25 +230,11 @@ type Src = Omit<McpSource, 'url' | 'route'>
 const blank = (page: string): Ctx => ({ sid: '', rev: 0, page })
 const pagePath = (r: Request) => r.path + (r.query.size ? `?${r.query}` : '')
 
-// Every snapshot an MCP client sees drops actions disabled for MCP.
-function filterSnapshot(server: ServerCtx, s: Snapshot): Snapshot {
-  const off = (id: ActionId) => { const d = server.actions.get(id); return !!d && !mcpEnabled(d, server.settings) }
-  const out = { ...s, nodes: s.nodes.map((n) => ({ ...n, actions: n.actions.filter((a) => !off(a.id)) })) }
-  // widgets: their actions, and controls whose headless map submits a disabled action (h.params.id)
-  const offCtl = (h: unknown) => { const x = h as { params?: { id?: unknown }; call?: unknown } | undefined; const id = x?.params?.id ?? x?.call; return typeof id === 'string' && off(id) }
-  if (s.widgets) out.widgets = s.widgets.map((w) => ({
-    ...w,
-    ...(w.actions && { actions: w.actions.filter((a) => !off(a.id)) }),
-    ...(w.ctl && { ctl: Object.fromEntries(Object.entries(w.ctl).filter(([, c]) => !offCtl(c.h))) }),
-  }))
-  return out
-}
-
 // Every snapshot an MCP client sees is remembered for its session (expand serves L2 from it), then filtered.
 function reply(server: ServerCtx, events: Event[], ctx: Ctx, shape: Shape = {}): CallToolResult {
   for (const e of events) if (e.kind === 'snapshot') server.sessions.remember(e.snapshot)
-  events = events.map((e) => e.kind === 'snapshot' ? ev.snapshot(filterSnapshot(server, e.snapshot))
-    : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterSnapshot(server, e.snapshot) } : e)
+  events = events.map((e) => e.kind === 'snapshot' ? ev.snapshot(filterMcpSnapshot(server, e.snapshot))
+    : e.kind === 'err' && e.snapshot ? { ...e, snapshot: filterMcpSnapshot(server, e.snapshot) } : e)
   const { md, ...rest } = shape
   const text = render(events, md ? 'md' : server.settings.formats.default, server.settings,
     { ctx, ...rest, ...(md && { md: { ...md, more: (n: number) => `call read_page again with view "md", offset ${n}` } }) })
@@ -324,7 +295,7 @@ async function page(server: ServerCtx, opts: McpOptions, src: Src, a: { url: str
     const snap = shape.expand ? await pageSnapshot(server, session.sid, ctx.page) : await server.snapshot(ctx.page, session.sid)
     const ms = Math.round(performance.now() - t0)
     if (server.hooks.has('read')) setImmediate(() => server.hooks.emit('read', { page: ctx.page, via: 'mcp', sid: session.sid, rev: session.rev, ms }))
-    if (shape.expand && !hasNode(filterSnapshot(server, snap), shape.expand.id)) {
+    if (shape.expand && !hasNode(filterMcpSnapshot(server, snap), shape.expand.id)) {
       return reply(server, [ev.err('unknown_action', `unknown node ${shape.expand.id.slice(0, 100)}; ids are in the map`, { snapshot: snap })], ctx, { view: 'L0' })
     }
     return reply(server, [ev.snapshot(snap)], ctx, shape)
@@ -347,7 +318,7 @@ async function ui(server: ServerCtx, opts: McpOptions, src: Src, a: z.infer<type
   // one rate charge per ui step via dispatch (no pre-rate here — that double-billed with each step's general bucket)
   return rendering(server, ctx, async () => {
     const at = async (pg: string) => { const r = await requestFor(server, opts, src, pg, session.sid); return r && r !== FORBIDDEN ? r : undefined }
-    const out = await runUi(server, steps, a, { session, page: ctx.page, request: at, filter: (s) => filterSnapshot(server, s) })
+    const out = await runUi(server, steps, a, { session, page: ctx.page, request: at, filter: (s) => filterMcpSnapshot(server, s) })
     return reply(server, out.events, { ...ctx, page: out.page, rev: session.rev })
   })
 }
@@ -368,9 +339,8 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
   const { settings } = server
   return async (req, res) => {
     if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST' }).end(); return }
-    let body: unknown
-    try { body = await readJson(req, settings.limits.bodyBytes) }
-    catch (e) { res.writeHead(e === TOO_BIG ? 413 : 400).end(); return }
+    const got = await readJsonValue(req, settings.limits.bodyBytes)
+    if (!got.ok) { res.writeHead(got.reason === 'too_large' ? 413 : 400).end(); return }
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : v
     const ip = clientIp(headers['x-forwarded-for'] ?? null, req.socket.remoteAddress ?? '', settings.trustProxy)
@@ -378,15 +348,6 @@ export function mcpHandler(server: ServerCtx, opts: McpOptions): (req: IncomingM
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => { void transport.close(); void srv.close() })
     await srv.connect(transport)
-    await transport.handleRequest(req, res, body)
+    await transport.handleRequest(req, res, got.value)
   }
-}
-
-const TOO_BIG = new Error('body too large')
-async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
-  const raw = await readBody(req, max)
-  if (!raw) throw TOO_BIG
-  const v: unknown = JSON.parse(raw.toString('utf8'))
-  if (tooDeep(v)) throw new Error('body nested too deeply')
-  return v
 }

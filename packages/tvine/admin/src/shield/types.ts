@@ -21,8 +21,9 @@ export interface SensorReport {
 }
 export interface Signals {
   ip: string; ipNet: string
-  country?: string; asn?: number; asnOrg?: string; asnKind?: 'datacenter' | 'residential' | 'mobile' | 'unknown'
+  country?: string; continent?: string; asn?: number; asnOrg?: string; asnKind?: 'datacenter' | 'residential' | 'mobile' | 'unknown'
   tor: boolean
+  local?: boolean
   ua: string; uaFamily?: string
   bot: { name?: string; category: BotCategory; verified: boolean; spoofed: boolean; via?: 'rdns' | 'ip-range' | 'web-bot-auth' | 'token' }
   headerScore: number

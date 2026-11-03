@@ -96,7 +96,7 @@ interface Session {
 
 | Topic | Rule |
 |---|---|
-| Found by | `sid` (agents: `x-tvine-sid` header, `?sid=` on GET, body `sid`, MCP `sid` arg) or the session cookie (browsers). |
+| Found by | `sid` (agents: `x-tvine-sid` header, `?sid=` on agent GET, body `sid`, MCP `sid` arg) or the session cookie (browsers). `/tvine/channel` accepts `?sid=` only when `settings.debug` is on — prefer the header. |
 | Created | On an agent page GET without one; on a write through `/tvine/api` (the cookie is set in the reply); never by a page view. A read without a session runs on a throwaway session that is not stored. |
 | `data` in actions | The handler works on a deep copy; it replaces the real data only after the action succeeds. A `readOnly` action may write `data` too (saved, no rev bump). |
 | One at a time | Commands of one sid run one after another (queue depth 16, then `rate_limited`); with redis also across servers. |

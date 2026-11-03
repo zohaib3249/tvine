@@ -15,7 +15,7 @@ import { appSignals, discoverHooks, discoverMiddleware } from './core/middleware
 import { makeSnapshotter } from './core/registry.js'
 import { backendHealth, backendTable, snapshotCacheFor } from './backends/index.js'
 import { authenticate, rotatedSession } from './core/auth.js'
-import { buildRequest, clientIp, forwardedHostOf, isLocalRequest, normalizePath, rateChecked } from './core/request.js'
+import { buildRequest, clientIp, forwardedHostOf, httpsOf, isLocalRequest, normalizePath, rateChecked, xfpHttps } from './core/request.js'
 import { cookieOpts } from './core/session.js'
 import { metrics, since, statTap, stats } from './core/metrics.js'
 import type { ActionRef, Command, Node, Request, Session, Settings, Snapshot } from './core/types.js'
@@ -245,6 +245,13 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   if (cache.close) ctx.onClose(() => cache.close!())
   ctx.health.set('backends', () => backendHealth(settings))
   { const overlap = rateOverlap(settings); if (overlap) ctx.log('warn', overlap) }
+  // trustProxy=0 with production + non-loopback: rate limits / Shield / Host see the proxy's IP as every client.
+  if (isProduction() && settings.trustProxy === 0) {
+    ctx.log('warn', 'trustProxy is 0 in production: if you sit behind a reverse proxy, set trustProxy (or TVINE_TRUST_PROXY) to the hop count or every client shares one IP for rate limits and allowlists')
+  }
+  if (isProduction() && settings.limits.backend === 'memory') {
+    ctx.log('warn', "limits.backend is 'memory' in production: under many client IPs the in-process limiter drops buckets (set limits.backend to 'redis')")
+  }
   // a shared channel layer must be subscribed before the first event it should deliver
   if ('ready' in ctx.channels) await (ctx.channels as { ready: Promise<void> }).ready
   const nonce = randomBytes(16).toString('hex')
@@ -617,17 +624,6 @@ function healthSections(ctx: ServerCtx): Record<string, unknown> {
     try { out[name] = fn() } catch (e) { out[name] = { error: (e as Error).message } }
   }
   return out
-}
-
-// https per the same trusted hops as request.ip (transport/http.ts): socket TLS, or rightmost-trustProxy X-Forwarded-Proto.
-function httpsOf(req: IncomingMessage, settings: Settings): boolean {
-  if ((req.socket as { encrypted?: boolean }).encrypted) return true
-  return xfpHttps(req.headers['x-forwarded-proto'] as string | undefined, settings.trustProxy)
-}
-function xfpHttps(xfp: string | undefined, hops: number): boolean {
-  if (hops <= 0) return false
-  const parts = String(xfp ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  return parts[parts.length - hops] === 'https'
 }
 
 // API-only: one node per app carrying its actions (no pages, so no binds).

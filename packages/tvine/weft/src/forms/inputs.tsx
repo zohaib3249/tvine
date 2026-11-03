@@ -6,12 +6,12 @@ import type { FieldMeta, FieldWidgetProps } from './types.js'
 import { COUNTRY_CODES, COUNTRY_DIAL, countryName, normalizePhone } from './rich.js'
 import { markdownToHtml } from './richdoc.js'
 
-const common = (p: FieldWidgetProps) => ({
+export const common = (p: FieldWidgetProps) => ({
   id: p.id, name: p.name, disabled: p.readOnly, required: p.meta.required,
   'aria-invalid': p.invalid || undefined, 'aria-describedby': p.describedBy,
 })
-const ev = (f: (v: string) => void) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => f(e.target.value)
-const group = (p: FieldWidgetProps, role = 'group') => ({ role, 'aria-label': p.meta.label, id: p.id, 'aria-describedby': p.describedBy, 'aria-invalid': p.invalid || undefined })
+export const ev = (f: (v: string) => void) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => f(e.target.value)
+export const group = (p: FieldWidgetProps, role = 'group') => ({ role, 'aria-label': p.meta.label, id: p.id, 'aria-describedby': p.describedBy, 'aria-invalid': p.invalid || undefined })
 
 // ---- simple native inputs ----
 const NATIVE: Record<string, Record<string, unknown>> = {

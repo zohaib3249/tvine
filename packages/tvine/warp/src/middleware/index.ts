@@ -14,7 +14,9 @@ import type { CompressionSettings, Settings, TvineUser } from '../core/types.js'
 import type { Logger } from '../log.js'
 import { limiterFor } from '../backends/index.js'
 import { ipKey } from '../security/ratelimit.js'
+import { DEV_HOSTS } from '../settings.js'
 import { DISCOVERY_PATH, LLMS_PATH, MCP_PATH } from '../transport/agent-copy.js'
+export { DEV_HOSTS }
 import { addVary } from '../transport/compress.js'
 import type { securityHeaders } from '../security/headers.js'
 import type { corsLayer } from '../transport/cors.js'
@@ -94,7 +96,6 @@ export function hostAllowed(host: string, allowed: readonly string[]): boolean {
     return a === '*' || (a.startsWith('.') ? h === a.slice(1) || h.endsWith(a) : h === a)
   })
 }
-export const DEV_HOSTS = ['localhost', '.localhost', '127.0.0.1', '[::1]']
 // this machine's non-internal IPv4 addresses (what a phone on the same Wi-Fi types)
 export const lanIps = (): string[] => Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i!.address)
 // debug only (never production): localhost, the LAN IPs, the hostname(.local), settings.dev.allowedHosts and
