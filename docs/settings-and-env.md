@@ -11,7 +11,8 @@ import { defineSettings } from 'tvine'
 
 export default defineSettings({
   site: { name: 'Notes', description: 'A tiny notes app built on Tvine.' },
-  installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin'],   // users, background jobs, /admin
+  installedApps: ['tvine.auth', 'tvine.tasks', 'tvine.admin', 'notes'],   // users, background jobs, /admin, apps/notes
+  mcp: { exclude: ['admin.*'] },   // keep the admin's actions out of the typed MCP tools
 })
 ```
 
@@ -58,6 +59,8 @@ and which backend each subsystem uses.
 | `redis`, `channels` | shared backends for multi-process deploys | memory |
 | `media` | `{ dir, route }` for uploads | `./media`, `/media` |
 | `metrics` | Prometheus text at `/tvine/metrics` | off |
+| `shield` | bot protection, see [shield.md](shield.md) | `mode: 'log'` |
+| `guards`, `health`, `siteUrl`, `encryption`, `header`, `formats` | see [every key](#reference-every-key) | |
 | `robots` | the generated `/robots.txt` | allows agent paths |
 | `audit` | durable audit trail | off |
 | `admin` | `allowIps`, `require2fa`, `idleMs` for staff | off |
@@ -204,6 +207,22 @@ Also `env.str`, `env.url`, `env.json`, `env.has`. An empty value counts as unset
 | `TVINE_LOAD_DOTENV` | `1`: load `.env` files in production too |
 | `PORT`, `HOST` | listen port (3000) and address; `--port` / `--host` win |
 | `TVINE_SUPERUSER_USERNAME` / `_EMAIL` / `_PASSWORD` | for `createsuperuser --noinput` |
+| `TVINE_SETTINGS` | which settings module runs, e.g. `config/settings/prod` (same as `--settings`) |
+| `TVINE_DEV_ALLOWED_HOSTS` | dev only: comma list of extra hosts (tunnels, port forwarding), on top of `dev.allowedHosts` |
+| `TVINE_ENCRYPTION_KEYS` | comma list for `encryption.keys` (newest first) when settings leave it out |
+| `WEB_CONCURRENCY`, `NODE_APP_INSTANCE`, `pm_id` | read only to warn at boot that memory backends are per process |
+
+Split mode (Next runs separately and calls a `tvine start --api-only` server): the Next process has no
+settings, so it reads these instead.
+
+| Variable | Meaning |
+|---|---|
+| `TVINE_API_URL` | the API server's URL; pages' `api.*` calls go there |
+| `TVINE_SECRET` | must match the API server (it signs the forwarded call) |
+| `TVINE_TRUST_PROXY` | `X-Forwarded-For` hops to trust for the caller's IP (default 0) |
+| `TVINE_HEADER` | the API server's `settings.header` (default `x-tvine`) |
+| `TVINE_COOKIE_NAME` | the API server's session cookie name |
+| `TVINE_SESSION_SECURE`, `TVINE_SESSION_SAMESITE`, `TVINE_SESSION_TTL_S` | the session cookie's Secure flag, SameSite (`lax`) and max age in seconds (86400) |
 
 ### `.env` files
 
@@ -236,3 +255,134 @@ In production they load only with `TVINE_LOAD_DOTENV=1`.
 - **Pages must not read settings for runtime values.** Pages call the backend through `api.*`.
 - A page that reads the session must be dynamic (`await connection()` or `export const dynamic = 'force-dynamic'`).
 - Memory backends are per process. With more than one process (`WEB_CONCURRENCY`, pm2) boot warns; use redis.
+
+## Reference: every key
+
+Every key `defineSettings` accepts, with its default. Unknown keys inside strict groups (`shield`, `email`, `metrics`,
+`robots`, `encryption`, `auth`, each cache) are a boot error. Objects merge deeply; arrays and functions replace.
+
+### Core
+
+| Key | Default | Meaning |
+|---|---|---|
+| `site.name` / `site.description` | `'tvine app'` / `''` | shown to agents (`/llms.txt`, MCP) and in the admin |
+| `siteUrl` | unset (the request's Host) | public origin like `https://shop.example` for links the server builds (approve links, sitemap) |
+| `secret` | dev: random per boot; prod: `TVINE_SECRET`, required | HMAC key, 32+ chars; an array rotates (newest first) |
+| `debug` | on under `tvine dev` / `NODE_ENV=development` or `test` | Django `DEBUG`: dev CSP, inspector feed, `ServerTiming` |
+| `installedApps` | `[]` | project apps by folder (`'blog'`) and built-ins `'tvine.auth'`, `'tvine.tasks'`, `'tvine.admin'`, `'tvine.audit'`, `'tvine.shield'` |
+| `rootUrlconf` | `config/urls`, else `urls` | Django `ROOT_URLCONF`, a path from the project root without extension |
+| `tasksModule` | `config/tasks` | where `tvine worker` finds queues and `beatSchedule` |
+| `allowedHosts` | dev: localhost, LAN IPs, hostname; prod: required | `'shop.example'`, `'.example.com'` (with subdomains), `'[::1]'`, `'*'` |
+| `dev.allowedHosts` | `[]` | dev only, extra hosts such as `'*.ngrok-free.app'` |
+| `trustProxy` | `0` | `X-Forwarded-For` hops to trust (drives `request.ip`, https detection) |
+| `health.token` | unset | 16+ chars: `/tvine/health` gives details to `Authorization: Bearer <token>`; others get `{ ok }` ([deploy.md](deploy.md)) |
+| `frontend.boundary` | `'error'` | a page importing a model fails `tvine check` (`'error'`) or warns (`'warn'`) |
+| `encryption.keys` | `[]` (derived from `secret`) | AES-256-GCM keys for encrypted fields, 32+ chars each, newest first ([models-and-orm.md](models-and-orm.md)) |
+
+### Agents and formats
+
+| Key | Default | Meaning |
+|---|---|---|
+| `header` | `'x-tvine'` | the agent request header name; `<header>-view`, `-expand`, `-offset`, `-limit`, `-sid` follow it |
+| `formats.default` | `'json'` | what an agent request gets with no `Accept` choice: `'json'` or `'notation'` |
+| `formats.notationPath` | `true` | serve `<page>/agent.txt` (the page in line notation); `<page>/agent.json` is always served |
+| `mcp.tools` | `'both'` | `'both'` (six generic + typed), `'generic'`, `'typed'` ([agents-and-mcp.md](agents-and-mcp.md#which-tools-are-exposed)) |
+| `mcp.exclude` | `[]` | globs on action ids kept out of typed tools (`'admin.**'`) |
+| `mcp.maxTools` | `40` | typed tools above this are trimmed (still reachable through `do`) |
+| `agent.shape` | `'v2'` | snapshot format; `'v1'` is the old one, kept for one release |
+| `agent.budget` | `1500` | token budget for `view=auto` |
+| `agent.rowsL1` | `10` | list rows shown at `view=L1` |
+| `agent.inTab` | `'on'` | `'off'` disables tab control and in-tab WebMCP |
+| `snapshotCache.ttlMs` / `backend` / `redis` | `60000` / `'memory'` / `'default'` | shared agent snapshots of public, non-live pages; `0` = off; any write clears it |
+| `guards` | `[]` | `[{ path: '/admin/**', permissions: [...] }]`: permission checks on page paths for HTTP, MCP and forms |
+| `robots.allow` / `disallow` / `extra` / `sitemap` | `[]` / `[]` / `[]` / unset | the generated `/robots.txt` (only when the app ships none) |
+| `socket` | `true` | accepted; not read by the current release |
+| `data.defaultPageSize` / `maxPageSize` | `25` / `100` | accepted; generic views use their own `pageSize` / `maxPageSize` (25 / 100) |
+
+### Requests and limits
+
+| Key | Default | Meaning |
+|---|---|---|
+| `limits.bodyBytes` | `65536` | max request body (64 KB) |
+| `limits.handlerMs` | `10000` | max time per action |
+| `limits.rate.limit` / `windowMs` / `by` | `60` / `60000` / `'framework'` | action calls per IP + session per window; `by: 'shield'` lets Shield's rules be the only general limit ([shield.md](shield.md#rate-limits-shield-and-the-framework)) |
+| `limits.sseConnPerIp` | `20` | open event streams per IP |
+| `limits.backend` / `redis` | `'memory'` / `'default'` | where rate limits, idempotency and login throttles live |
+| `middleware` | RequestId, AllowedHosts, Security, Cors, GZip | HTTP middleware (see [Middleware](#middleware)) |
+| `actionMiddleware` | `[]` | functions around every action |
+| `media.dir` / `route` / `auditAccess` | `'./media'` / `'/media'` / unset | uploads; `auditAccess: true` writes an audit row per private-file read |
+
+### Database, sessions, backends
+
+| Key | Default | Meaning |
+|---|---|---|
+| `db.url` | `DATABASE_URL`, else `file:./tvine.db` | `file:`, `postgres://`, `mysql://` |
+| `db.pool.max` / `acquireMs` / `idleMs` | `10` / `5000` / `30000` | connection pool (Postgres / MySQL) |
+| `db.atomicRequests` | `true` | each non-read-only action is one transaction |
+| `db.slowQueryMs` | `500` | slower statements are logged on `tvine.db`; `0` = off |
+| `session.ttlMs` / `maxAgeMs` | 24 h / 14 days | idle timeout / absolute lifetime (`0` = none) |
+| `session.cookieName` | `'tvine_s'` | gets the `__Host-` prefix when `secure` |
+| `session.secure` | on in production (`TVINE_SESSION_SECURE`) | the cookie's Secure flag |
+| `session.sameSite` | `'lax'` | `'none'` needs `secure` |
+| `session.max` | `100000` | live sessions kept; the least recently used is dropped past it |
+| `session.backend` / `redis` | `'memory'` / `'default'` | session store |
+| `channels.backend` / `redis` | `'memory'` / `'default'` | pub/sub for live updates across processes |
+| `redis.<alias>.url` / `tls` / `prefix` / `connectTimeoutMs` | `default` from `REDIS_URL` | named Redis connections; every `redis:` key above names one ([deploy.md](deploy.md)) |
+| `caches.<alias>` | `default`: memory, timeout 300 s | `backend` (`memory`, `redis`, `file`, `dummy`), `redis`, `location` (file dir), `timeout` (s, `null` = forever), `keyPrefix`, `version`, `maxEntries` (300) ([tasks-cache-email.md](tasks-cache-email.md)) |
+| `tasks.broker` | `'file'` | job store: `'db'`, `'file'`, `'memory'`, `'redis'` |
+| `tasks.leaseMs` / `pollMs` / `relayMs` / `graceMs` | `30000` / `500` / `250` / `30000` | lease, claim poll, progress relay poll, SIGTERM grace |
+| `tasks.resultTtlMs` | 24 h | how long finished job rows are kept |
+| `tasks.file` / `durable` / `claimBatch` / `redis` | `'./tasks.db'` / `false` / `10` / `'default'` | file broker path, power-cut durability, jobs per claim, Redis alias |
+
+### Security
+
+| Key | Default | Meaning |
+|---|---|---|
+| `security.headers.enabled` | `true` | the `Security` middleware sends headers |
+| `security.headers.hsts` | 1 year, subdomains, no preload | `false` turns it off; sent on https only |
+| `security.headers.csp` | `{ reportOnly: false, directives: {}, reportUri: '/tvine/csp-report', staticPages: 'relaxed' }` | CSP with nonce; `directives` add sources; `false` turns it off |
+| `security.headers.referrerPolicy` | `'strict-origin-when-cross-origin'` | `Referrer-Policy` |
+| `security.headers.coop` / `corp` | `'same-origin'` / `'same-origin'` | `false` turns either off |
+| `security.headers.coep` | unset | `'require-corp'` or `'credentialless'` |
+| `security.headers.trustedTypes` | unset | `'report-only'` reports Trusted Types violations |
+| `security.headers.permissionsPolicy` | camera, microphone, geolocation, payment, usb, display-capture, browsing-topics, clipboard-read: all off | `Permissions-Policy` |
+| `cors.origins` / `methods` / `credentials` / `maxAge` | `[]` / GET, POST / `false` / `600` | closed by default |
+| `cors.allowHeaders` | content-type, authorization, the `x-tvine*` headers, MCP headers | headers a cross-origin caller may send |
+| `cors.exposeHeaders` | x-request-id, etag, retry-after, mcp-session-id | headers it may read |
+| `cors.routes` | `[]` | per-path overrides: `[{ path: '/api/', origins: [...] }]` |
+| `compression.enabled` / `threshold` / `brotli` / `gzipLevel` / `brotliQuality` | `true` / `1024` / `true` / `6` / `4` | response compression |
+| `audit.enabled` / `actions` / `retentionDays` / `redact` | `false` / `'writes'` / `90` / `[]` | needs `'tvine.audit'` installed ([auth-and-security.md](auth-and-security.md)) |
+| `metrics.enabled` / `path` / `token` / `allowIps` | `false` / `'/tvine/metrics'` / unset / `[]` | Prometheus text; neither token nor IPs = loopback only |
+| `shield.*` | `mode: 'log'` | bot protection (needs `'tvine.shield'` installed and `tvine.middleware.Shield` listed); every key in [shield.md](shield.md#settings-reference). Also `shield.prefix` (`'/tvine/shield'`, challenge routes), `shield.ipdb.source` / `update` (`'dbip-lite'` / `'monthly'`), `shield.sensor` (`'challenge'`, or `'all-pages'`), `shield.events.maxPerMinute` (600) / `hardCapPerMinute` (20000) |
+
+### Auth (`tvine.auth`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `auth.userModel` | `'auth.User'` | Django `AUTH_USER_MODEL`; set before the first migrate |
+| `auth.backends` | `['tvine.auth.ModelBackend']` | tried in order; also `'tvine.auth.EmailBackend'` or a dotted path |
+| `auth.user` | unset | your own `(req) => user \| null` resolver; overrides everything |
+| `auth.hashers` / `validators` | built-in | password hashers (first = preferred) and validators |
+| `auth.login.maxFailures` / `accountMaxFailures` / `ipMaxFailures` / `windowMs` / `lockoutMs` | `5` / `50` / `100` / 15 min / 15 min | login throttling |
+| `auth.resetTimeoutMs` / `resetUrl` / `sendPasswordReset` | 1 h / built-in / built-in | password reset |
+| `auth.objectPermission` | unset | `(user, perm, obj) => boolean` for object permissions |
+| `auth.tokens.defaultDays` / `maxDays` | `90` / `365` | API token lifetime |
+| `auth.totp.issuer` | `site.name` | name shown in authenticator apps |
+| `auth.breachCheck` | `false` | check new passwords against Have I Been Pwned |
+| `auth.notify.newLogin` / `passwordChanged` / `twoFactorDisabled` / `tokenCreated` / `emailChanged` | on when mail is set up | security mails |
+
+### Admin, email, logging
+
+| Key | Default | Meaning |
+|---|---|---|
+| `admin.path` / `title` | `'/admin'` / `'Administration'` | where the panel mounts ([admin.md](admin.md)) |
+| `admin.theme.brand` / `radius` / `dark` | unset / unset / `'auto'` | colors; `dark`: `'auto'`, `'on'`, `'off'` |
+| `admin.allowIps` / `require2fa` / `idleMs` | unset | staff IP allow-list (adds an `IpFilter`), TOTP for staff, staff idle timeout |
+| `admin.dashboard.widgets` / `autoCharts` | `[]` / `true` | widget order; automatic per-model charts |
+| `admin.stats.enabled` / `retentionDays` / `flushMs` | `true` / `30` / `60000` | the System pages' rollups |
+| `admin.stats.searches.enabled` / `minCount` | `true` / `3` | search terms shown once seen this often |
+| `admin.stats.pages.enabled` / `keepParams` | `true` / `[]` | page stats; query params kept in the path |
+| `email.backend` | console (dev), memory (tests), smtp (prod) | also `'file'`, `'dummy'` ([tasks-cache-email.md](tasks-cache-email.md)) |
+| `email.host` / `port` / `user` / `password` / `useTls` / `useSsl` / `allowPlainAuth` / `timeoutMs` | `localhost` / `25` / `''` / `''` / `false` / `false` / `false` / `10000` | SMTP |
+| `email.defaultFrom` / `serverEmail` / `admins` / `subjectPrefix` / `filePath` | `webmaster@localhost` / `root@localhost` / `[]` / `'[Tvine] '` / `'./mail'` | Django `EMAIL_*` |
+| `logging` | pretty (dev), json (prod) | string or `{ level, format, handlers, loggers, redact }`; handler types `console` (`stream`), `file` (`path`, `maxBytes`, `daily`, `keep`), `custom` (`write`), `memory` (`size`) |
