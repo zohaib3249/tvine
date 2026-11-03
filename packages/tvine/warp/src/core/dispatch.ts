@@ -19,7 +19,7 @@ import { atomic, setOnCommitErrorHandler } from '../data/engine.js'
 import { withPending } from '../data/pending.js'
 import { hashParams, type Idempotency } from '../security/idempotency.js'
 import { permissionCtx, runPermissions } from '../security/permissions.js'
-import { ipKey, type Limiter } from '../security/ratelimit.js'
+import { checkAll, ipKey, type Limiter, type RateItem } from '../security/ratelimit.js'
 import { AGENTS_DENIED } from '../security/permissions.js'
 import { verifyBind } from '../security/sign.js'
 import { metrics, statTap, stats } from './metrics.js'
@@ -127,12 +127,14 @@ const renderRead = new WeakSet<Request>()
 
 // render: a page render's read (api.* inside a server component) — it spends no rate bucket (W11-FIX #6: a
 // rate-limited render is a 500 page with no Tvine root, which kills tab control). Read-only actions only.
-export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: { snapshot?: boolean; render?: boolean } = {}): AsyncIterable<Event> {
+// firstContact: a cookie-less api call (transport/api.ts) — its ip pays one token more, as the <Form> path's ip pre-check
+export type DispatchOpts = { snapshot?: boolean; render?: boolean; firstContact?: boolean }
+export async function* dispatch(cmd: Command, server: ServerCtx, request: Request, opts: DispatchOpts = {}): AsyncIterable<Event> {
   if (opts.snapshot === false) quiet.add(request)
   if (opts.render && server.actions.get(cmd.action)?.rules?.readOnly) renderRead.add(request)
   const t0 = performance.now()
   const hold: Hold = { req: request }
-  const { sid, events } = await run(cmd, server, request, hold)
+  const { sid, events } = await run(cmd, server, request, hold, opts)
   await auditFailure(server, cmd, sid, events, hold, performance.now() - t0)
   securityOutcome(server, cmd, sid, events, hold.req!)
   emitHooks(server, cmd, sid, events, Math.round(performance.now() - t0))
@@ -305,7 +307,32 @@ type Ran = { sid: Sid | undefined; events: Event[] }   // sid: the session the c
 // general limit (an action's own rate still holds). Anything Shield did not count (socket, log mode, no rate rule) stays.
 const shieldOwns = (settings: Settings, request: Request) => settings.limits.rate.by === 'shield' && !!request.raw && rateChecked.has(request.raw)
 
-async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold): Promise<Ran> {
+// The rate buckets of one command (security/ratelimit.ts has the contract), checked in ONE limiter call before the
+// session is resolved, so abusive traffic never creates sessions or queues:
+// 3a. the ip bucket + the default bucket of the key the caller sent (sid, else the cookie). A session that is not
+//     stored (an anonymous api call: ephemeral / deferred) has no key of its own: the ip pays (it would be a
+//     throwaway bucket per request otherwise).
+// 3b. an action's own rate: a bucket per key + action id. Keyed by ip on renders and for unstored sessions. The copy
+//     of the default every discovered action carries is skipped when 3a counted (the same rate on the same key
+//     over fewer requests never runs out first); renders and limits.rate.by 'shield' skip it too.
+// ponytail: an own rate equal to settings.limits.rate counts as the default.
+function rateItems(cmd: Command, server: ServerCtx, request: Request, forwarded: boolean, opts: DispatchOpts): RateItem[] {
+  const { settings } = server
+  const render = renderRead.has(request), shield = shieldOwns(settings, request)
+  const general = !render && !forwarded && !shield
+  const key = cmd.sid ?? cookieOf(request, settings)
+  const stored = key !== undefined && !server.sessions.transient(key)
+  const items: RateItem[] = opts.firstContact && !render ? [{ keys: { ip: request.ip } }] : []
+  if (general) items.push({ keys: { ip: request.ip, ...(stored && { sid: key }) } })
+  const def = server.actions.get(cmd.action), r = def?.rules?.rate, dflt = settings.limits.rate
+  const own = !!r && (r.limit !== dflt.limit || r.windowMs !== dflt.windowMs)
+  if (r && (own || (!render && !shield && !general))) {
+    items.push({ keys: { sid: render || !stored ? `ip:${ipKey(request.ip)}` : key, action: def!.id }, rules: r })
+  }
+  return items
+}
+
+async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold, opts: DispatchOpts): Promise<Ran> {
   const { settings, sessions } = server
   const peeked = async () => (await sessions.peek({ sid: cmd.sid, cookie: cookieOf(request, settings) }))?.sid
   if (crossOrigin(request, settings)) return { sid: await peeked(), events: [ev.err('domain', 'forbidden: cross-origin request', { reason: 'forbidden' })] }
@@ -321,7 +348,8 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
   // a remote agent's command forwarded through a tab (agentCmd channel, while the tab hub has one running for this
   // session) is not charged to the human's ip/session bucket: TabHub's own per-tab limit already counted it
   const forwarded = cmd.agentCmd?.via === 'channel' && !!server.tabs && await (async () => { const s = await peeked(); return !!s && (await server.tabs!.forcedAgent(s)) === true })()
-  const rl = renderRead.has(request) || forwarded || shieldOwns(settings, request) ? { ok: true as const } : await server.limiter.check({ ip: request.ip, sid: cmd.sid ?? cookieOf(request, settings) })
+  // 3b (an action's own rate, a bucket per key + action) is checked in the same call: one limiter round trip per command
+  const rl = await checkAll(server.limiter, rateItems(cmd, server, request, forwarded, opts))
   if (!rl.ok) return { sid: await peeked(), events: [rateLimited(rl.retryAfterMs)] }
   // 1. session
   const session = await sessions.resolve({ sid: cmd.sid, cookie: cookieOf(request, settings) })
@@ -343,7 +371,8 @@ async function run(cmd: Command, server: ServerCtx, request: Request, hold: Hold
     return { sid, events: [ev.err('human_only', `only a human can do this here (${typeof ho === 'string' ? ho : cmd.action}); ask the user to do it`, { reason: 'human_only' })] }
   }
   // within the process: one at a time per sid (serial); across servers: the store's per-sid lock
-  const locked = (fn: () => Promise<Event[]>) => serial(sid, () => sessions.lock(sid, fn).catch((e: unknown) => {
+  // a session nothing stores (one call's, ephemeral / deferred) lives in this process only: no cross-server lock
+  const locked = (fn: () => Promise<Event[]>) => serial(sid, () => sessions.transient(sid) ? fn() : sessions.lock(sid, fn).catch((e: unknown) => {
     if (e instanceof SessionBusy) return [rateLimited(1000)]
     throw e
   }))
@@ -426,24 +455,15 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     if (r.hit === 'conflict') return [conflict()]
     if (r.hit) return r.events
   }
-  // 3b. an action's own rate: a bucket keyed by sid + action id
   const def = server.actions.get(cmd.action)
-  // Renders skip only the default rate (3a, and the copy of it every discovered action carries); an action's OWN
-  // rate still holds, keyed by ip there (a render's session may be one-call).
-  // ponytail: an own rate equal to settings.limits.rate counts as the default on renders.
-  const r = def?.rules?.rate, dflt = settings.limits.rate
-  const own = !!r && (r.limit !== dflt.limit || r.windowMs !== dflt.windowMs)
-  if (r && (own || (!renderRead.has(request) && !shieldOwns(settings, request)))) {
-    const rl = await server.limiter.check({ sid: renderRead.has(request) ? `ip:${ipKey(request.ip)}` : sid, action: def!.id }, r)
-    if (!rl.ok) return [rateLimited(rl.retryAfterMs)]
-  }
   // 4. resolve action
   if (!def) return [ev.err('unknown_action', `unknown action ${String(cmd.action).slice(0, 100)}`, { snapshot: await snap(server, request, sid) })]
 
   // handler state is staged: applied only after commit
   const outbox: [string, Event][] = []
   try {
-    const staged: Session = { ...session, data: structuredClone(session.data) }
+    const hadData = session.data.size > 0
+    const staged: Session = { ...session, data: hadData ? structuredClone(session.data) : new Map() }   // nothing to copy: no clone
     const ctx: ActionCtx = { request, session: staged, sid, settings, channels: staging(server.channels, outbox) }
     // 4.5 permissions (agent identity from request.agent; a throwing permission denies)
     await runPermissions(def.rules?.permissions ?? [], { ...permissionCtx(ctx, def.id), readOnly: !!def.rules?.readOnly })
@@ -499,7 +519,8 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       }
       try {
         if (!def.rules?.readOnly) await server.sessions.bump(live.sid, request.agent.is ? 'agent' : 'human', request.agent.is ? def.id : undefined)
-        else await server.sessions.save(live)
+        // a read saves only what it may have changed: nothing to save for an unstored session, or empty data that stayed empty
+        else if (!server.sessions.transient(live.sid) && (hadData || live.data.size)) await server.sessions.save(live)
         for (const [g, e] of outbox) server.channels.group(g).send(e)
       } catch (e) { server.log('error', 'post-commit side effect failed', { action: def.id, error: errStr(e) }) }
       // every server's snapshot cache sees this commit before anyone gets the reply
@@ -520,7 +541,8 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     const chain = [...settings.actionMiddleware, ...(server.appMiddleware.get(def.id.slice(0, def.id.indexOf('.'))) ?? [])]
     // the frozen copy is for middleware only: no chain (the common case), no deep clone per command
     const mwCmd = chain.length ? deepFreeze({ ...cmd, params: structuredClone(cmd.params) }) : cmd
-    const drained = (async () => {   // drained in full (not collect()), so code after `yield* next()` runs
+    // no chain: the steps themselves (no generator, no middleware clock: the handler has its own limit)
+    const drained = !chain.length ? steps() : (async () => {   // drained in full (not collect()), so code after `yield* next()` runs
       const out: Event[] = []
       for await (const e of compose(chain, mwCmd, ctx, inner)) out.push(e)
       return out
@@ -529,14 +551,14 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
     // Middleware's own time is capped at handlerMs; the clock re-arms while the handler runs (it has its own limit).
     // ponytail: a middleware may get up to ~2x handlerMs around a handler; track its time exactly if that matters.
     let timer: ReturnType<typeof setTimeout> | undefined
-    const expired = new Promise<'timeout'>((r) => {
+    const expired = chain.length ? new Promise<'timeout'>((r) => {
       // dead is set in the callback itself: a next() fired by a timer in the same turn must already see it
       const arm = () => { timer = setTimeout(() => { if (busy) arm(); else { dead = true; r('timeout') } }, settings.limits.handlerMs) }
       arm()
-    })
+    }) : undefined
     let events: Event[]
     try {
-      const r = await Promise.race([drained, expired])
+      const r = expired ? await Promise.race([drained, expired]) : await drained
       if (r === 'timeout') {
         server.log('error', 'middleware timeout', { action: def.id, handlerMs: settings.limits.handlerMs })
         if (!committed) return [ev.err('internal', 'middleware timeout')]

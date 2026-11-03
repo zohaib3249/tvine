@@ -110,7 +110,7 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
       delete req.headers['x-nonce']
       const plan: HeaderPlan = { https, path: (req.url ?? '/').split('?')[0]! }
       if (!csp) return plan
-      plan.nonce = randomBytes(16).toString('base64')
+      plan.nonce = nonce()
       req.headers[name] = policies.dynamic[https ? 1 : 0]!.replace(NONCE, plan.nonce)
       req.headers['x-nonce'] = plan.nonce
       return plan
@@ -155,6 +155,13 @@ export function securityHeaders(settings: Settings, o: { isDev: boolean }) {
 
 // Boot checks against the built Next app (.next): Next compressing HTML itself (not BREACH-aware), and
 // ISR / PPR routes served under the relaxed static policy (their cached HTML may carry stored user content).
+// 16 fresh CSPRNG bytes per nonce, cut from a 4 KB block (one randomBytes call per 256 requests, not one each)
+let pool = Buffer.alloc(0), at = 0
+function nonce(): string {
+  if (at + 16 > pool.length) { pool = randomBytes(4096); at = 0 }
+  return pool.toString('base64', at, (at += 16))
+}
+
 export function nextBuildWarnings(nextDir: string, settings: Settings): string[] {
   const read = (f: string) => { try { return JSON.parse(readFileSync(join(nextDir, f), 'utf8')) as Record<string, unknown> } catch { return undefined } }
   const out: string[] = []

@@ -70,6 +70,8 @@ export class SessionStore {
     return s
   }
   dropEphemeral(sid: Sid): void { this.once.delete(sid) }
+  // an unstored session (ephemeral / deferred): one call's, never a rate-limit key of its own
+  transient(sid: Sid): boolean { return this.once.has(sid) }
 
   // Lazy sessions: a cookie-less call that may or may not need a session (an anonymous api mutation). Unstored and
   // hook-free like ephemeral(), but with a normal sid: keep() stores this same object under this same sid once the

@@ -121,7 +121,9 @@ export function renderNode(node: SqlNode, d: Dialect, opts: RenderOpts = {}): St
     if (x.groupBy?.length) s += ` GROUP BY ${x.groupBy.map(e).join(', ')}`
     if (x.having) s += ` HAVING ${e(x.having)}`
     if (x.order?.length) s += ` ORDER BY ${x.order.map(order).join(', ')}`
-    if (x.limit !== undefined) s += ` LIMIT ${e({ t: 'param', value: x.limit })}`
+    // sqlite: a bound LIMIT makes it re-prepare the statement on every run (the plan depends on the value), which
+    // costs more than the query itself; an integer is written inline (one cached statement per page size)
+    if (x.limit !== undefined) s += ` LIMIT ${d.name === 'sqlite' && Number.isSafeInteger(x.limit) ? x.limit : e({ t: 'param', value: x.limit })}`
     if (x.offset) {   // OFFSET needs a LIMIT on sqlite / mysql: their documented "no limit" spellings
       if (x.limit === undefined && d.name !== 'postgres') s += d.name === 'sqlite' ? ' LIMIT -1' : ' LIMIT 18446744073709551615'
       s += ` OFFSET ${e({ t: 'param', value: x.offset })}`

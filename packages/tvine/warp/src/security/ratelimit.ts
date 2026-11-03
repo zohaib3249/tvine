@@ -6,61 +6,112 @@ import type { ActionRules, Sid } from '../core/types.js'
 type Rate = { limit: number; windowMs: number }
 type Bucket = { tokens: number; at: number }
 
-const CAP = 10_000           // LRU cap per map (ip buckets; sid buckets too, for now)
+const CAP = 10_000           // buckets kept per generation (ip map; sid map): 10k..20k live per map
 const IP_WINDOW_MULT = 5     // IP bucket is stricter: same limit spread over 5× the window
 
 export type RateResult = { ok: true } | { ok: false; retryAfterMs: number }
 export type RateKeys = { sid?: Sid; ip?: string; action?: string }
+export type RateItem = { keys: RateKeys; rules?: ActionRules['rate'] }
 // settings.limits.backend: 'memory' = RateLimiter (this file), 'redis' = backends/redis.ts (same algorithm, atomic Lua).
+// THE per-request contract (both stores): dispatch makes ONE checkAll per command (core/dispatch.ts step 3), with
+//   [{ keys: { ip, sid? } }]                                  the ip bucket + the session's default bucket (3a)
+//   + { keys: { sid, action }, rules }                        an action's own rate (3b), when it has one
+//   + { keys: { ip } }                                        a cookie-less api call's first contact (transport/api.ts)
+// The buckets are the union of bucketsFor() over the items (a bucket listed twice is charged twice); all-or-nothing:
+// any bucket short → nothing is charged, retryAfterMs = the longest wait. check(k, r) === checkAll([{ keys: k, rules: r }]).
+// A session that is not stored (ephemeral / deferred: an anonymous call) has no sid bucket: dispatch keys it by ip.
 export interface Limiter {
   check(keys: RateKeys, rules?: ActionRules['rate']): RateResult | Promise<RateResult>
-  // every bucket of every item at once, all-or-nothing (max retryAfterMs); check(k, r) === checkAll([{ keys: k, rules: r }])
-  checkAll?(items: { keys: RateKeys; rules?: ActionRules['rate'] }[]): RateResult | Promise<RateResult>
+  checkAll?(items: RateItem[]): RateResult | Promise<RateResult>
+}
+
+// One call for every item (a store without checkAll: one check per item, in order, stopping at the first refusal).
+export async function checkAll(l: Limiter, items: RateItem[]): Promise<RateResult> {
+  if (!items.length) return { ok: true }
+  if (l.checkAll) return l.checkAll(items)
+  for (const i of items) { const r = await l.check(i.keys, i.rules); if (!r.ok) return r }
+  return { ok: true }
 }
 
 export class RateLimiter implements Limiter {
-  private ips = new Map<string, Bucket>()   // Map insertion order = LRU order
-  private sids = new Map<string, Bucket>()
+  private ips = new Generations<Bucket>(CAP)
+  private sids = new Generations<Bucket>(CAP)
 
   constructor(private defaults: Rate) { checkRate('settings.limits.rate', defaults) }
 
   // `action` (dispatch passes it once the action is known) gives an action-level rate its own
   // bucket per sid+action, so two actions with equal rates never share one.
-  // No ip = only the sid bucket (dispatch checks ip + default sid bucket first, then the action's own).
-  check(keys: RateKeys, rules?: ActionRules['rate']): RateResult {
+  check(keys: RateKeys, rules?: ActionRules['rate']): RateResult { return this.checkAll([{ keys, rules }]) }
+
+  checkAll(items: RateItem[]): RateResult {
     const now = Date.now()
     let retryAfterMs = 0
-    const buckets = bucketsFor(keys, rules, this.defaults).map(({ ip, key, rate }) => {
-      const b = this.refill(ip ? this.ips : this.sids, key, rate, now)
-      if (b.tokens < 1) retryAfterMs = Math.max(retryAfterMs, Math.ceil((1 - b.tokens) * rate.windowMs / rate.limit))
-      return b
-    })
+    const buckets: Bucket[] = []
+    for (const it of items) {
+      for (const { ip, key, rate } of bucketsFor(it.keys, it.rules, this.defaults)) {
+        const b = this.refill(ip ? this.ips : this.sids, key, rate, now)
+        // a bucket listed twice must hold two tokens
+        const need = 1 + buckets.reduce((n, x) => n + (x === b ? 1 : 0), 0)
+        if (b.tokens < need) retryAfterMs = Math.max(retryAfterMs, Math.ceil((need - b.tokens) * rate.windowMs / rate.limit))
+        buckets.push(b)
+      }
+    }
     if (retryAfterMs) return { ok: false, retryAfterMs }
     for (const b of buckets) b.tokens -= 1
     return { ok: true }
   }
 
-  private refill(map: Map<string, Bucket>, key: string, rate: Rate, now: number): Bucket {
-    const b = map.get(key) ?? { tokens: rate.limit, at: now }
-    map.delete(key)
+  // O(1): only the touched bucket refills (lazily, from its own last-seen time)
+  private refill(map: Generations<Bucket>, key: string, rate: Rate, now: number): Bucket {
+    let b = map.get(key)
+    if (!b) { b = { tokens: rate.limit, at: now }; map.set(key, b); return b }   // a new client: a full bucket
     b.tokens = Math.min(rate.limit, b.tokens + (now - b.at) * rate.limit / rate.windowMs)
     b.at = now
-    map.set(key, b)
-    if (map.size > CAP) map.delete(map.keys().next().value!)
     return b
   }
 }
 
+// Bounded map with approximate LRU in O(1): writes go to `cur`; once it holds `cap` keys it becomes `old` and the
+// previous `old` is dropped whole. A key read from `old` moves back to `cur`. So the `cap` most recent keys are always
+// kept and at most 2*cap live. (A delete+set LRU on one Map was O(evicted) per request: V8's Map iterator walks the
+// deleted slots at the front, and a flood of fresh keys evicted on every request.)
+// A forgotten bucket comes back full, as a new client's would.
+export class Generations<V> {
+  private cur = new Map<string, V>()
+  private old = new Map<string, V>()
+  constructor(private cap: number) {}
+  get size() { return this.cur.size + this.old.size }
+  get(key: string): V | undefined {
+    const v = this.cur.get(key)
+    if (v !== undefined || this.old.size === 0) return v
+    const o = this.old.get(key)
+    if (o !== undefined) { this.old.delete(key); this.set(key, o) }
+    return o
+  }
+  set(key: string, v: V): void {
+    if (this.cur.size >= this.cap && !this.cur.has(key)) { this.old = this.cur; this.cur = new Map() }
+    this.cur.set(key, v)
+  }
+}
+
+// A rate no client can reach (a lifted limit: a burst of 1M+ and a refill of 1M+/s): no bucket at all.
+const unlimited = (r: Rate) => r.limit >= 1e6 && r.limit / r.windowMs >= 1000
+
 // The buckets one check takes a token from (shared by every backend, so both count the same keys):
 // the client ip's (same limit over IP_WINDOW_MULT x the window), and the sid's — default rate, or an action's own
-// rate in a bucket of its own per sid + action, so other actions keep the default.
+// rate in a bucket of its own per sid + action, so other actions keep the default. An 'ephemeral:' sid (a one-call
+// session) gets no sid bucket; unreachable rates get none either.
 export function bucketsFor(keys: RateKeys, rules: ActionRules['rate'] | undefined, defaults: Rate): { ip: boolean; key: string; rate: Rate }[] {
   const out: { ip: boolean; key: string; rate: Rate }[] = []
-  if (keys.ip !== undefined) out.push({ ip: true, key: ipKey(keys.ip), rate: { limit: defaults.limit, windowMs: defaults.windowMs * IP_WINDOW_MULT } })
-  if (keys.sid) {
-    out.push(rules
+  if (keys.ip !== undefined) {
+    const rate = { limit: defaults.limit, windowMs: defaults.windowMs * IP_WINDOW_MULT }
+    if (!unlimited(rate)) out.push({ ip: true, key: ipKey(keys.ip), rate })
+  }
+  if (keys.sid && !keys.sid.startsWith('ephemeral:')) {
+    const b = rules
       ? { ip: false, key: `${keys.sid}|${keys.action ?? ''}|${rules.limit}/${rules.windowMs}`, rate: rules }
-      : { ip: false, key: keys.sid, rate: defaults })
+      : { ip: false, key: keys.sid, rate: defaults }
+    if (!unlimited(b.rate)) out.push(b)
   }
   return out
 }

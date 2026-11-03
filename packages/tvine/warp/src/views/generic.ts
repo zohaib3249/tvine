@@ -116,9 +116,15 @@ function lookupSchema(f: AnyField, op: Op): z.ZodTypeAny {
   return valueSchema(f)
 }
 
+// schema.partial() once per input schema (update bodies), not per request
+const partials = new WeakMap<z.AnyZodObject, z.AnyZodObject>()
+const partialOf = (s: z.AnyZodObject) => { let p = partials.get(s); if (!p) partials.set(s, (p = s.partial())); return p }
+
 // urls.ts GET: query strings → the action's number/boolean params, with the same coercion as the lookups above
+const paramTypes = new WeakMap<object, Map<string, string>>()   // per action def (its schema never changes)
 export function coerceQuery(def: Pick<ActionDef, 'schema' | 'rules'>, q: Record<string, unknown>): Record<string, unknown> {
-  const types = new Map(paramSpecs(def).map((p) => [p.name, p.type]))
+  let types = paramTypes.get(def)
+  if (!types) paramTypes.set(def, (types = new Map(paramSpecs(def).map((p) => [p.name, p.type]))))
   return Object.fromEntries(Object.entries(q).map(([k, v]) => [k, types.get(k) === 'number' ? toNum(v) : types.get(k) === 'boolean' ? toBool(v) : v]))
 }
 
@@ -456,6 +462,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
       ...lookups,
     }).strict()
     const lookupObj = z.object({ [gv.lookupParam]: valueSchema(lookupF) })
+    const lookupStrict = lookupObj.strict()   // built once, not per request
 
     // Advertised create/update schemas come from getSerializer() resolved per action at boot (no
     // request yet: ctx has the action name and ANONYMOUS). Switching serializers per REQUEST still
@@ -473,7 +480,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
         : `lookupParam "${gv.lookupParam}" collides with the writable field "${gv.lookupParam}"; rename the param`)
     }
     const schemas = {
-      list: () => listSchema, get: () => lookupObj.strict(), delete: () => lookupObj.strict(),
+      list: () => listSchema, get: () => lookupStrict, delete: () => lookupStrict,
       create: () => inputFor(bootCtx('create')).schema,
       update: () => lookupObj.merge(updIn!.partial()).strict(),
     } satisfies Record<GeneratedAction, () => z.ZodTypeAny>
@@ -490,7 +497,7 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
         return { ...page, items: page.items.map(o => out(v, ctx, o)) }
       },
       get: async (v, raw, ctx) => {
-        ctx.params = validate(lookupObj.strict(), raw, true)
+        ctx.params = validate(lookupStrict, raw, true)
         return out(v, ctx, await v.getObject(ctx))
       },
       create: async (v, raw, ctx) => {
@@ -503,13 +510,13 @@ export function viewActions(V: new () => View, opts: { shapers?: Shapers } = {})
         const { [gv.lookupParam]: key, ...rest } = (raw ?? {}) as Record<string, unknown>
         ctx.params = validate(lookupObj, { [gv.lookupParam]: key }, true)
         const { schema, readOnly } = inputOf(model, v.getSerializer(ctx))
-        const data = validate(schema.partial(), rest, false, readOnly)
+        const data = validate(partialOf(schema), rest, false, readOnly)
         const obj = await v.getObject(ctx)
         refuseHumanOnly(model.fields, rest, !!ctx.request?.agent?.is, obj as Record<string, unknown>)
         return out(v, ctx, await v.performUpdate(obj, data, ctx))
       },
       delete: async (v, raw, ctx) => {
-        ctx.params = validate(lookupObj.strict(), raw, true)
+        ctx.params = validate(lookupStrict, raw, true)
         await v.performDestroy(await v.getObject(ctx), ctx)
         return null
       },

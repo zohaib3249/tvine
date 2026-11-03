@@ -19,6 +19,8 @@ export interface Driver {
   session?<T>(fn: (d: Driver) => Promise<T>): Promise<T>   // pooled: one connection for all of fn (session-level locks)
 }
 
+const STMT_CAP = 500
+
 // better-sqlite3 is synchronous; the engine's serial queue keeps ops (and transactions) in order.
 export function sqliteDriver(path: string): Driver & { db: Database.Database } {
   const db = new Database(path)
@@ -28,11 +30,24 @@ export function sqliteDriver(path: string): Driver & { db: Database.Database } {
   // sqlite lower() is ASCII-only; contains/search need full Unicode case folding
   db.function('tv_lower', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toLowerCase()))
   db.function('tv_upper', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toUpperCase()))
+  // prepared statements by SQL text (a queryset shape = one text; values are params). FIFO-bounded: a flood of
+  // distinct texts (raw SQL with inlined values) costs at most STMT_CAP statements. SQLite re-prepares a cached
+  // statement itself after a schema change.
+  const stmts = new Map<string, Database.Statement>()
+  const prepare = (sql: string) => {
+    let st = stmts.get(sql)
+    if (!st) {
+      st = db.prepare(sql)
+      if (stmts.size >= STMT_CAP) stmts.delete(stmts.keys().next().value!)
+      stmts.set(sql, st)
+    }
+    return st
+  }
   const d: Driver & { db: Database.Database } = {
     db,
-    query: async (sql, params) => db.prepare(sql).all(...params) as DbRow[],
+    query: async (sql, params) => prepare(sql).all(...params) as DbRow[],
     exec: async (sql, params) => {
-      const r = db.prepare(sql).run(...params)
+      const r = prepare(sql).run(...params)
       return { changes: r.changes, lastId: r.lastInsertRowid }
     },
     async transaction(fn) {

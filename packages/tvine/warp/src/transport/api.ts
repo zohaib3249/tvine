@@ -52,7 +52,8 @@ export function verifyForward(v: unknown, settings: Settings): Forward | undefin
 }
 
 // The events of one dispatch → ApiResult. JSON round-trip: in-process and HTTP give byte-equal data.
-export function toApiResult(events: Event[]): ApiResult {
+// http: the result is only sent (sendApi), so its data is serialized once and not parsed back.
+export function toApiResult(events: Event[], http = false): ApiResult {
   const err = events.find((e): e is Extract<Event, { kind: 'err' }> => e.kind === 'err')
   if (err) {
     return {
@@ -64,9 +65,16 @@ export function toApiResult(events: Event[]): ApiResult {
   const ok = events.find((e): e is Extract<Event, { kind: 'ok' }> => e.kind === 'ok')
   const goto = events.find((e): e is Extract<Event, { kind: 'goto' }> => e.kind === 'goto')
   if (!ok && !goto) return { ok: false, code: 'internal', message: 'no result' }
-  const data = ok?.result === undefined ? null : JSON.parse(JSON.stringify(ok.result)) as unknown
-  return { ok: true, data, ...(goto && { goto: goto.url }) }
+  if (ok?.result === undefined) return { ok: true, data: null, ...(goto && { goto: goto.url }) }
+  const json = JSON.stringify(ok.result)
+  if (!http || json === undefined) return { ok: true, data: JSON.parse(json) as unknown, ...(goto && { goto: goto.url }) }
+  // HTTP: the JSON goes out as it is (sendApi); no parse + re-stringify of the same data
+  const r: ApiResult = { ok: true, data: ok.result, ...(goto && { goto: goto.url }) }
+  DATA_JSON.set(r, json)
+  return r
 }
+// an ok result's data as JSON, serialized once by toApiResult
+const DATA_JSON = new WeakMap<ApiResult, string>()
 
 const fail = (code: ErrCode, message: string, reason?: string): ApiResult => ({ ok: false, code, message, ...(reason && { reason }) })
 const FORBIDDEN = fail('domain', FORBIDDEN_ROUTE, 'forbidden')
@@ -78,6 +86,7 @@ export interface Caller {
   cookie?: string
   mode: 'render' | 'action'                // render = a server component render: read actions only
   mint?: (s: Session) => Promise<void> | void              // action mode: hand a newly created session's cookie to the caller
+  http?: boolean                           // the result is sent as JSON by sendApi (callerOf)
 }
 
 // One api call. A read with no session runs on a throwaway session; a mutation creates one (after the
@@ -95,7 +104,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   }
   let session = await sessions.peek({ sid: who.sid, cookie: who.cookie })
   if (!(await guardCheck(settings)(who.request.path, who.request, session))) return FORBIDDEN
-  let ephemeral = false, deferred = false
+  let ephemeral = false, deferred = false, firstContact = false
   if (session && who.sid !== undefined) {
     // An agent's snapshot render runs INSIDE that agent's command (dispatch step 10), which holds the sid's
     // queue: dispatching on the same sid would wait for itself. Reads run on an ephemeral copy instead.
@@ -104,16 +113,18 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
   } else if (!session) {
     if (who.sid !== undefined) return fail('expired_sid', 'session expired')   // an agent render whose session is gone
     if (crossOrigin(who.request, settings)) return FORBIDDEN
-    if (who.mode !== 'render') {   // a page render's reads spend no rate bucket (dispatch opts.render)
-      const rl = await server.limiter.check({ ip: who.request.ip })
-      if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
-    }
-    if (read) { session = sessions.ephemeral(); ephemeral = true }   // a read never creates a real session
+    // a page render's reads spend no rate bucket (dispatch opts.render). The ip pays one token here (before a session
+    // is stored) or, for a session nothing stores, inside the dispatch's own limiter call (firstContact).
+    if (read) { session = sessions.ephemeral(); ephemeral = true; firstContact = true }   // a read never creates a real session
     else if (!who.mint) return fail('expired_sid', 'this action needs a session')
     // a retry token (cmdId) is replayed per stored session: such a call keeps its session up front, as before
-    else if (call.cmdId !== undefined) { session = await sessions.create(); await who.mint(session) }
+    else if (call.cmdId !== undefined) {
+      const rl = await server.limiter.check({ ip: who.request.ip })
+      if (!rl.ok) return toApiResult([rateLimited(rl.retryAfterMs)])
+      session = await sessions.create(); await who.mint(session)
+    }
     // lazy: stored (and its cookie minted) only if the call needs it, see after the dispatch
-    else { session = sessions.deferred(); deferred = true }
+    else { session = sessions.deferred(); deferred = true; firstContact = true }
   }
   const cmd = {
     action: def.id, params: (call.params ?? {}) as Record<string, unknown>, sid: session.sid,
@@ -122,7 +133,7 @@ export async function invoke(server: ServerCtx, call: ApiCall, who: Caller): Pro
     ...(call.cmdId !== undefined && !ephemeral && { cmdId: call.cmdId }),   // nothing to replay on a one-call session
   }
   try {
-    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render' })))
+    const r = toApiResult(await collect(dispatch(cmd, server, who.request, { snapshot: false, render: who.mode === 'render', firstContact })), who.http)
     const rotated = rotatedSession(who.request)   // login/logout rotated the session: its cookie goes out through mint
     if (rotated) await who.mint?.(rotated)
     // a cookie-less call keeps a session only when it wrote session data or its answer is bound to the sid (a
@@ -165,7 +176,7 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
     const page = new URL(f.path, 'http://tvine.local').pathname
     const request = await buildRequest({ url: f.path, route: o.route(page) ?? page, headers: {}, ip: f.ip || 'unknown', via: 'human' }, settings)
     if (own || f.agent) request.agent = { is: true, via: 'http' }
-    return { request, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: async (s) => { res.setHeader(MINTED, await sessions.cookieFor(s.sid)) } }
+    return { request, http: true, sid: own?.sid, cookie: f.cookie, mode: own ? 'render' : f.mode, mint: async (s) => { res.setHeader(MINTED, await sessions.cookieFor(s.sid)) } }
   }
   // a browser (client component): custom header forces a CORS preflight cross-site; origin checked by dispatch
   if (req.headers['x-tvine-api'] !== '1') return undefined
@@ -183,15 +194,17 @@ export async function callerOf(server: ServerCtx, o: ApiTransportOptions, req: I
     if (i > 0 && part.slice(0, i).trim() === name) { cookie = part.slice(i + 1).trim(); break }
   }
   return {
-    request, cookie, mode: 'action',
+    request, cookie, mode: 'action', http: true,
     mint: async (s) => { res.setHeader('set-cookie', cookieHeader(settings, await sessions.cookieFor(s.sid))) },
   }
 }
 
 export const sendApi = (res: ServerResponse, r: ApiResult, status = statusOf(r), headers: Record<string, string> = {}) => {
   if (res.headersSent) return
+  const json = DATA_JSON.get(r)
+  const body = json === undefined || !r.ok ? JSON.stringify(r) : `{"ok":true,"data":${json}${r.goto === undefined ? '' : `,"goto":${JSON.stringify(r.goto)}`}}`
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store', ...headers })
-  res.end(JSON.stringify(r))
+  res.end(body)
 }
 export const apiFail = fail
 export const API_FORBIDDEN = FORBIDDEN

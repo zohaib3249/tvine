@@ -74,8 +74,10 @@ export const forwardedHostOf = (req: IncomingMessage, trustProxy: number) => for
 
 // The path every path rule matches (middleware lists, guards): percent-decoded, `\` as `/`, dot segments collapsed,
 // duplicate slashes merged — what Next routes. Repeated until stable (a decoded %2F can create new segments).
+const PLAIN_PATH = /^\/[\w\-.~!$&'()*+,;=:@/]*$/   // + no `//` and no dot segment: already normal (no %, `\`, space…)
 export function normalizePath(raw: string): string {
   let p = raw.split('?')[0]!.split('#')[0]! || '/'
+  if (PLAIN_PATH.test(p) && !p.includes('//') && !p.includes('/.')) return p
   for (let i = 0; i < 4; i++) {
     // slashes merged BEFORE parsing: '//x' would otherwise parse as a host
     let next = new URL(`/${p.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/{2,}/g, '/')}`, 'http://n').pathname
