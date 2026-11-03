@@ -74,7 +74,7 @@ export const DEFAULTS: Omit<Settings, 'secret' | 'auth'> = {
   audit: { enabled: false, actions: 'writes', retentionDays: 90, redact: [] },
   shield: {
     mode: 'log', prefix: '/tvine/shield', clearance: { ttl: '30m' }, ipdb: { source: 'dbip-lite', dir: './data/shield', update: 'monthly' },
-    aiDefaults: { agents: 'allow', crawlers: 'challenge', search: 'allow' },
+    aiDefaults: { agents: 'allow', crawlers: 'allow', search: 'allow' },   // every bot category allowed; scanners + spoofed bots blocked
     panel: { path: '/shield', access: { all: [{ field: 'isSuperuser', op: 'eq', value: true }] } },
     sensor: 'challenge', events: { samplePass: 0.01, maxPerMinute: 600, retentionDays: 14, storeIp: true, logAll: false, hardCapPerMinute: 20_000 },
     stats: { bucket: '1h', retentionDays: 90 }, cleanup: { enabled: true, schedule: '30 3 * * *' }, webBotAuth: { directories: [] },

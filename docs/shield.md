@@ -40,12 +40,14 @@ The built-in rules (editable in /shield → Rules; **Reset to defaults** restore
 | Verified search engines (Google, Bing, Apple, Yandex…) | allowed |
 | AI agents acting for a user (Claude-User, ChatGPT-User, Tvine API tokens, Web Bot Auth agents) | allowed |
 | Scanners (sqlmap, nikto…) | blocked |
-| AI crawlers (GPTBot, ClaudeBot, CCBot, Bytespider…) | challenged |
-| Score below 30 on a page | challenged |
-| Any browser's first page load without a pass | invisible check, once |
+| AI crawlers (GPTBot, ClaudeBot, CCBot, Bytespider…), monitors, SEO tools, curl and other automation | allowed |
+| A browser scoring below 30 on a page | challenged |
+| A browser's first page load without a pass | invisible check, once |
 
-- The AI stances come from `shield.aiDefaults` (`agents: 'allow'`, `crawlers: 'challenge'`, `search: 'allow'`) and
-  can be changed per category in /shield → Bots & AI.
+- Every bot category is allowed by default; only scanners and bots faking a verified one are blocked. The two browser
+  checks only judge what claims to be a browser (or an unrecognised user agent): bots cannot run the in-page check,
+  so they are decided by their category. Change a category in /shield → Bots & AI (allow / challenge / block); the
+  AI ones start from `shield.aiDefaults` (`agents`, `crawlers`, `search`, all `'allow'`).
 - Agent paths (`/mcp`, `/tvine/*`, `/.well-known/*`, `/llms.txt`) never get an HTML page: a JSON 403 / 429.
 - The `/shield` panel, the admin and sign-in are never challenged. Signed-in staff are never rate-limited there.
 - Static files and Next.js internals (`/_next/*`) skip Shield entirely.
@@ -248,7 +250,7 @@ visitor arrives as your own machine (`::1`), shows as "Local network", and share
 |---|---|---|
 | `shield.mode` | `'log'` | `off`, `log` or `enforce` (the panel can change it live) |
 | `shield.clearance.ttl` | `'30m'` | how long a pass lasts |
-| `shield.aiDefaults` | agents allow, crawlers challenge, search allow | stance per AI category |
+| `shield.aiDefaults` | agents, crawlers, search: all allow | stance per AI category |
 | `shield.panel.path` | `'/shield'` | where the panel lives |
 | `shield.panel.access` | superusers | who may open it (a condition on the user) |
 | `shield.ipdb.dir` | `'./data/shield'` | where the IP database is kept (git-ignore it) |

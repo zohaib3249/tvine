@@ -43,6 +43,7 @@ export function botRule(category: BotCategory, stance: ShieldStance, order: numb
     : { field: 'bot.category', op: 'eq', value: category }
   return { id: botRuleId(category), name: `${category} bots: ${stance}`, enabled: true, order, when, then: stanceAction(stance) }
 }
+const BROWSERISH: Condition = { field: 'bot.category', op: 'in', value: ['browser', 'unknown'] }
 export function defaultRules(ai: Settings['shield']['aiDefaults']): Rule[] {
   return [
     { id: 'default:rate', name: 'Rate limit 300/min per ip', enabled: true, order: 5, when: { all: [] }, then: { type: 'rateLimit', limit: 300, window: '1m', key: 'ip' } },
@@ -51,10 +52,11 @@ export function defaultRules(ai: Settings['shield']['aiDefaults']): Rule[] {
     botRule('ai-agent', ai.agents, 40),
     botRule('scanner', 'block', 50),
     botRule('ai-crawler', ai.crawlers, 60),
-    { id: 'default:low-score', name: 'Challenge low scores on pages', enabled: true, order: 80, when: { all: [{ field: 'page', op: 'eq', value: true }, { field: 'score', op: 'lt', value: 30 }] }, then: { type: 'challenge', level: 'auto' } },
-    // like a Cloudflare JS check: a browser's first page load runs the invisible PoW once, then the clearance cookie passes it.
-    // AI agents (owner stance: allow) are left out even unverified; the rate limit still caps a fake agent UA.
-    { id: 'default:new-visitor', name: 'Check every new visitor (invisible, once per clearance)', enabled: true, order: 90, when: { all: [{ field: 'page', op: 'eq', value: true }, { field: 'clearance', op: 'eq', value: false }, { field: 'bot.category', op: 'neq', value: 'ai-agent' }] }, then: { type: 'challenge', level: 'pow' } },
+    // the two browser checks only judge what claims to be a browser (or an unrecognised user agent): a bot cannot run the
+    // in-page check, so bots are decided by their category stance above (default: allow; scanners and spoofed: block)
+    { id: 'default:low-score', name: 'Challenge low-score browsers on pages', enabled: true, order: 80, when: { all: [{ field: 'page', op: 'eq', value: true }, BROWSERISH, { field: 'score', op: 'lt', value: 30 }] }, then: { type: 'challenge', level: 'auto' } },
+    // like a Cloudflare JS check: a browser's first page load runs the invisible PoW once, then the clearance cookie passes it
+    { id: 'default:new-visitor', name: 'Check every new visitor (invisible, once per clearance)', enabled: true, order: 90, when: { all: [{ field: 'page', op: 'eq', value: true }, { field: 'clearance', op: 'eq', value: false }, BROWSERISH] }, then: { type: 'challenge', level: 'pow' } },
   ]
 }
 
