@@ -164,7 +164,7 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       if (name === 'release') {
         const p = releaseIn.safeParse(args)
         if (!p.success) return bad(server, p.error)
-        if (await server.sessions.peek({ sid: p.data.sid })) tabs.releaseAgent(p.data.sid)
+        if (await server.sessions.peek({ sid: p.data.sid })) await tabs.releaseAgent(p.data.sid)
         return json({ kind: 'ok', action: 'release', sid: p.data.sid })
       }
       const p = controlIn.safeParse(args)
@@ -176,7 +176,7 @@ export function mcpServer(server: ServerCtx, opts: McpOptions, caller: McpCaller
       return json({ kind: 'ok', action: 'request_control', sid: r.sid, ...(r.data as object), message: CONTROL_HINT })
     }
     // a sid that controls a tab (or waits for one) is answered by that tab, never headless
-    const st = tabs?.state(typeof args.sid === 'string' ? args.sid : undefined)
+    const st = await tabs?.state(typeof args.sid === 'string' ? args.sid : undefined)
     if (st && st.kind !== 'control') {
       // tab errors are JSON with a machine-readable reason (control-protocol.md §Errors), like forwarded results
       return json(st.kind === 'awaiting'

@@ -92,11 +92,10 @@ still shared by all of them.
 **Memory.** Each worker loads its own copy of the app (and of Next.js), so memory is about N × one worker
 (backlog #46 is about lighter workers).
 
-**Tab control is still pinned to one process.** A browser tab's agent connection lives on the worker/server that
-holds its event stream. `/tvine/channel`, `/tvine/tab/*`, `/tvine/agent/*` and `/mcp` (for `request_control`) must
-reach that same process; behind a load balancer route them by session (cookie `tvine_s`, or header
-`x-tvine-sid`). With `--workers` on one server the OS cannot route by cookie, so tab control is only reliable with
-one worker per server for now. Everything else can go anywhere.
+**Tab control works on every worker too.** With `channels: { backend: 'redis' }` the tab hub keeps its tabs,
+approvals and control in Redis: the tab's event stream, its posts and the agent's calls may each reach a different
+worker or server. An agent's command goes to whichever worker holds the tab's stream, and the tab's answer goes
+back to the worker the agent is waiting on. No sticky sessions needed.
 
 Split mode (Next on one server, `tvine start --api-only` on another) exists but is not recommended yet; don't
 start there.

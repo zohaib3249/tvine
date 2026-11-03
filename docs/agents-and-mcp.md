@@ -235,6 +235,8 @@ Rules that always hold:
 - The "Agent connected · Stop" pill can't be hidden by the page while an agent is in control.
 - Actions run from the tab are marked as agent actions on the server, so `humanOnly` and `denyAgents` still apply.
 - `settings.agent.inTab: 'off'` (or `<WeftRoot inTab="off">`) disables tab control.
+- Several workers or servers: works as with one once `channels: { backend: 'redis' }` is set (the tab, its
+  posts and the agent may each reach a different worker; [deploy.md](deploy.md#2-scaling)).
 
 Errors come back as `{kind:'err', code, reason, message}` with reasons `awaiting_approval`, `human_denied`,
 `busy`, `stopped`, `not_connected`, `timeout`, `tab_closed`.

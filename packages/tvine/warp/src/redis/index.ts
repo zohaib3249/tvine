@@ -22,7 +22,7 @@ export interface RedisClient {
   readonly isReady: boolean
   SUBSCRIBE(channels: string | string[], fn: (message: string, channel: string) => void): Promise<void>
   PSUBSCRIBE(patterns: string | string[], fn: (message: string, channel: string) => void): Promise<void>
-  UNSUBSCRIBE(channels?: string | string[]): Promise<void>
+  UNSUBSCRIBE(channels?: string | string[], fn?: (message: string, channel: string) => void): Promise<void>
   PUNSUBSCRIBE(patterns?: string | string[]): Promise<void>
 }
 

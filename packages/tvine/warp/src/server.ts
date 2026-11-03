@@ -42,6 +42,7 @@ import { httpTransport } from './transport/http.js'
 import { urlsTransport } from './transport/urls.js'
 import { loadUrls, setLiveUrls, type UrlTable } from './urls.js'
 import { TabHub, tabTransport } from './transport/tab.js'
+import { SharedTabHub } from './transport/tab-shared.js'
 import { devReloadTransport, inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { appDirRoutes, liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
@@ -288,7 +289,8 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
   const isDev = settings.debug   // dev-only features need debug on, never just an unset NODE_ENV
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
-  const tabs = new TabHub(ctx)
+  // a shared channel layer = a shared tab hub: the tab's stream, its posts and the agent's calls may reach any worker
+  const tabs = settings.channels.backend === 'redis' ? new SharedTabHub(ctx) : new TabHub(ctx)
   ctx.tabs = tabs
   metrics.enabled = settings.metrics.enabled
   if (metrics.enabled) {

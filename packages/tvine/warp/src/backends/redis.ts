@@ -17,7 +17,7 @@ type Log = (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string,
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex')
 
 // EVALSHA, falling back to EVAL once per client after a SCRIPT FLUSH / restart (NOSCRIPT)
-class Script {
+export class Script {
   private sha: string
   constructor(private src: string) { this.sha = sha1(src) }
   async run<T>(c: RedisClient, keys: string[], args: (string | number)[]): Promise<T> {
@@ -451,14 +451,26 @@ export class RedisLoginThrottle implements ThrottleLike {
 }
 
 // ---- tab agent marks (transport/tab.ts forcedAgent, shared) --------------------------------------------------
+// tabmark:<sha1(sid)> zset: one member per process (its marking's end, Redis clock). A process clearing its own
+// marking never shortens another's (two workers forwarding commands of one session at once).
+const MARK_SET = new Script(`
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local ms = tonumber(ARGV[2])
+if ms > 0 then redis.call('ZADD', KEYS[1], now + ms, ARGV[1]) else redis.call('ZREM', KEYS[1], ARGV[1]) end
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+local top = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+if top[2] then redis.call('PEXPIRE', KEYS[1], math.ceil(tonumber(top[2]) - now)) end
+return 1`)
+const MARK_HAS = new Script(`
+local t = redis.call('TIME')
+return redis.call('ZCOUNT', KEYS[1], '(' .. (tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)), '+inf')`)
 export class RedisAgentMarks {
+  private me = randomBytes(8).toString('hex')
   constructor(private alias: string) {}
-  private key(sid: Sid) { return redis.key(this.alias, 'agent', sha1(sid)) }
-  async set(sid: Sid, ms: number): Promise<void> {
-    const c = await redis.get(this.alias)
-    await c.sendCommand(ms > 0 ? ['SET', this.key(sid), '1', 'PX', String(Math.ceil(ms))] : ['DEL', this.key(sid)])
-  }
-  async has(sid: Sid): Promise<boolean> { return Number(await (await redis.get(this.alias)).sendCommand(['EXISTS', this.key(sid)])) === 1 }
+  private key(sid: Sid) { return redis.key(this.alias, 'tabmark', sha1(sid)) }
+  async set(sid: Sid, ms: number): Promise<void> { await MARK_SET.run(await redis.get(this.alias), [this.key(sid)], [this.me, Math.max(0, Math.ceil(ms))]) }
+  async has(sid: Sid): Promise<boolean> { return Number(await MARK_HAS.run(await redis.get(this.alias), [this.key(sid)], [])) > 0 }
 }
 
 // ---- snapshot cache ------------------------------------------------------------------------------------------
