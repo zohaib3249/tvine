@@ -74,4 +74,4 @@ rmSync(join(pkg, 'docs'), { recursive: true, force: true })
 mkdirSync(join(pkg, 'docs'))
 const shipped = ['README.md', ...guides]
 for (const f of shipped) writeFileSync(join(pkg, 'docs', f), fix(read(`docs/${f}`), shipped) + '\n')
-console.log(`llms-full.txt: ${guides.length + 1} files, ${full.length} chars; packages/tvine/docs: ${guides.length + 1} files`)
+console.error(`llms-full.txt: ${guides.length + 1} files, ${full.length} chars; packages/tvine/docs: ${guides.length + 1} files`)
