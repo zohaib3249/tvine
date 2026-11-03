@@ -8,6 +8,7 @@
 //   two apps can share one Redis by giving each its own prefix.
 // - One handler per process (globalThis, like data/db.ts connections): configure() is idempotent for an
 //   unchanged alias, so a second server in the same process keeps the first one's clients.
+import { AsyncResource } from 'node:async_hooks'
 import type { RedisConnection, Settings } from '../core/types.js'
 
 // The subset of node-redis we rely on (structural, so the driver stays an optional peer).
@@ -44,6 +45,18 @@ function scrub(msg: string, url: string): string {
   return out
 }
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+// node-redis arms a 5 s AbortSignal.timeout per command. A timer keeps the async context it was made in (with
+// AsyncLocalStorage: the whole request, its req/res and handler scope) until it fires, and that timer is never
+// cleared: under load every request stayed reachable for 5 s (10k req/s on a cached read = GBs of heap). Commands are
+// started in this module's own context instead; the caller's await still resumes in its own context.
+// ponytail: the context is the one this module was first evaluated in (boot), not a guaranteed-empty one.
+const DETACHED = new AsyncResource('tvine.redis')
+export function detach(c: RedisClient): RedisClient {
+  const send = c.sendCommand.bind(c)
+  c.sendCommand = ((args: readonly (string | Buffer)[], ...rest: unknown[]) => DETACHED.runInAsyncScope(() => (send as (...a: unknown[]) => Promise<unknown>)(args, ...rest))) as RedisClient['sendCommand']
+  return c
+}
 
 let driver: Promise<{ createClient(o: object): RedisClient }> | undefined
 async function loadDriver(): Promise<{ createClient(o: object): RedisClient }> {
@@ -157,7 +170,7 @@ export class RedisConnections {
     }
     up = true
     this.readyNow.set(alias, true)
-    return client
+    return detach(client)
   }
 }
 

@@ -518,7 +518,8 @@ async function pipeline(cmd: Command, server: ServerCtx, request: Request, sessi
       yield* out
     }
     const chain = [...settings.actionMiddleware, ...(server.appMiddleware.get(def.id.slice(0, def.id.indexOf('.'))) ?? [])]
-    const mwCmd = deepFreeze({ ...cmd, params: structuredClone(cmd.params) })
+    // the frozen copy is for middleware only: no chain (the common case), no deep clone per command
+    const mwCmd = chain.length ? deepFreeze({ ...cmd, params: structuredClone(cmd.params) }) : cmd
     const drained = (async () => {   // drained in full (not collect()), so code after `yield* next()` runs
       const out: Event[] = []
       for await (const e of compose(chain, mwCmd, ctx, inner)) out.push(e)

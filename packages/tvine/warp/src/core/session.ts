@@ -51,9 +51,10 @@ export class SessionStore {
   }
 
   // byId's insertion order is recency (resolve re-inserts), so the first key is the least recently used
-  async create(): Promise<Session> {
+  // `s`: a deferred() session being kept (same object, same sid)
+  async create(s0: Session = newSession()): Promise<Session> {
     while (this.byId.size >= (this.settings.max ?? Infinity)) this.evict(this.byId.keys().next().value as Sid)   // #20: flood cap
-    const s = this.adopt(newSession())
+    const s = this.adopt(s0)
     this.created(s.sid)
     this.fresh.add(s.sid)
     if (this.fresh.size > FRESH_CAP) this.evict(this.fresh.values().next().value as Sid)
@@ -69,6 +70,21 @@ export class SessionStore {
     return s
   }
   dropEphemeral(sid: Sid): void { this.once.delete(sid) }
+
+  // Lazy sessions: a cookie-less call that may or may not need a session (an anonymous api mutation). Unstored and
+  // hook-free like ephemeral(), but with a normal sid: keep() stores this same object under this same sid once the
+  // call turned out to need it (it wrote session data, or its answer is bound to the sid); otherwise
+  // dropEphemeral() forgets it and the caller gets no cookie.
+  deferred(): Session {
+    const s = newSession()
+    this.once.set(s.sid, s)
+    return s
+  }
+  async keep(s: Session): Promise<Session> {
+    if (this.once.get(s.sid) !== s) return s
+    this.once.delete(s.sid)
+    return this.create(s)
+  }
 
   async resolve(key: SessionKey): Promise<Session | undefined> {
     const sid = this.sidOf(key)
@@ -127,6 +143,8 @@ export class SessionStore {
 
   // A committed change: rev + 1 (the session's data is saved with it), then the `update` event on its group.
   async bump(sid: Sid, source: 'human' | 'agent' = 'human', action?: string): Promise<Rev> {
+    const d = this.once.get(sid)
+    if (d) return ++d.rev   // not stored (yet): nothing to save, nobody can be subscribed to it
     const s = this.byId.get(sid)
     if (!s) throw new Error('bump: unknown sid')
     s.rev++
@@ -193,8 +211,17 @@ export class SessionStore {
   // dead object: anyone still holding it (a command queued on the old sid) must re-check with isLive() and never
   // learns the new sid. The caller hands out the new sid / cookie.
   async rotate(old: Session): Promise<Session> {
+    if (this.once.get(old.sid) === old) return this.rotateDeferred(old)
     if (this.byId.get(old.sid) !== old) throw new Error('rotate: unknown sid')
     return this.rotated(old, { ...old, sid: nanoid(), data: old.data, lastSeen: Date.now() })
+  }
+
+  // a deferred() session that logs in: never handed out, so nothing to evict; it is kept under a fresh sid
+  protected async rotateDeferred(old: Session): Promise<Session> {
+    this.once.delete(old.sid)
+    const s = await this.create({ ...old, sid: nanoid(), data: old.data, lastSeen: Date.now() })
+    old.data = new Map()
+    return s
   }
 
   protected rotated(old: Session, s: Session): Session {
