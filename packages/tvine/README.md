@@ -28,6 +28,8 @@ Writing code for a Tvine project? See [For coding agents](#for-coding-agents).
 
 ## Performance
 
+**[Open the interactive benchmark →](https://zohaib3249.github.io/tvine/benchmark.html)**
+
 ![Requests a second, one process each](https://raw.githubusercontent.com/zohaib3249/tvine/main/docs/images/benchmark-one-process.svg)
 
 One row read by id, requests a second on one process (same data, same machine):
@@ -37,7 +39,7 @@ One row read by id, requests a second on one process (same data, same machine):
 | 12,591 | 32,814 | 4,751 | 1,251 |
 
 Tvine does this with input validation, sessions, rate limits and MCP on every request. Full results, eight-process
-runs and Shield under floods: [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md) · [interactive page](https://htmlpreview.github.io/?https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.html).
+runs and Shield under floods: [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md) · [interactive page](https://zohaib3249.github.io/tvine/benchmark.html).
 
 ## Why Tvine
 
@@ -155,7 +157,7 @@ Full guide: [agents-and-mcp.md](https://github.com/zohaib3249/tvine/blob/main/do
 | Admin panel, dashboard, charts, system pages | [admin.md](https://github.com/zohaib3249/tvine/blob/main/docs/admin.md) |
 | Auth, 2FA, tokens, permissions, security features | [auth-and-security.md](https://github.com/zohaib3249/tvine/blob/main/docs/auth-and-security.md) |
 | Bot protection (Shield): rules, challenges, code rules, analytics globe | [shield.md](https://github.com/zohaib3249/tvine/blob/main/docs/shield.md) |
-| Performance: Tvine vs raw Node, Express, FastAPI and Django; Shield under floods | [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md) · [interactive page](https://htmlpreview.github.io/?https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.html) |
+| Performance: Tvine vs raw Node, Express, FastAPI and Django; Shield under floods | [benchmark.md](https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.md) · [interactive page](https://zohaib3249.github.io/tvine/benchmark.html) |
 | Background tasks, cache, email | [tasks-cache-email.md](https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md) |
 | Testing | [testing.md](https://github.com/zohaib3249/tvine/blob/main/docs/testing.md) |
 | Every CLI command | [cli.md](https://github.com/zohaib3249/tvine/blob/main/docs/cli.md) |

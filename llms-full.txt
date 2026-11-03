@@ -4697,7 +4697,8 @@ streams and timers, and exits 0; if closing takes over 5 s it exits 1. So:
 The same JSON API written in Tvine, raw Node, Express, FastAPI and Django, measured on one laptop. The code and the raw
 results are in [`benchmarks/`](https://github.com/zohaib3249/tvine/blob/main/benchmarks/README.md), so you can rerun everything with one command.
 
-**Interactive page:** [docs/benchmark.html](benchmark.html), one self-contained file with every chart, hover details and the full tables. Download it and open it in a browser, or [view it rendered](https://htmlpreview.github.io/?https://github.com/zohaib3249/tvine/blob/main/docs/benchmark.html).
+**Interactive page: [zohaib3249.github.io/tvine/benchmark.html](https://zohaib3249.github.io/tvine/benchmark.html)**, every chart with hover details and the full tables
+(the same file is [docs/benchmark.html](benchmark.html) in the repo).
 
 ## In short
 
