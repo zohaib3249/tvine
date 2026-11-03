@@ -29,6 +29,7 @@ const files = new Map<string, Buffer>()
 const file = (n: string) => files.get(n) ?? (files.set(n, readFileSync(new URL(n, STATIC_DIR))), files.get(n)!)
 const ASSET = /\.(js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|txt|xml|webmanifest)$/i
 const NEXT_INTERNAL = /^\/(_next\/|__nextjs)/
+const AGENT_HINT = 'agents: use the MCP endpoint /mcp (no browser checks), an API token (Authorization: Bearer …), or send your agent identity (User-Agent like Claude-User, or Web Bot Auth); people: open the page in a browser'
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const hdr = (req: IncomingMessage, n: string) => { const v = req.headers[n]; return Array.isArray(v) ? v[0] : v }
 const cookieOf = (req: IncomingMessage, name: string) => String(req.headers.cookie ?? '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${name}=`))?.slice(name.length + 1)
@@ -228,8 +229,10 @@ export function shield(o: Record<string, unknown>, b: BuildCtx): HttpMiddleware 
         const st = decision.status ?? 403
         return wantsJson ? json(res, st, { error: 'blocked', reason: decision.reason, ray }, out) : send(res, st, `Forbidden (ray ${ray})`, 'text/plain; charset=utf-8', out)
       }
-      // challenge: the agent surface (and any non-browser JSON client) never gets HTML
-      if (agentSurface) return json(res, 403, { error: 'challenge_required', reason: decision.reason, level: decision.level, ray }, out)
+      // challenge: the agent surface, and a request asking for an agent view of a page (x-tvine header, Accept: markdown /
+      // tvine formats), never get HTML: a JSON 403 that says how an agent gets through
+      const agentView = !!hdr(req, s.header) || /text\/(x-)?markdown|application\/tvine\+json|text\/tvine/i.test(hdr(req, 'accept') ?? '')
+      if (agentSurface || agentView) return json(res, 403, { error: 'challenge_required', reason: decision.reason, level: decision.level, ray, hint: AGENT_HINT }, out)
       // shown in place on the visitor's own URL (no redirect); after /verify the page reloads that URL with the clearance
       const r = signReturn(req.url && req.url.startsWith('/') ? req.url : path, decision.level ?? 'pow')
       const page = challengePage(prefix, decision.level ?? 'pow', r, nonceOf(req), frame.ancestors)
