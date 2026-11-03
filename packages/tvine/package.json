@@ -37,6 +37,7 @@
   },
   "files": [
     "AGENTS.md",
+    "THIRD_PARTY_NOTICES.md",
     "llms.txt",
     "llms-full.txt",
     "docs",

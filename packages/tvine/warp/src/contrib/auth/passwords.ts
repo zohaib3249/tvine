@@ -106,7 +106,7 @@ export const minLength = (n = 8): PasswordValidator => (pw) =>
 
 export const numericPassword = (): PasswordValidator => (pw) => (/^\d+$/.test(pw) ? ['This password is entirely numeric.'] : [])
 
-// The common-passwords list (20k entries, ~80 KB gzipped, BSD; packages/warp/data), read on first use.
+// The common-passwords list (20k entries, ~80 KB gzipped, BSD: see THIRD_PARTY_NOTICES.md; packages/tvine/warp/data), read on first use.
 // The same path resolves from src/ and dist/.
 let common: Set<string> | undefined
 const COMMON_FILE = new URL('../../../data/common-passwords.txt.gz', import.meta.url)
