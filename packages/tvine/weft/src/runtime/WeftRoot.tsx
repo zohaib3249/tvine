@@ -8,6 +8,7 @@ import { watchNav } from './nav.js'
 import { getRegistry } from './registry.client.js'
 import { AutoOff } from '../jsx/AutoEl.js'
 import { ConfirmHost } from './ConfirmHost.js'
+import { devReload } from './devReload.js'
 
 // Root layout wrapper: owns the page-level hooks (custom-logic.md §Global). Hooks are functions,
 // so a server layout passes them through an app-owned 'use client' wrapper. Nested roots stack:
@@ -32,7 +33,8 @@ export function WeftRoot({ hooks, auto, children, inTab = 'on', presence }: { ho
     if (process.env.NODE_ENV !== 'production') {
       let off: (() => void) | undefined, gone = false
       void import('../dev/Gallery.js').then((m) => { if (!gone) off = m.mountDevtools() }, () => {})
-      return () => { gone = true; off?.() }
+      const reload = devReload()   // tvine dev: reload after a server restart (404 under next dev alone: EventSource gives up)
+      return () => { gone = true; off?.(); reload?.() }
     }
   }, [])
   return <>{auto === false ? <AutoOff>{children}</AutoOff> : children}<ConfirmHost /></>

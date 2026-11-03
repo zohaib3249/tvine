@@ -1,18 +1,23 @@
-// tvine dev autoreload (a dev server that restarts on change): the parent watches the project and runs the real
-// server as a child (TVINE_DEV_CHILD=1); a backend change stops the child and starts a fresh one, because
-// Node's ESM cache cannot drop modules. Next's frontend (app/, components/, …) is left to Next HMR.
+// tvine dev autoreload: the parent watches the project and runs the real server as a child (TVINE_DEV_CHILD=1);
+// a change to any backend file stops the child and starts a fresh one, because Node's ESM cache cannot drop
+// modules. Next's frontend (app/, components/, …, *.css) is left to Next HMR; open tabs reload themselves after a
+// restart through GET /tvine/dev/reload (transport/inspector.ts devReloadTransport, weft runtime/devReload.ts).
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, realpathSync, watch, type FSWatcher } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const IGNORED = /(^|\/)(node_modules|\.next|\.git|dist)(\/|$)|^(media|data)\/|\.db(-\w+)?$|(^|\/)tvine-api\.d\.ts$/
+// never a restart: deps, build output, any dot dir (.git, .next, .idea, .vscode, …), data the app writes
+// (media/, data/, *.db*, sqlite, logs), generated files (tvine-api.d.ts, next-env.d.ts, *.tsbuildinfo), OS and editor scratch files (vim's 4913 probe)
+const IGNORED = /(^|\/)(node_modules|dist|coverage|\.(?!env)[^/]+)(\/|$)|^(media|data)\/|\.db[^/]*$|\.sqlite3?(-\w+)?$|\.log$|\.tsbuildinfo$|(^|\/)(tvine-api\.d\.ts|next-env\.d\.ts|\.DS_Store|4913|\.#[^/]*|[^/]*~|[^/]*\.sw[a-z])$/
+// Next hot-reloads these itself (HMR): the frontend dirs and every stylesheet
+const NEXT_HMR = /^(src\/)?(app|components|pages)(\/|$)|^(public|styles)(\/|$)/
 
-// a project-relative path → does it need a server restart? (apps: the apps dir relative to the root)
+// a project-relative path → does it need a server restart? Any file does (code, json, md, html, templates, the
+// root package.json, lib/, config/, .env*), except IGNORED and what Next hot-reloads. apps: the apps dir, always backend.
 export function restartsOn(rel: string, apps = 'apps'): boolean {
   const p = rel.replace(/\\/g, '/')
-  if (!p || IGNORED.test(p) || /\.css$/.test(p)) return false
-  if (p.startsWith(`${apps}/`)) return /\.(m?[jt]s|json)$/.test(p)
-  return p.startsWith('config/') || /^\.env[^/]*$/.test(p) || /^tvine\.config\.[^/]+$/.test(p)
+  if (!p || IGNORED.test(p) || /\.s?css$/.test(p)) return false
+  return p.startsWith(`${apps}/`) || !NEXT_HMR.test(p)
 }
 
 // a `link:`ed framework (node_modules/tvine realpath outside node_modules): its built dist dirs to watch too
