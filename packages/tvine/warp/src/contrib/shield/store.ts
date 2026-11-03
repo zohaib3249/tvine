@@ -108,5 +108,17 @@ export async function shieldCommand(settings: Settings, args: string[], o: { all
     await changed(settings)
     return `disabled ${n} rule(s)`
   }
-  throw new Error('usage: tvine shield mode off|log|enforce | tvine shield rules disable <id>|--all | tvine shield simulate [--count n] [--hours h] | --clear')
+  // the lists escape hatch: a denied own address also blocks the /shield sign-in, so lists can be fixed from here
+  if (what === 'lists' && a === undefined) {
+    const rows = await ShieldList.objects.order('id').all() as { kind: string; value: string; list: string; note?: string | null }[]
+    return rows.length ? rows.map((r) => `${r.list.padEnd(5)} ${r.kind.padEnd(7)} ${r.value}${r.note ? `  (${r.note})` : ''}`).join('\n') : 'no list entries'
+  }
+  if (what === 'lists' && a === 'remove' && (o.all ? b === undefined : !!b)) {
+    // the value as typed, a country (pk → PK) or an ASN (AS13335 → 13335)
+    const n = await (o.all ? ShieldList.objects.filter({}) : ShieldList.objects.filter({ value__in: [...new Set([b!, b!.toUpperCase(), b!.replace(/^AS/i, '')])] })).delete()
+    if (!n) throw new Error(`no list entry ${b}`)
+    await changed(settings)
+    return `removed ${n} list entr${n === 1 ? 'y' : 'ies'}`
+  }
+  throw new Error('usage: tvine shield mode off|log|enforce | tvine shield rules disable <id>|--all | tvine shield lists [remove <value>|--all] | tvine shield simulate [--count n] [--hours h] | --clear')
 }

@@ -426,6 +426,15 @@ export const listsSave = defineAction('shield.lists.save', z.object({ entries: z
     if (p.kind === 'asn' && !/^(AS)?\d{1,10}$/i.test(v)) throw bad(`entries[${i}]: an AS number (AS13335 or 13335)`, 'entries')
     return { kind: p.kind, value: p.kind === 'country' ? v.toUpperCase() : p.kind === 'asn' ? v.replace(/^AS/i, '') : v, list: p.list, note: p.note ?? null }
   })
+  // never deny the address making the change: once your own IP is denied, the /shield sign-in is blocked too
+  const me = ctx.request?.ip, geo = me ? lookupIp(me) : {}
+  rows.forEach((r, i) => {
+    if (r.list !== 'deny' || !me) return
+    const mine = r.kind === 'ip' || r.kind === 'cidr' ? evaluate({ field: 'ip', op: 'cidr', value: r.value }, { ip: me }) : r.kind === 'country' ? r.value === geo.country : Number(r.value) === geo.asn
+    if (mine) throw bad(`entries[${i}]: ${r.kind} ${r.value} is your own address (${me}${r.kind === 'country' || r.kind === 'asn' ? `, ${r.kind} ${r.value}` : ''}): denying it would lock you out of this site and the /shield sign-in. Do it from another network.`, 'entries')
+  })
+  // one entry per kind + value: blocking an allowed IP switches it instead of keeping both
+  for (const kind of new Set(rows.map((r) => r.kind))) await ShieldList.objects.filter({ kind, value__in: rows.filter((r) => r.kind === kind).map((r) => r.value) }).delete()
   await ShieldList.objects.bulkCreate(rows)
   await changed(ctx.settings)
   return allLists()

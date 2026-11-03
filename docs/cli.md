@@ -181,6 +181,7 @@ More: [tasks-cache-email.md](tasks-cache-email.md).
 | `encryption rotate` | Re-encrypt every encrypted field with the newest key in `settings.encryption.keys` |
 | `shield mode off\|log\|enforce` | Change the Shield mode; running servers pick it up within 3 s. Needs `tvine.shield` |
 | `shield rules disable <id>\|--all` | Turn off one Shield rule, or all of them (the lock-out escape hatch) |
+| `shield lists` / `shield lists remove <value>\|--all` | Show Shield's allow / deny entries, or remove one (e.g. your own IP denied by mistake) |
 | `shield simulate [--count n] [--hours h]` / `--clear` | Dev only (`debug` on): realistic sample traffic from public IPs through your rules, tagged `simulated.tvine`; `--clear` removes it |
 
 ```bash

@@ -227,13 +227,19 @@ Every response carries:
 ```bash
 tvine shield mode off              # or log / enforce
 tvine shield rules disable --all   # or one rule id
+tvine shield lists                 # show allow / deny entries
+tvine shield lists remove ::1      # or --all
 ```
 
-Running servers pick it up within 3 seconds.
+Running servers pick it up within 3 seconds. The panel refuses to deny the address you are using (your IP, a range
+covering it, your country or network), because that would also block the /shield sign-in. Each IP, range, country or
+network has one entry: blocking an allowed one switches it.
 
 ## Behind a proxy or CDN
 
-Set `trustProxy` to the number of proxies in front of the app, so Shield sees the real client IP. TLS fingerprints
+Set `trustProxy` to the number of proxies in front of the app, so Shield sees the real client IP. This includes a
+port forward or tunnel in development (VS Code / Cursor port forwarding, ngrok, cloudflared): without it every
+visitor arrives as your own machine (`::1`), shows as "Local network", and shares one rate-limit bucket. TLS fingerprints
 (JA3/JA4) are read only from `shield.tlsHeader` (for example `cf-ja4`) and only through a trusted proxy.
 
 ## Settings reference

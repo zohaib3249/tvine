@@ -78,6 +78,7 @@ Jobs
         | bench [--jobs n] [--workers n] [--batch n]   (the configured broker's raw jobs/s)
   audit prune [--days n]        tvine.audit: delete rows older than n days (default settings.audit.retentionDays)
   shield mode off|log|enforce | shield rules disable <id>|--all   tvine.shield escape hatch (running servers pick it up within 3 s)
+  shield lists | shield lists remove <value>|--all   show / remove allow-deny entries (e.g. your own IP denied by mistake)
   shield simulate [--count n=300] [--hours h=24] | --clear   dev only (debug): synthetic traffic tagged host simulated.tvine
 
 Tools
