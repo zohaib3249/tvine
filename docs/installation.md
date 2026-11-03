@@ -134,11 +134,15 @@ pnpm exec tvine dev --port 4400  # Next dev server + Warp in one process
 The full walkthrough, from an empty folder to a working app with admin, agents and background jobs, is
 [getting-started.md](getting-started.md).
 
-**Autoreload:** like Django's `runserver`, `tvine dev` restarts the server when backend code changes: anything
-under `apps/` (models, views, serializers, actions, admin, tasks, urls…), `config/`, `.env*` or `tvine.config.*`.
+**Autoreload:** `tvine dev` restarts the server when you save any backend file, whatever its type: code, json,
+markdown, templates, anything under `apps/`, `config/`, `lib/` or elsewhere, `.env*`, `package.json`, `tvine.config.*`.
 It prints `tvine dev: apps/blog/views.ts changed, restarting…`, then `ready on :3000 (restarted in 1.2 s)` on the
-same port. Pages and components (`app/`, `components/`, CSS) are not restarted: Next hot-reloads them. A file that
-breaks the server (a syntax error in a model) prints `server exited (code 1)`; fix it and save, it starts again.
+same port. Next's own files are not restarted, Next hot-reloads them: `app/`, `components/`, `pages/`, `public/`,
+`styles/` (also under `src/`) and every `.css` / `.scss` file. Skipped entirely: `node_modules`, `.next`, `.git` and
+other dot folders, `dist`, `coverage`, `media/`, `data/`, database files, logs, `tvine-api.d.ts` and editor temp files.
+After a restart, an open browser tab (your pages, `/admin`, `/shield`) reloads itself, so you never look at a
+stale page; this only happens under `tvine dev`, never in `tvine start` or a production build. A file that breaks
+the server (a syntax error in a model) prints `server exited (code 1)`; fix it and save, it starts again.
 `tvine dev --noreload` runs one process and never restarts.
 
 ## Local network & port forwarding

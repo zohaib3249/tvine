@@ -242,6 +242,7 @@ async function devSupervisor(argv: string[], apps: string, port: number, host: s
   const { supervise, linkedDists } = await import('./cli/autoreload.js')
   const root = process.cwd()
   const sup = supervise({ root, apps, cmd: [process.execPath, ...process.execArgv, process.argv[1]!, ...argv, '--port', String(at)], out: io.out, err: io.err, dists: linkedDists(root) })
+  io.out('tvine dev: watching for changes (server restarts on any backend file; pages hot-reload)')
   const stop = () => {
     process.off('SIGTERM', stop); process.off('SIGINT', stop)
     void sup.close().then(() => { devRunning(); io.exit(0) })   // devRunning drops a lock the killed child left behind

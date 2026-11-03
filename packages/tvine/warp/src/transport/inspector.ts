@@ -133,3 +133,20 @@ export function widgetsTransport(feed: InspectorFeed): (req: IncomingMessage, re
     })
   }
 }
+
+// ---- tvine dev: open tabs reload after a server restart ------------------------------------------------------
+// GET /tvine/dev/reload (only under `tvine dev`): an event stream that sends this process's boot id, then idles.
+// The autoreload supervisor restarts the server; the tab's EventSource reconnects (retry 300 ms), gets a new id
+// and reloads (weft runtime/devReload.ts). Read-only, carries nothing but the id. `open`: ended on server close.
+export const DEV_RELOAD_PATH = '/tvine/dev/reload'
+
+export function devReloadTransport(boot: string, open: Set<ServerResponse>): (req: IncomingMessage, res: ServerResponse, next: () => void) => void {
+  return (req, res, next) => {
+    if (req.method !== 'GET' || (req.url ?? '/').split('?')[0] !== DEV_RELOAD_PATH) return next()
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' })
+    res.write(`retry: 300\nevent: boot\ndata: ${boot}\n\n`)
+    const beat = setInterval(() => res.write(': hb\n\n'), 15_000)
+    open.add(res)
+    res.on('close', () => { clearInterval(beat); open.delete(res) })
+  }
+}

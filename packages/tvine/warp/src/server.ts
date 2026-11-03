@@ -43,7 +43,7 @@ import { urlsTransport } from './transport/urls.js'
 import { loadUrls, setLiveUrls, type UrlTable } from './urls.js'
 import { mcpHandler } from './transport/mcp.js'
 import { TabHub, tabTransport } from './transport/tab.js'
-import { inspectorFeed, widgetsTransport } from './transport/inspector.js'
+import { devReloadTransport, inspectorFeed, widgetsTransport } from './transport/inspector.js'
 import { appDirRoutes, liveRouteMatcher, routeMatcher } from './transport/routes.js'
 import { discover } from './views/discover.js'
 import { adminSnapshot } from './contrib/admin/agent.js'
@@ -280,8 +280,9 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 
   // 4. mount: [discovery, channel, mcp, media, http] → frontend (in-process Next, or 404 for API-only)
   const sse = new Set<ServerResponse>()
-  const admin = adminBase ? await adminMount(settings, nextRoute) : undefined
-  const shieldPanel = installed.includes('tvine.shield') ? await shieldMount(settings) : undefined
+  const devReload = settings.debug && !!opts.dev   // tvine dev only (debug + next dev): GET /tvine/dev/reload, panels listen to it
+  const admin = adminBase ? await adminMount(settings, nextRoute, devReload) : undefined
+  const shieldPanel = installed.includes('tvine.shield') ? await shieldMount(settings, devReload) : undefined
   const isDev = settings.debug   // dev-only features need debug on, never just an unset NODE_ENV
   const feed = isDev ? inspectorFeed(ctx) : undefined   // tvine inspect's traffic log; never in production
   // tab control is ON in production too (security.md): settings.agent.inTab='off' is the app's opt-out
@@ -341,6 +342,7 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
     ...(fe ? [((req, res, next) => pathOf(req) === '/favicon.ico' && !['public', 'app', 'src/app'].some((d) => existsSync(join(dirname(resolve(fe.nextDir)), d, 'favicon.ico')))
       ? void res.writeHead(204, { 'cache-control': 'public, max-age=3600' }).end() : next()) as Handler] : []),
     ...(feed ? [widgetsTransport(feed)] : []),   // W10 inspector Widgets tab; dev only, like the feed
+    ...(devReload ? [devReloadTransport(randomBytes(8).toString('hex'), sse)] : []),   // tvine dev only: tabs reload after a restart
     tabTransport(ctx, tabs),
     (req, res, next) => void media(req, res, next).catch(fail(res)),
     apiTransport(ctx, { route, tokens, asSession: (v) => internalOf(v, nonce) }),
@@ -533,12 +535,12 @@ export async function createAgentServer(opts: AgentServerOptions = {}): Promise<
 // tvine.admin installed → the panel at settings.admin.path, served by Warp before Next (Django's admin.site.urls):
 // tvine/admin's prebuilt shell + bundle, so the app needs no admin page. An app page whose route sits at that path
 // (app/admin/[[...path]]/page.tsx) wins: the request passes on to Next.
-async function adminMount(settings: Settings, route: (p: string) => string | undefined): Promise<Handler> {
+async function adminMount(settings: Settings, route: (p: string) => string | undefined, devReload: boolean): Promise<Handler> {
   const base = settings.admin.path.replace(/\/$/, '') || '/admin'
-  let mod: { adminHandler(o: { path: string; title?: string }): Handler }
+  let mod: { adminHandler(o: { path: string; title?: string; devReload?: boolean }): Handler }
   try { mod = await import(new URL('../../admin/dist/serve.js', import.meta.url).href) }
   catch (e) { throw new Error(`tvine.admin is installed but tvine/admin cannot be loaded from ${process.cwd()}: pnpm add tvine/admin (${(e as Error).message})`, { cause: e }) }
-  const serve = mod.adminHandler({ path: base, title: settings.admin.title })
+  const serve = mod.adminHandler({ path: base, title: settings.admin.title, devReload })
   return (req, res, next) => {
     const p = pathOf(req)
     if (p !== base && !p.startsWith(`${base}/`)) return next()
@@ -552,10 +554,10 @@ async function adminMount(settings: Settings, route: (p: string) => string | und
 // shieldHandler (HTML shell with the CSP nonce + the prebuilt shield bundle under <path>/_static/). Who may use it is
 // enforced server-side by every shield.* action (login + staffGuard + the panel access condition); the bundle shows the
 // login / 403 pages. tvine/admin not built → a plain "panel not built" page.
-async function shieldMount(settings: Settings): Promise<Handler> {
+async function shieldMount(settings: Settings, devReload: boolean): Promise<Handler> {
   const base = settings.shield.panel.path.replace(/\/$/, '')
   let serve: Handler | undefined
-  try { serve = ((await import(new URL('../../admin/dist/serve.js', import.meta.url).href)) as { shieldHandler?(o: { path: string; title?: string }): Handler }).shieldHandler?.({ path: base, title: 'Shield' }) } catch { serve = undefined }
+  try { serve = ((await import(new URL('../../admin/dist/serve.js', import.meta.url).href)) as { shieldHandler?(o: { path: string; title?: string; devReload?: boolean }): Handler }).shieldHandler?.({ path: base, title: 'Shield', devReload }) } catch { serve = undefined }
   return (req, res, next) => {
     const p = pathOf(req)
     if (p !== base && !p.startsWith(`${base}/`)) return next()

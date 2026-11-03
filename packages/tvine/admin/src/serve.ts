@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 type Handler = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
-type Panel = { path: string; title: string; root: string; files: Record<string, [string, URL]>; js: string; css: string }
+type Panel = { path: string; title: string; root: string; files: Record<string, [string, URL]>; js: string; css: string; devReload?: boolean }
 
 // one prebuilt client app under <path>/: the HTML shell for every page, its bundle + CSS under <path>/_static/
 function panelHandler(o: Panel): Handler {
@@ -31,20 +31,21 @@ function panelHandler(o: Panel): Handler {
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
       `<meta name="robots" content="noindex, nofollow"><title>${esc(o.title)}</title>` +
       `<link rel="stylesheet" href="${esc(base)}/_static/${o.css}"></head>` +
-      `<body class="tva-page"><div id="${o.root}" data-base="${esc(base)}"></div>` +
+      `<body class="tva-page"><div id="${o.root}" data-base="${esc(base)}"${o.devReload ? ' data-dev-reload="/tvine/dev/reload"' : ''}></div>` +
       `<script type="module"${n} src="${esc(base)}/_static/${o.js}"></script></body></html>`)
   }
 }
 
 const JS = 'text/javascript; charset=utf-8', CSS = 'text/css; charset=utf-8'
-export function adminHandler(o: { path?: string; title?: string } = {}): Handler {
-  return panelHandler({ path: o.path ?? '/admin', title: o.title ?? 'Administration', root: 'tva-root', js: 'admin.js', css: 'admin.css',
+// devReload (tvine dev only): the shell tells the bundle to reload itself after a server restart (client.tsx)
+export function adminHandler(o: { path?: string; title?: string; devReload?: boolean } = {}): Handler {
+  return panelHandler({ path: o.path ?? '/admin', title: o.title ?? 'Administration', root: 'tva-root', js: 'admin.js', css: 'admin.css', devReload: o.devReload,
     files: { 'admin.js': [JS, new URL('./static/admin.js', import.meta.url)], 'admin.css': [CSS, new URL('./admin.css', import.meta.url)] } })
 }
 
 // The tvine.shield panel (docs/design/contrib/shield.md): Warp mounts it at settings.shield.panel.path (default /shield),
 // before Next. Same shell as the admin; the bundle is the admin package's second entry (dist/shield/shield.{js,css}).
-export function shieldHandler(o: { path?: string; title?: string } = {}): Handler {
-  return panelHandler({ path: o.path ?? '/shield', title: o.title ?? 'Shield', root: 'tvs-root', js: 'shield.js', css: 'shield.css',
+export function shieldHandler(o: { path?: string; title?: string; devReload?: boolean } = {}): Handler {
+  return panelHandler({ path: o.path ?? '/shield', title: o.title ?? 'Shield', root: 'tvs-root', js: 'shield.js', css: 'shield.css', devReload: o.devReload,
     files: { 'shield.js': [JS, new URL('./shield/shield.js', import.meta.url)], 'shield.css': [CSS, new URL('./shield/shield.css', import.meta.url)] } })
 }
