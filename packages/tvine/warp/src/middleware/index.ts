@@ -143,6 +143,11 @@ export const CATALOG: Record<string, Factory> = {
         // check) always passes; DNS rebinding carries the attacker's name in Host
         if (h !== undefined && (hostAllowed(h, allowed) || isLocalRequest(req, b.settings))) { req.tvine.host = h; return }
         securityEvent('host_refused', { host: String(hdr(req, 'host') ?? '').slice(0, 100), ip: req.tvine.ip, requestId: req.tvine.id, path: req.tvine.path }, { settings: b.settings, audit: false })
+        // dev: say which host and how to allow it (Django DEBUG's "You may need to add … to ALLOWED_HOSTS"); production: bare
+        if (b.debug && !b.production && h) {
+          const p = h.split('.'), wild = p.length > 2 && !/^[\d.]+$/.test(h) ? `*.${p.slice(1).join('.')}` : h
+          return send(res, 400, `Bad Request (invalid host): '${h}' is not in allowedHosts.\nDev / port forwarding: add it in config/settings/dev.ts\n  dev: { allowedHosts: ['${wild}'] },\nor set TVINE_DEV_ALLOWED_HOSTS=${wild} (then restart tvine dev). Production: list it in allowedHosts / TVINE_ALLOWED_HOSTS.`)
+        }
         send(res, 400, 'Bad Request (invalid host)')
       },
     }

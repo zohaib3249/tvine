@@ -41,6 +41,7 @@ and which backend each subsystem uses.
 | `secret` | HMAC key, 32+ chars; an array (or `TVINE_SECRET=new,old`) rotates keys | dev: random; prod: required |
 | `debug` | Django `DEBUG` | on under `tvine dev` and `NODE_ENV=development` |
 | `allowedHosts` | Django `ALLOWED_HOSTS` | dev: localhost; prod: required |
+| `dev.allowedHosts` | dev only, added on top: port forwarding / tunnel hosts (`'*.ngrok-free.app'`, `'*.devtunnels.ms'`); also `TVINE_DEV_ALLOWED_HOSTS`. In dev a refused host's 400 names the line to add | `[]` |
 | `db` | `{ url, pool: { max, acquireMs, idleMs }, atomicRequests, slowQueryMs }` | `file:./tvine.db`, one transaction per request |
 | `session` | `{ ttlMs, maxAgeMs, cookieName, secure, sameSite, max, backend }` | 24 h idle, 14 days max, `lax` |
 | `limits` | `{ bodyBytes, handlerMs, rate: { limit, windowMs, by }, sseConnPerIp, backend }` (`rate.by: 'shield'` lets Shield's rules be the only general rate limit, see [shield.md](shield.md#rate-limits-shield-and-the-framework)) | 64 KB, 10 s, 60/min, `'framework'` |
