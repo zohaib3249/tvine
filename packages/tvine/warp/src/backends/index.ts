@@ -20,7 +20,9 @@ export function sessionsFor(settings: Settings, opts: SessionStoreOptions = {}, 
   if (settings.session.backend !== 'redis') return new SessionStore(settings.session, opts)
   // a command (handler + middleware + its snapshot render) holds the session at most this long
   const lockMs = 4 * settings.limits.handlerMs + 15_000
-  return new RedisSessionStore(settings.session, { ...opts, alias: settings.session.redis, lockMs, log })
+  // tab marks on the same alias: every session load reads the session's mark too (RedisAgentMarks.has hint)
+  const marks = settings.limits?.backend === 'redis' && settings.limits.redis === settings.session.redis ? redis.key(settings.session.redis, 'tabmark', '') : undefined
+  return new RedisSessionStore(settings.session, { ...opts, alias: settings.session.redis, lockMs, log, marks })
 }
 
 // rate: the bucket defaults (settings.limits.rate, or a module's own, e.g. password reset 3/hour)

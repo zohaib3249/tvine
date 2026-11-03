@@ -12,7 +12,11 @@ const IP_WINDOW_MULT = 5     // IP bucket is stricter: same limit spread over 5Ã
 export type RateResult = { ok: true } | { ok: false; retryAfterMs: number }
 export type RateKeys = { sid?: Sid; ip?: string; action?: string }
 // settings.limits.backend: 'memory' = RateLimiter (this file), 'redis' = backends/redis.ts (same algorithm, atomic Lua).
-export interface Limiter { check(keys: RateKeys, rules?: ActionRules['rate']): RateResult | Promise<RateResult> }
+export interface Limiter {
+  check(keys: RateKeys, rules?: ActionRules['rate']): RateResult | Promise<RateResult>
+  // every bucket of every item at once, all-or-nothing (max retryAfterMs); check(k, r) === checkAll([{ keys: k, rules: r }])
+  checkAll?(items: { keys: RateKeys; rules?: ActionRules['rate'] }[]): RateResult | Promise<RateResult>
+}
 
 export class RateLimiter implements Limiter {
   private ips = new Map<string, Bucket>()   // Map insertion order = LRU order

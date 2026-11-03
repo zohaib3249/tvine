@@ -40,7 +40,9 @@ local function del(p, sid)
   redis.call('DEL', sc, p .. 's:' .. sid)
   redis.call('ZREM', p .. 'sx', sid)
 end`
-const LOAD = new Script(`
+// LOAD_BODY reads s:<sid> (sid or ARGV[3]'s cookie) at Redis's now; ARGV[7] = the tab-marks key prefix ('' = marks
+// live on another alias): the session's live mark count comes back in the same round trip (RedisAgentMarks hint).
+const LOAD_BODY = `
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local p, sid, ttl = ARGV[1], ARGV[2], tonumber(ARGV[5])
@@ -49,6 +51,8 @@ local k = p .. 's:' .. sid
 local h = redis.call('HMGET', k, 'rev', 'data', 'created', 'seen', 'ver')
 if not h[1] then return false end
 if now - tonumber(h[4]) > ttl then return false end
+local m = -1
+if ARGV[7] ~= '' then m = redis.call('ZCOUNT', ARGV[7] .. redis.sha1hex(sid), '(' .. now, '+inf') end
 if ARGV[6] == '1' then
   redis.call('HSET', k, 'seen', now)
   redis.call('PEXPIRE', k, ttl)
@@ -58,7 +62,14 @@ if ARGV[6] == '1' then
   redis.call('PEXPIRE', sc, ttl)
   h[4] = tostring(now)
 end
-return {sid, h[1], h[2], h[3], h[4], h[5]}`)
+return {sid, h[1], h[2], h[3], h[4], h[5], m}`
+const LOAD = new Script(LOAD_BODY)
+// the cross-server command lock (SET NX PX, KEYS[1] = lock:<sid>, ARGV[8] token, ARGV[9] ms) and, once taken, the
+// session as LOAD reads it (no touch): isLive() right after the lock needs no round trip of its own
+const LOCK = new Script(`
+if not redis.call('SET', KEYS[1], ARGV[8], 'NX', 'PX', ARGV[9]) then return false end
+local function load() ${LOAD_BODY} end
+return {load()}`)
 const CREATE = new Script(`${DEL_SESSION}
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
@@ -124,7 +135,21 @@ const UNLOCK = new Script(`if redis.call('GET', KEYS[1]) == ARGV[1] then return 
 const enc = (data: Map<string, unknown>) => serialize(data).toString('base64')
 const dec = (b64: string) => deserialize(Buffer.from(b64, 'base64')) as Map<string, unknown>
 
-export interface RedisSessionOptions extends SessionStoreOptions { alias: string; lockMs: number; log?: Log }
+// marks: the tab-marks key prefix (redis.key(alias, 'tabmark', '')) when marks share the session's alias
+export interface RedisSessionOptions extends SessionStoreOptions { alias: string; lockMs: number; log?: Log; marks?: string }
+
+type Loaded = [string, string, string, string, string, string, number]   // sid, rev, data, created, seen, ver, marks (-1 = not read)
+
+// Process-wide hints for RedisAgentMarks.has() (same module, so no wiring): once sessions (ephemeral / deferred:
+// never handed out, so never marked) of every store here, and the mark count each session load read in its own
+// round trip. A request's mark check is never older than its own session load (dispatch resolves first).
+const stores = new Set<WeakRef<RedisSessionStore>>()
+const markSeen = new Map<string, { at: number; on: boolean }>()   // tabmark key → what the latest load read
+const MARK_HINT_MS = 1_000, MARK_HINT_CAP = 10_000
+function onceAnywhere(sid: Sid): boolean {
+  for (const r of stores) { const s = r.deref(); if (!s) stores.delete(r); else if (s.holdsOnce(sid)) return true }
+  return false
+}
 
 // The shared store: Redis holds the truth; this process keeps one Session object per sid it touched (the base
 // class's maps), refreshed whenever Redis has a newer save. Lifecycle hooks fire once cluster-wide: `created` on
@@ -133,22 +158,31 @@ export class RedisSessionStore extends SessionStore {
   private alias: string
   private lockMs: number
   private ver = new WeakMap<Session, number>()
+  private synced = new WeakMap<Session, { rev: number; data: string }>()   // what Redis holds (save() skips a no-op)
+  private atLock = new Map<Sid, Loaded | null>()   // the session as the lock read it, for the isLive() that follows
   private prefix: string
+  private marks: string
 
   constructor(settings: Settings['session'], opts: RedisSessionOptions) {
     super(settings, opts)
     this.alias = opts.alias
     this.lockMs = opts.lockMs
     this.prefix = redis.key(opts.alias, 'sess', '')
+    this.marks = opts.marks ?? ''
+    stores.add(new WeakRef(this))
   }
+
+  holdsOnce(sid: Sid): boolean { return this.once.has(sid) }
 
   private client() { return redis.get(this.alias) }
   private get ttl() { return this.settings.ttlMs }
 
   override async create(s: Session = newSession()): Promise<Session> {
-    const evicted = await CREATE.run<string[]>(await this.client(), [], [this.prefix, s.sid, s.createdAt, this.ttl, this.settings.max ?? 100_000, enc(s.data)])
+    const data = enc(s.data)
+    const evicted = await CREATE.run<string[]>(await this.client(), [], [this.prefix, s.sid, s.createdAt, this.ttl, this.settings.max ?? 100_000, data])
     for (const sid of evicted) this.evict(sid)   // #20 flood cap, cluster-wide: the oldest go, with their hooks
     this.cache(s, 0)
+    this.synced.set(s, { rev: 0, data })
     this.created(s.sid)
     return s
   }
@@ -160,20 +194,31 @@ export class RedisSessionStore extends SessionStore {
     const local = key.sid !== undefined ? this.once.get(key.sid) : undefined
     if (local) return local
     if (key.sid === undefined && key.cookie === undefined) return undefined
-    const r = await LOAD.run<[string, string, string, string, string, string] | null>(await this.client(), [],
-      [this.prefix, key.sid ?? '', key.cookie ?? '', Date.now(), this.ttl, touch ? 1 : 0])
+    const r = await LOAD.run<Loaded | null>(await this.client(), [],
+      [this.prefix, key.sid ?? '', key.cookie ?? '', Date.now(), this.ttl, touch ? 1 : 0, this.marks])
+    return this.apply(key, r)
+  }
+
+  private async apply(key: SessionKey, r: Loaded | null): Promise<Session | undefined> {
     if (!r) {
       // gone in Redis (rotated, expired, deleted on any server): forget the cached copy, no hooks (the sweep fires them)
       const sid = this.sidOf(key)
       if (sid !== undefined) this.forget(sid)
       return undefined
     }
-    const [sid, rev, data, created, seen, ver] = r
+    const [sid, rev, data, created, seen, ver, marked] = r
+    if (Number(marked) >= 0) {
+      const k = this.marks + sha1(sid)
+      markSeen.delete(k); markSeen.set(k, { at: Date.now(), on: Number(marked) > 0 })
+      if (markSeen.size > MARK_HINT_CAP) markSeen.delete(markSeen.keys().next().value as string)
+    }
     if (this.tooOld(Number(created))) { await this.delete(sid); return undefined }
     let s = this.byId.get(sid)
-    if (!s) s = this.cache({ sid, rev: Number(rev), data: dec(data), createdAt: Number(created), lastSeen: Number(seen) }, Number(ver))
-    else {
-      if (Number(ver) > (this.ver.get(s) ?? -1)) { s.rev = Number(rev); s.data = dec(data); this.ver.set(s, Number(ver)) }
+    if (!s) {
+      s = this.cache({ sid, rev: Number(rev), data: dec(data), createdAt: Number(created), lastSeen: Number(seen) }, Number(ver))
+      this.synced.set(s, { rev: Number(rev), data })
+    } else {
+      if (Number(ver) > (this.ver.get(s) ?? -1)) { s.rev = Number(rev); s.data = dec(data); this.ver.set(s, Number(ver)); this.synced.set(s, { rev: Number(rev), data }) }
       s.lastSeen = Number(seen)
       this.byId.delete(sid); this.byId.set(sid, s)
     }
@@ -196,9 +241,13 @@ export class RedisSessionStore extends SessionStore {
     return c
   }
 
+  // a once session is not in Redis (SAVE would find nothing); unchanged rev + data since the last load / save: no write
   override async save(s: Session): Promise<void> {
-    const ver = await SAVE.run<number | null>(await this.client(), [], [this.prefix, s.sid, s.rev, enc(s.data)])
-    if (ver !== null) this.ver.set(s, Number(ver))
+    if (this.once.get(s.sid) === s) return
+    const data = enc(s.data), was = this.synced.get(s)
+    if (was && was.rev === s.rev && was.data === data) return
+    const ver = await SAVE.run<number | null>(await this.client(), [], [this.prefix, s.sid, s.rev, data])
+    if (ver !== null) { this.ver.set(s, Number(ver)); this.synced.set(s, { rev: s.rev, data }) }
   }
 
   override async bumpRev(sid: Sid): Promise<Rev | undefined> {
@@ -223,6 +272,8 @@ export class RedisSessionStore extends SessionStore {
   override async isLive(s: Session): Promise<boolean> {
     if (this.once.get(s.sid) === s) return true
     if (this.byId.get(s.sid) !== s) return false
+    const r = this.atLock.get(s.sid)
+    if (r !== undefined) { this.atLock.delete(s.sid); return (await this.apply({ sid: s.sid }, r)) === s }
     return (await this.load({ sid: s.sid }, false)) === s
   }
 
@@ -244,17 +295,24 @@ export class RedisSessionStore extends SessionStore {
     return n
   }
 
-  // SET NX PX with a random token; waits (10 → 50 ms steps) up to the lock's own TTL, then gives up (rate_limited)
+  // SET NX PX with a random token (LOCK, which also reads the session for the isLive() that follows); waits
+  // (10 → 50 ms steps) up to the lock's own TTL, then gives up (rate_limited). A once session is in no other process.
+  // The release is not awaited: it is queued on the same connection, so this process's next lock comes after it.
   override async lock<T>(sid: Sid, fn: () => Promise<T>): Promise<T> {
+    if (this.once.has(sid)) return fn()
     const c = await this.client()
     const key = `${this.prefix}lock:${sid}`, token = randomBytes(12).toString('hex')
     const until = Date.now() + this.lockMs
     for (let wait = 10; ; wait = Math.min(50, wait * 2)) {
-      if (await c.sendCommand(['SET', key, token, 'NX', 'PX', String(this.lockMs)]) === 'OK') break
+      const got = await LOCK.run<[Loaded | null] | [] | null>(c, [key], [this.prefix, sid, '', Date.now(), this.ttl, 0, this.marks, token, this.lockMs])
+      if (got) { this.atLock.set(sid, (got[0] as Loaded | undefined) ?? null); break }
       if (Date.now() > until) throw new SessionBusy()
       await new Promise((ok) => setTimeout(ok, wait))
     }
-    try { return await fn() } finally { await UNLOCK.run(c, [key], [token]).catch(() => undefined) }
+    try { return await fn() } finally {
+      this.atLock.delete(sid)
+      void UNLOCK.run(c, [key], [token]).catch(() => undefined)
+    }
   }
 }
 
@@ -342,32 +400,41 @@ export class RedisChannelLayer implements ChannelLayer {
 
 // ---- rate limits ---------------------------------------------------------------------------------------------
 // The memory limiter's token bucket (continuous refill = a sliding window without per-request entries), as one
-// script over every bucket of the check: all-or-nothing, on Redis's clock (servers' clocks never disagree).
+// script over every bucket of a request (checkAll): all-or-nothing, on Redis's clock (servers' clocks never
+// disagree). A bucket listed n times costs n tokens (as n checks in a row would); its first rate is used.
 const RATE = new Script(`
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local retry, toks = 0, {}
+local retry, seen, order = 0, {}, {}
 for i, k in ipairs(KEYS) do
-  local limit, win = tonumber(ARGV[2 * i - 1]), tonumber(ARGV[2 * i])
-  local b = redis.call('HMGET', k, 't', 'a')
-  local tokens = tonumber(b[1]) or limit
-  local at = tonumber(b[2]) or now
-  tokens = math.min(limit, tokens + math.max(0, now - at) * limit / win)
-  toks[i] = tokens
-  if tokens < 1 then retry = math.max(retry, math.ceil((1 - tokens) * win / limit)) end
+  local e = seen[k]
+  if e then e.n = e.n + 1 else
+    local limit, win = tonumber(ARGV[2 * i - 1]), tonumber(ARGV[2 * i])
+    local b = redis.call('HMGET', k, 't', 'a')
+    local tokens = tonumber(b[1]) or limit
+    local at = tonumber(b[2]) or now
+    e = {k = k, n = 1, limit = limit, win = win, tokens = math.min(limit, tokens + math.max(0, now - at) * limit / win)}
+    seen[k] = e
+    order[#order + 1] = e
+  end
 end
-for i, k in ipairs(KEYS) do
-  local tk = toks[i]
-  if retry == 0 then tk = tk - 1 end
-  redis.call('HSET', k, 't', string.format('%.17g', tk), 'a', now)
-  redis.call('PEXPIRE', k, ARGV[2 * i])
+for _, e in ipairs(order) do
+  if e.tokens < e.n then retry = math.max(retry, math.ceil((e.n - e.tokens) * e.win / e.limit)) end
+end
+for _, e in ipairs(order) do
+  local tk = e.tokens
+  if retry == 0 then tk = tk - e.n end
+  redis.call('HSET', e.k, 't', string.format('%.17g', tk), 'a', now)
+  redis.call('PEXPIRE', e.k, e.win)
 end
 return retry`)
 
 export class RedisRateLimiter implements Limiter {
   constructor(private alias: string, private defaults: { limit: number; windowMs: number }) { checkRate('settings.limits.rate', defaults) }
-  async check(keys: RateKeys, rules?: ActionRules['rate']): Promise<RateResult> {
-    const b = bucketsFor(keys, rules, this.defaults)
+  check(keys: RateKeys, rules?: ActionRules['rate']): Promise<RateResult> { return this.checkAll([{ keys, rules }]) }
+  // every bucket of every item in ONE EVALSHA; no bucket at all: no round trip
+  async checkAll(items: { keys: RateKeys; rules?: ActionRules['rate'] }[]): Promise<RateResult> {
+    const b = items.flatMap((i) => bucketsFor(i.keys, i.rules, this.defaults))
     if (!b.length) return { ok: true }
     const retry = await RATE.run<number>(await redis.get(this.alias), b.map((x) => redis.key(this.alias, 'rl', x.ip ? 'ip' : 'sid', x.key)), b.flatMap((x) => [x.rate.limit, x.rate.windowMs]))
     return retry > 0 ? { ok: false, retryAfterMs: Number(retry) } : { ok: true }
@@ -469,8 +536,20 @@ export class RedisAgentMarks {
   private me = randomBytes(8).toString('hex')
   constructor(private alias: string) {}
   private key(sid: Sid) { return redis.key(this.alias, 'tabmark', sha1(sid)) }
-  async set(sid: Sid, ms: number): Promise<void> { await MARK_SET.run(await redis.get(this.alias), [this.key(sid)], [this.me, Math.max(0, Math.ceil(ms))]) }
-  async has(sid: Sid): Promise<boolean> { return Number(await MARK_HAS.run(await redis.get(this.alias), [this.key(sid)], [])) > 0 }
+  async set(sid: Sid, ms: number): Promise<void> {
+    markSeen.delete(this.key(sid))
+    await MARK_SET.run(await redis.get(this.alias), [this.key(sid)], [this.me, Math.max(0, Math.ceil(ms))])
+    markSeen.delete(this.key(sid))
+  }
+  // A once session (ephemeral / deferred, in no tab) is never marked; else what this process's latest load of the
+  // session read in its own round trip, if that was under MARK_HINT_MS ago (dispatch loads before it asks);
+  // else Redis. ponytail: a hint per process, not per request: a newer load of the same sid only makes it fresher.
+  async has(sid: Sid): Promise<boolean> {
+    if (onceAnywhere(sid)) return false
+    const h = markSeen.get(this.key(sid))
+    if (h && Date.now() - h.at < MARK_HINT_MS) return h.on
+    return Number(await MARK_HAS.run(await redis.get(this.alias), [this.key(sid)], [])) > 0
+  }
 }
 
 // ---- snapshot cache ------------------------------------------------------------------------------------------
