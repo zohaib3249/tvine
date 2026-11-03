@@ -99,7 +99,7 @@ Every Tvine app speaks to agents on its normal URLs. No SDK needed. Pick one:
 | `x-tvine-expand` | `list:products` | One widget in detail (for example all rows of a list). |
 | `x-tvine-offset` / `x-tvine-limit` | `20` / `10` | Paging: rows for `x-tvine-expand` (limit 1–100); for Markdown, the first line and a token budget. |
 | `x-tvine-sid` | the `sid=` value from the first response line | Keep the same session across requests (needed for `ui` steps over HTTP). |
-| `x-tvine-locale` | `de` | Language. |
+| `Accept-Language` | `de` | Language, when the site has the `Locale` middleware on. (`x-tvine-locale` is set by the server only; a sent one is dropped.) |
 | `Authorization: Bearer <token>` | an API token from the site | Act as that user on pages, `/tvine/api` and `/mcp`. |
 | `x-tvine-api: 1` | with `POST /tvine/api/<action>` and `{"params":{…}}` | Call one action directly: `{"ok":true,"data":…}`. |
 

@@ -24,7 +24,7 @@ A bare `tvine` in a shell says "command not found" until you pick one:
 | Command | What it does |
 |---|---|
 | `npx tvinejs startproject my-app` | new project with a welcome page |
-| `tvine startproject <name> [--db …] [--no-admin] [--local]` | same, from the CLI |
+| `tvine startproject <name> [dir] [--db sqlite\|postgres\|mysql] [--no-admin] [--no-tasks] [--pm pnpm\|npm\|yarn] [--no-install] [--local]` | same, from the CLI. `--no-admin` / `--no-tasks` leave out `tvine.admin` / `tvine.tasks`; `--pm` picks the package manager; `--no-install` skips the install; `--local` links this clone's packages |
 | `tvine startapp <name>` | `apps/<name>/` empty stubs; adds it to `installedApps` and its `include()` to `config/urls.ts` |
 | `tvine shell` | REPL with settings and models loaded |
 
@@ -183,6 +183,12 @@ More: [tasks-cache-email.md](tasks-cache-email.md).
 | `shield rules disable <id>\|--all` | Turn off one Shield rule, or all of them (the lock-out escape hatch) |
 | `shield lists` / `shield lists remove <value>\|--all` | Show Shield's allow / deny entries, or remove one (e.g. your own IP denied by mistake) |
 | `shield simulate [--count n] [--hours h]` / `--clear` | Dev only (`debug` on): realistic sample traffic from public IPs through your rules, tagged `simulated.tvine`; `--clear` removes it |
+
+| `docs` | Print the guides' URL |
+| `docs --ai` / `docs --ai --path` | Print the AI-assistant guide (`AGENTS.md`), or only its file path |
+
+Inside a project the full docs ship in the package: `node_modules/tvine/llms-full.txt` (everything in one file) and
+`node_modules/tvine/docs/<topic>.md`.
 
 ```bash
 pnpm exec tvine encryption rotate     # → re-encrypted 0 row(s) with the newest key

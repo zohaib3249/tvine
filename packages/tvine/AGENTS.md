@@ -4,6 +4,32 @@ This project uses **Tvine**: Django for TypeScript, with Next.js pages, and a UI
 The npm package is `tvinejs`, but you always import it and run it as `tvine`.
 Read this file before you write any code. It covers the layout, the commands, copy-paste recipes and the rules.
 
+## Where to read (Tvine is new: do not guess from other frameworks)
+
+The full docs ship inside the package. Read them from disk, not from memory:
+
+| File | What |
+|---|---|
+| `node_modules/tvine/llms-full.txt` | everything in one file: this guide + every guide (search it for a setting, command or header) |
+| `node_modules/tvine/docs/<topic>.md` | one guide: `installation`, `getting-started`, `settings-and-env`, `models-and-orm`, `views-urls-api`, `frontend-weft`, `agents-and-mcp`, `admin`, `auth-and-security`, `shield`, `tasks-cache-email`, `testing`, `cli`, `deploy` |
+| `node_modules/tvine/llms.txt` | the index of those guides |
+| `pnpm tvine docs --ai` | prints this guide |
+
+Every settings key with its default: `docs/settings-and-env.md` → "Reference: every key". Every command: `docs/cli.md`.
+
+## The 10 rules
+
+1. **Layout.** Backend apps in `apps/<app>/` (`models.ts`, `views.ts`, `urls.ts`, `admin.ts`, `tasks.ts`); Next.js pages in `app/`; project config in `config/`.
+2. **Settings** live in `config/settings/base.ts` (shared), `dev.ts`, `prod.ts`, optional `local.ts`. Never read settings from a page.
+3. **New app:** `pnpm tvine startapp <name>`. It adds the app to `installedApps` and `config/urls.ts`.
+4. **Migrations:** change `models.ts`, then `pnpm tvine makemigrations` and `pnpm tvine migrate`. Never hand-edit or delete a migration.
+5. **Actions are MCP tools.** Each action in `views.ts` (id `<app>.<name>`) is also `api.<app>.<name>`, `POST /tvine/api/<app>.<name>` and the MCP tool `<app>_<name>`.
+6. **Pages use `api.*` only** (from `tvine/api`). Never import models or the ORM into `app/` or components.
+7. **Guard what agents may do:** `humanOnly` (agents can never call it) and `confirm` (the person must say yes) on actions; permissions for who may call it.
+8. **Shield** (bot protection) needs `'tvine.shield'` in `installedApps` and `'tvine.middleware.Shield'` in `middleware`; start in `mode: 'log'`, switch to `'enforce'` later. Locked out: `pnpm tvine shield mode off`.
+9. **Run `pnpm tvine check`** after every change (it must print ok), then `pnpm tvine test`.
+10. **Never edit `node_modules/`**, `tvine-api.d.ts` or `migrations/*`. Import `tvine`, never `tvinejs`.
+
 ## Mental model
 
 - **One process.** `tvine dev` runs the backend (**Warp**) and Next.js (**Weft**) on one port.
@@ -400,6 +426,8 @@ Run it with `pnpm tvine test`.
 
 ## Where to look
 
+Local copies of all of these: `node_modules/tvine/docs/` and `node_modules/tvine/llms-full.txt`.
+
 - Guides index: https://github.com/zohaib3249/tvine/blob/main/docs/README.md
 - Tutorial: https://github.com/zohaib3249/tvine/blob/main/docs/getting-started.md
 - Models, ORM, migrations: https://github.com/zohaib3249/tvine/blob/main/docs/models-and-orm.md
@@ -410,6 +438,7 @@ Run it with `pnpm tvine test`.
 - Settings, middleware, env: https://github.com/zohaib3249/tvine/blob/main/docs/settings-and-env.md
 - Tasks, cache, email: https://github.com/zohaib3249/tvine/blob/main/docs/tasks-cache-email.md
 - Agents and MCP: https://github.com/zohaib3249/tvine/blob/main/docs/agents-and-mcp.md
+- Bot protection (Shield): https://github.com/zohaib3249/tvine/blob/main/docs/shield.md
 - Testing: https://github.com/zohaib3249/tvine/blob/main/docs/testing.md
 - CLI: https://github.com/zohaib3249/tvine/blob/main/docs/cli.md
 - Deploy: https://github.com/zohaib3249/tvine/blob/main/docs/deploy.md

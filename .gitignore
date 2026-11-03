@@ -19,3 +19,6 @@ dist
 # local-only (not published)
 apps/demo-shop/
 docs/superpowers/
+packages/tvine/docs/
+packages/tvine/llms.txt
+packages/tvine/llms-full.txt
